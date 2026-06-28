@@ -346,6 +346,7 @@ const zhMessages = {
     feeds: { label: "订阅源" },
     accounting: { label: "会计" },
     files: { label: "文件" },
+    workFiles: { label: "幻灯片" },
   },
   shortcuts: {
     pin: "固定到启动栏",
@@ -1169,6 +1170,28 @@ const zhMessages = {
     defaultTitle: "确认",
     defaultConfirm: "确定",
     defaultCancel: "取消",
+  },
+  slides: {
+    pickWd: "选择工作目录",
+    wdPlaceholder: "WD-ID（例如 GIT-00001）",
+    open: "打开",
+    available: "可用的 WD",
+    backToPicker: "返回 WD 选择",
+    noCacheFound: "未找到缩略图缓存，请在聊天中运行 edit-slide 以生成。",
+    generatingThumbnails: "正在生成缩略图...",
+    prevPage: "上一页",
+    nextPage: "下一页",
+    editDone: "完成编辑",
+    selectDoc: "选择文档",
+  },
+  mulmoPoint: {
+    title: "关于 MulmoPoint",
+    description: "支持 MulmoClaude AI 生成功能的积分系统。",
+    aiEngines: "AI 引擎",
+    slideEditing: "幻灯片编辑",
+    coreEngine: "核心引擎",
+    close: "关闭",
+    copyright: "© 2026 receptron — MulmoPoint",
   },
 };
 

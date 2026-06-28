@@ -138,7 +138,7 @@ export type PluginLauncherKind = "view"; // Switch the canvas to a dedicated vie
 // out of this file avoids duplication across the 8 locales.
 export interface PluginLauncherTarget {
   /** Stable key for testid + dispatch in App.vue. */
-  key: "dashboard" | "automations" | "wiki" | "collections" | "feeds" | "accounting" | "files" | "debug";
+  key: "dashboard" | "automations" | "wiki" | "collections" | "feeds" | "accounting" | "files" | "debug" | "workFiles";
   kind: PluginLauncherKind;
   /** Material-icons glyph. */
   icon: string;
@@ -182,6 +182,10 @@ const TARGETS: PluginLauncherTarget[] = [
   // uses), not dynamic workspace data you monitor, so they belong with
   // Tools / MCP rather than as top-level launcher pages.
   { key: "files", kind: "view", icon: "folder" },
+  // Slide editor — opens the work-file selector (WorkFileSelectorView) where
+  // the user picks a WD and version, which then auto-checks-out and navigates
+  // to the slide editor. The `edit-slide` skill also points here as the entry.
+  { key: "workFiles", kind: "view", icon: "slideshow" },
   // Automations (recurring agent tasks) — sits to the right of Files.
   // The former sibling Calendar entry was removed with the Calendar
   // view + `manageCalendar` tool; dated items now live in
@@ -206,7 +210,11 @@ const DEV_MODE = import.meta.env.VITE_DEV_MODE === "1";
 const visibleTargets = computed(() => TARGETS.filter((target) => !target.devOnly || DEV_MODE));
 
 function isActive(target: PluginLauncherTarget): boolean {
-  return props.activeViewMode === target.key;
+  if (props.activeViewMode === target.key) return true;
+  // "workFiles" button stays highlighted when inside the slide editor too,
+  // since the slide editor is reached via the workFiles selector.
+  if (target.key === "workFiles" && props.activeViewMode === "slides") return true;
+  return false;
 }
 
 // A shortcut's `kind` is singular ("collection" / "feed"); the route

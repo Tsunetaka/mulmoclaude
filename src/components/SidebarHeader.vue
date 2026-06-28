@@ -4,14 +4,15 @@
       type="button"
       class="flex items-center gap-2 -my-1 -ml-1 py-1 pl-1 pr-1 rounded hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
       data-testid="app-home-btn"
-      :title="t('sidebarHeader.home')"
-      :aria-label="t('sidebarHeader.home')"
+      :title="resolvedHomeLabel"
+      :aria-label="resolvedHomeLabel"
       @click="emit('home')"
     >
-      <img :src="logoUrl" alt="" class="h-[50px] w-auto -my-3.5 -ml-3 rounded object-contain shrink-0" />
+      <img :src="resolvedLogoSrc" alt="" class="h-[50px] w-auto -my-3.5 -ml-3 rounded object-contain shrink-0" />
       <!-- span, not h1: `<h1>` inside `<button>` is invalid HTML, and
            the brand label here is a clickable logo, not a page heading. -->
-      <span data-testid="app-title" class="text-sm font-semibold text-gray-800" :style="titleStyle">MulmoClaude</span>
+      <!-- eslint-disable-next-line @intlify/vue-i18n/no-raw-text -- brand name, overridable via prop -->
+      <span data-testid="app-title" class="text-sm font-semibold text-gray-800" :style="titleStyle">{{ appTitle }}</span>
     </button>
     <div class="flex gap-0.5">
       <LockStatusPopup
@@ -23,6 +24,7 @@
       />
       <NotificationBell :force-close="lockPopupOpen" @update:open="onNotificationOpen" />
       <button
+        v-if="!hideJournalButton"
         class="h-8 w-8 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
         data-testid="today-journal-btn"
         :title="t('sidebarHeader.todayJournal')"
@@ -67,9 +69,23 @@ const props = withDefaults(
     sandboxEnabled: boolean;
     geminiAvailable?: boolean;
     titleStyle?: CSSProperties;
+    /** Override the app logo. Defaults to the built-in mulmo_bw mascot. */
+    logoSrc?: string;
+    /** Override the home button tooltip/aria-label. Defaults to sidebarHeader.home. */
+    homeLabel?: string;
+    /** When true, hide the today-journal (calendar) button. */
+    hideJournalButton?: boolean;
+    /** Override the app title text. Defaults to "MulmoClaude". */
+    appTitle?: string;
   }>(),
-  { geminiAvailable: true, titleStyle: () => ({}) },
+  { geminiAvailable: true, titleStyle: () => ({}), logoSrc: undefined, homeLabel: undefined, hideJournalButton: false, appTitle: "MulmoClaude" },
 );
+
+/** Resolved logo: use the override when provided, otherwise fall back to the built-in asset. */
+const resolvedLogoSrc = computed(() => props.logoSrc ?? logoUrl);
+
+/** Resolved home button label: use override when provided, otherwise the default i18n string. */
+const resolvedHomeLabel = computed(() => props.homeLabel ?? t("sidebarHeader.home"));
 
 const emit = defineEmits<{
   testQuery: [query: string];

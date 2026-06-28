@@ -352,6 +352,7 @@ const frMessages = {
     feeds: { label: "Flux" },
     accounting: { label: "Comptabilité" },
     files: { label: "Fichiers" },
+    workFiles: { label: "Diapositives" },
   },
   shortcuts: {
     pin: "Épingler au lanceur",
@@ -1187,6 +1188,28 @@ const frMessages = {
     defaultTitle: "Confirmer",
     defaultConfirm: "Confirmer",
     defaultCancel: "Annuler",
+  },
+  slides: {
+    pickWd: "Sélectionner un répertoire de travail",
+    wdPlaceholder: "WD-ID (ex. GIT-00001)",
+    open: "Ouvrir",
+    available: "WDs disponibles",
+    backToPicker: "Retour à la sélection WD",
+    noCacheFound: "Cache de miniatures introuvable. Exécutez edit-slide dans le chat.",
+    generatingThumbnails: "Génération des miniatures...",
+    prevPage: "Page précédente",
+    nextPage: "Page suivante",
+    editDone: "Terminer l'édition",
+    selectDoc: "Sélectionner le document",
+  },
+  mulmoPoint: {
+    title: "À propos de MulmoPoint",
+    description: "Système de crédits IA alimentant les fonctionnalités de génération de MulmoClaude.",
+    aiEngines: "Moteurs IA",
+    slideEditing: "Édition de diapositives",
+    coreEngine: "Moteur central",
+    close: "Fermer",
+    copyright: "© 2026 receptron — MulmoPoint",
   },
 };
 

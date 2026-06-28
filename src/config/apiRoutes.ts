@@ -337,6 +337,11 @@ const HOST_API_ROUTES = {
     log: "/api/hooks/log",
   },
 
+  work: {
+    scan: "/api/work/scan",
+    checkout: "/api/work/checkout",
+  },
+
   wiki: {
     base: "/api/wiki",
     /** History routes (#763 PR 2). `:slug` and `:stamp` are filled in

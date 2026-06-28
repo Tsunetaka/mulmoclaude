@@ -12,12 +12,20 @@
           :sandbox-enabled="sandboxEnabled"
           :gemini-available="geminiAvailable"
           :title-style="debugTitleStyle"
+          :logo-src="currentPage === 'slides' ? takoLogoUrl : undefined"
+          :home-label="currentPage === 'slides' ? t('mulmoPoint.title') : undefined"
+          :hide-journal-button="currentPage === 'slides'"
+          :app-title="currentPage === 'slides' ? 'MulmoPoint' : undefined"
           @test-query="(q) => sendMessage(q)"
           @open-settings="showSettings = true"
           @home="handleHomeClick"
         />
         <div class="flex-1 min-w-0">
+          <!-- Slide editor ribbon — shown instead of PluginLauncher while the
+               slide editor is active to prevent accidental page navigation. -->
+          <SlideEditorRibbon v-if="currentPage === 'slides'" />
           <PluginLauncher
+            v-else
             :active-tool-name="selectedResult?.toolName ?? null"
             :active-view-mode="currentPage"
             :shortcuts="shortcuts"
@@ -241,6 +249,11 @@
                without a `selected-result` prop — standalone it self-fetches
                the book list and auto-selects a book on mount. -->
           <AccountingView v-else-if="currentPage === 'accounting'" />
+          <!-- Slide editor — standalone full-screen PowerPoint-style
+               editing view (no PluginScopedRoot needed: uses
+               /api/files/raw + /api/files/dir directly). -->
+          <SlideEditorView v-else-if="currentPage === 'slides'" />
+          <WorkFileSelectorView v-else-if="currentPage === 'workFiles'" />
           <!-- Debug page (encore plan PR 1 follow-up). The View ships
                inside the @mulmoclaude/debug-plugin runtime package; we
                look it up by tool name and render the registered
@@ -300,6 +313,9 @@
       />
     </div>
 
+    <!-- MulmoPoint credits popup — visible only while the slide editor is active -->
+    <MulmoPointPopup :open="showMulmoPointPopup" @close="showMulmoPointPopup = false" />
+
     <!-- Global settings modal -->
     <SettingsModal
       :open="showSettings"
@@ -343,6 +359,12 @@ import FilesView from "./components/FilesView.vue";
 import AutomationsView from "./plugins/scheduler/AutomationsView.vue";
 import WikiView from "./plugins/wiki/View.vue";
 import { AccountingView } from "@mulmoclaude/accounting-plugin/vue";
+import SlideEditorView from "./components/SlideEditorView.vue";
+import WorkFileSelectorView from "./components/WorkFileSelectorView.vue";
+import SlideEditorRibbon from "./components/SlideEditorRibbon.vue";
+import MulmoPointPopup from "./components/MulmoPointPopup.vue";
+// Octopus mascot — shown in the header while the slide editor is active
+import takoLogoUrl from "./assets/mulmo_tako.png";
 import { buildWikiRouteParams } from "./plugins/wiki/route";
 import { CollectionView, CollectionsIndexView, FeedsView } from "@mulmoclaude/collection-plugin/vue";
 import PluginScopedRoot from "./components/PluginScopedRoot.vue";
@@ -599,6 +621,7 @@ const {
 
 const { showRightSidebar, toggleRightSidebar } = useRightSidebar();
 const showSettings = ref(false);
+const showMulmoPointPopup = ref(false);
 
 // When the Settings modal closes, re-check voice-input availability: the
 // user may have just enabled it / started the model download, and the
@@ -718,6 +741,13 @@ function handleNewSessionClick(roleId: string): void {
 }
 
 function handleHomeClick(): void {
+  // On the slide editor page the home button opens the MulmoPoint popup
+  // instead of navigating away — accidental navigation is disruptive
+  // when the user is mid-edit.
+  if (currentPage.value === "slides") {
+    showMulmoPointPopup.value = true;
+    return;
+  }
   resumeOrCreateChatSession().catch((err) => console.error("[home] resume failed:", err));
 }
 

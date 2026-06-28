@@ -350,6 +350,7 @@ const ptBRMessages = {
     feeds: { label: "Feeds" },
     accounting: { label: "Contabilidade" },
     files: { label: "Arquivos" },
+    workFiles: { label: "Slides" },
   },
   shortcuts: {
     pin: "Fixar no iniciador",
@@ -1183,6 +1184,28 @@ const ptBRMessages = {
     defaultTitle: "Confirmar",
     defaultConfirm: "Confirmar",
     defaultCancel: "Cancelar",
+  },
+  slides: {
+    pickWd: "Selecionar diretório de trabalho",
+    wdPlaceholder: "WD-ID (ex.: GIT-00001)",
+    open: "Abrir",
+    available: "WDs disponíveis",
+    backToPicker: "Voltar à seleção de WD",
+    noCacheFound: "Cache de miniaturas não encontrado. Execute edit-slide no chat.",
+    generatingThumbnails: "Gerando miniaturas...",
+    prevPage: "Página anterior",
+    nextPage: "Próxima página",
+    editDone: "Concluir edição",
+    selectDoc: "Selecionar documento",
+  },
+  mulmoPoint: {
+    title: "Sobre o MulmoPoint",
+    description: "Sistema de créditos de IA que alimenta os recursos de geração do MulmoClaude.",
+    aiEngines: "Motores de IA",
+    slideEditing: "Edição de slides",
+    coreEngine: "Motor central",
+    close: "Fechar",
+    copyright: "© 2026 receptron — MulmoPoint",
   },
 };
 

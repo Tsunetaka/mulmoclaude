@@ -17,6 +17,8 @@ export const PAGE_ROUTES = {
   debug: "debug",
   collections: "collections",
   accounting: "accounting",
+  slides: "slides",
+  workFiles: "workFiles",
 } as const;
 
 export type PageRouteName = (typeof PAGE_ROUTES)[keyof typeof PAGE_ROUTES];

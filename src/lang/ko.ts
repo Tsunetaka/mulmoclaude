@@ -354,6 +354,7 @@ const koMessages = {
     feeds: { label: "피드" },
     accounting: { label: "회계" },
     files: { label: "파일" },
+    workFiles: { label: "슬라이드" },
   },
   shortcuts: {
     pin: "런처에 고정",
@@ -1180,6 +1181,28 @@ const koMessages = {
     defaultTitle: "확인",
     defaultConfirm: "확인",
     defaultCancel: "취소",
+  },
+  slides: {
+    pickWd: "작업 디렉터리를 선택하세요",
+    wdPlaceholder: "WD-ID (예: GIT-00001)",
+    open: "열기",
+    available: "사용 가능한 WD",
+    backToPicker: "WD 선택으로 돌아가기",
+    noCacheFound: "썸네일 캐시를 찾을 수 없습니다. 채팅에서 edit-slide를 실행하세요.",
+    generatingThumbnails: "썸네일 생성 중...",
+    prevPage: "이전 페이지",
+    nextPage: "다음 페이지",
+    editDone: "편집 완료",
+    selectDoc: "문서 선택",
+  },
+  mulmoPoint: {
+    title: "MulmoPoint 정보",
+    description: "MulmoClaude의 AI 생성 기능을 지원하는 크레딧 시스템입니다.",
+    aiEngines: "AI 엔진",
+    slideEditing: "슬라이드 편집",
+    coreEngine: "코어 엔진",
+    close: "닫기",
+    copyright: "© 2026 receptron — MulmoPoint",
   },
 };
 

@@ -356,6 +356,7 @@ const deMessages = {
     feeds: { label: "Feeds" },
     accounting: { label: "Buchhaltung" },
     files: { label: "Dateien" },
+    workFiles: { label: "Folien" },
   },
   shortcuts: {
     pin: "An Launcher anheften",
@@ -1199,6 +1200,28 @@ const deMessages = {
     defaultTitle: "Bestätigen",
     defaultConfirm: "Bestätigen",
     defaultCancel: "Abbrechen",
+  },
+  slides: {
+    pickWd: "Arbeitsverzeichnis auswählen",
+    wdPlaceholder: "WD-ID (z.B. GIT-00001)",
+    open: "Öffnen",
+    available: "Verfügbare WDs",
+    backToPicker: "Zurück zur WD-Auswahl",
+    noCacheFound: "Kein Thumbnail-Cache gefunden. Bitte edit-slide im Chat ausführen.",
+    generatingThumbnails: "Miniaturbilder werden generiert...",
+    prevPage: "Vorherige Seite",
+    nextPage: "Nächste Seite",
+    editDone: "Bearbeitung abschließen",
+    selectDoc: "Dokument auswählen",
+  },
+  mulmoPoint: {
+    title: "Über MulmoPoint",
+    description: "KI-Kreditsystem für die Generierungsfunktionen von MulmoClaude.",
+    aiEngines: "KI-Engines",
+    slideEditing: "Folienbearbeitung",
+    coreEngine: "Kern-Engine",
+    close: "Schließen",
+    copyright: "© 2026 receptron — MulmoPoint",
   },
 };
 

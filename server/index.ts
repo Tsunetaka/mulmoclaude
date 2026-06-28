@@ -34,6 +34,7 @@ import configRoutes from "./api/routes/config.js";
 import configRefreshRoutes from "./api/routes/config-refresh.js";
 import hookLogRoutes from "./api/routes/hookLog.js";
 import skillsRoutes from "./api/routes/skills.js";
+import workFilesRoutes from "./api/routes/workFiles.js";
 import collectionsRoutes from "./api/routes/collections.js";
 import collectionsRegistryRoutes from "./api/routes/collectionsRegistry.js";
 import { startCollectionWatchers } from "./workspace/collections/watcher.js";
@@ -663,6 +664,7 @@ app.use(chartRoutes);
 app.use(rolesRoutes);
 app.use(shortcutsRoutes);
 app.use(dashboardRoutes);
+app.use(workFilesRoutes);
 app.use(mulmoScriptRoutes);
 app.use(wikiRoutes);
 // Mounted under /api/wiki so the inner router's relative paths

@@ -371,6 +371,7 @@ const enMessages = {
     feeds: { label: "Feeds" },
     accounting: { label: "Accounting" },
     files: { label: "Files" },
+    workFiles: { label: "Slides" },
   },
   shortcuts: {
     pin: "Pin to launcher",
@@ -1182,6 +1183,28 @@ const enMessages = {
     defaultTitle: "Confirm",
     defaultConfirm: "Confirm",
     defaultCancel: "Cancel",
+  },
+  slides: {
+    pickWd: "Select a work directory to open",
+    wdPlaceholder: "WD-ID (e.g. GIT-00001)",
+    open: "Open",
+    available: "Available WDs",
+    backToPicker: "Back to WD selection",
+    noCacheFound: "No thumbnail cache found. Run edit-slide in chat to generate it.",
+    generatingThumbnails: "Generating thumbnails...",
+    prevPage: "Previous page",
+    nextPage: "Next page",
+    editDone: "Done Editing",
+    selectDoc: "Select Document",
+  },
+  mulmoPoint: {
+    title: "About MulmoPoint",
+    description: "AI credit system powering MulmoClaude's generation features.",
+    aiEngines: "AI Engines",
+    slideEditing: "Slide Editing",
+    coreEngine: "Core Engine",
+    close: "Close",
+    copyright: "© 2026 receptron — MulmoPoint",
   },
 };
 

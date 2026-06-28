@@ -354,6 +354,7 @@ const jaMessages = {
     feeds: { label: "フィード" },
     accounting: { label: "会計" },
     files: { label: "ファイル" },
+    workFiles: { label: "スライド" },
   },
   shortcuts: {
     pin: "ランチャーに固定",
@@ -1178,6 +1179,28 @@ const jaMessages = {
     defaultTitle: "確認",
     defaultConfirm: "実行",
     defaultCancel: "キャンセル",
+  },
+  slides: {
+    pickWd: "作業フォルダを選択してください",
+    wdPlaceholder: "WD-ID（例: GIT-00001）",
+    open: "開く",
+    available: "利用可能な WD",
+    backToPicker: "WD 選択に戻る",
+    noCacheFound: "サムネイルキャッシュが見つかりません。チャットで edit-slide を実行してください。",
+    generatingThumbnails: "サムネイルを生成中...",
+    prevPage: "前のページ",
+    nextPage: "次のページ",
+    editDone: "編集完了",
+    selectDoc: "文書選択",
+  },
+  mulmoPoint: {
+    title: "MulmoPoint について",
+    description: "MulmoClaude の AI 生成機能を支えるクレジットシステムです。",
+    aiEngines: "AI エンジン",
+    slideEditing: "スライド編集",
+    coreEngine: "コアエンジン",
+    close: "閉じる",
+    copyright: "© 2026 receptron — MulmoPoint",
   },
 };
 

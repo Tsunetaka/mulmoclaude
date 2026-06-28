@@ -91,6 +91,13 @@ const routes: RouteRecordRaw[] = [
   // existing bookmarks survive the rename. Safe to delete after.
   { path: "/apps", redirect: "/collections" },
   { path: "/apps/:slug", redirect: (route) => `/collections/${encodeURIComponent(String(route.params.slug))}` },
+  // Slide editor — standalone full-screen PowerPoint editing view.
+  // Optional `:wdId` for deep-linking to a specific work directory
+  // (e.g. /slides/GIT-00001). Without a wdId the view shows a WD
+  // picker. The view self-loads the thumbnail cache from
+  // /api/files/raw so it doesn't need the chat iframe sandbox.
+  { path: "/slides/:wdId?", name: PAGE_ROUTES.slides, component: Stub },
+  { path: "/work-files", name: PAGE_ROUTES.workFiles, component: Stub },
   { path: "/:pathMatch(.*)*", redirect: "/chat" },
 ];
 
