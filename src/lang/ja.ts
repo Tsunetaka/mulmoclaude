@@ -1181,10 +1181,6 @@ const jaMessages = {
     defaultCancel: "キャンセル",
   },
   slides: {
-    pickWd: "作業フォルダを選択してください",
-    wdPlaceholder: "WD-ID（例: GIT-00001）",
-    open: "開く",
-    available: "利用可能な WD",
     backToPicker: "WD 選択に戻る",
     noCacheFound: "サムネイルキャッシュが見つかりません。チャットで edit-slide を実行してください。",
     generatingThumbnails: "サムネイルを生成中...",
@@ -1192,6 +1188,8 @@ const jaMessages = {
     nextPage: "次のページ",
     editDone: "編集完了",
     selectDoc: "文書選択",
+    canvasRefresh: "canvas 更新",
+    toggleChat: "Claude チャット",
   },
   mulmoPoint: {
     title: "MulmoPoint について",

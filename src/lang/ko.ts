@@ -1183,10 +1183,6 @@ const koMessages = {
     defaultCancel: "취소",
   },
   slides: {
-    pickWd: "작업 디렉터리를 선택하세요",
-    wdPlaceholder: "WD-ID (예: GIT-00001)",
-    open: "열기",
-    available: "사용 가능한 WD",
     backToPicker: "WD 선택으로 돌아가기",
     noCacheFound: "썸네일 캐시를 찾을 수 없습니다. 채팅에서 edit-slide를 실행하세요.",
     generatingThumbnails: "썸네일 생성 중...",
@@ -1194,6 +1190,8 @@ const koMessages = {
     nextPage: "다음 페이지",
     editDone: "편집 완료",
     selectDoc: "문서 선택",
+    canvasRefresh: "캔버스 업데이트",
+    toggleChat: "Claude 채팅",
   },
   mulmoPoint: {
     title: "MulmoPoint 정보",

@@ -6,6 +6,13 @@ import { inject, provide } from "vue";
 export interface AppApi {
   refreshRoles: () => void | Promise<void>;
   sendMessage: (message: string) => void;
+  // Send a message pinned to `roleId`, activating a session bound to
+  // that role WITHOUT navigating away from the current (non-chat)
+  // page. If the active session already uses that role it is
+  // continued; otherwise a fresh session is activated in place. Used
+  // by the slide-editor chat pane to force the `slide` role while the
+  // user stays on /slides (unlike startNewChat, which pushes /chat).
+  sendMessageAs: (message: string, roleId: string) => void;
   // roleId overrides for one-off sessions (e.g. wiki lint must run as General even if the user is on a different role).
   startNewChat: (message: string, roleId?: string) => void;
   navigateToWorkspacePath: (href: string) => void;

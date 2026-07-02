@@ -1186,10 +1186,6 @@ const ptBRMessages = {
     defaultCancel: "Cancelar",
   },
   slides: {
-    pickWd: "Selecionar diretório de trabalho",
-    wdPlaceholder: "WD-ID (ex.: GIT-00001)",
-    open: "Abrir",
-    available: "WDs disponíveis",
     backToPicker: "Voltar à seleção de WD",
     noCacheFound: "Cache de miniaturas não encontrado. Execute edit-slide no chat.",
     generatingThumbnails: "Gerando miniaturas...",
@@ -1197,6 +1193,8 @@ const ptBRMessages = {
     nextPage: "Próxima página",
     editDone: "Concluir edição",
     selectDoc: "Selecionar documento",
+    canvasRefresh: "Atualizar canvas",
+    toggleChat: "Chat do Claude",
   },
   mulmoPoint: {
     title: "Sobre o MulmoPoint",

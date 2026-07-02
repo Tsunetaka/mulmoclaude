@@ -1202,10 +1202,6 @@ const deMessages = {
     defaultCancel: "Abbrechen",
   },
   slides: {
-    pickWd: "Arbeitsverzeichnis auswählen",
-    wdPlaceholder: "WD-ID (z.B. GIT-00001)",
-    open: "Öffnen",
-    available: "Verfügbare WDs",
     backToPicker: "Zurück zur WD-Auswahl",
     noCacheFound: "Kein Thumbnail-Cache gefunden. Bitte edit-slide im Chat ausführen.",
     generatingThumbnails: "Miniaturbilder werden generiert...",
@@ -1213,6 +1209,8 @@ const deMessages = {
     nextPage: "Nächste Seite",
     editDone: "Bearbeitung abschließen",
     selectDoc: "Dokument auswählen",
+    canvasRefresh: "Canvas aktualisieren",
+    toggleChat: "Claude-Chat",
   },
   mulmoPoint: {
     title: "Über MulmoPoint",

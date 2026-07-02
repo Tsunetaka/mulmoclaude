@@ -30,7 +30,7 @@
       <div v-if="expandedCategories.has(cat.name)" class="mt-1 ml-4 space-y-2">
         <!-- WD 一覧 -->
         <div v-for="wd in cat.wds" :key="wd.id" class="border border-gray-200 rounded bg-white overflow-hidden">
-          <button class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50" @click="toggleWd(wd.id)">
+          <button class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50" @click="toggleWd(wd)">
             <span class="material-icons text-sm text-gray-400">{{ expandedWds.has(wd.id) ? "expand_more" : "chevron_right" }}</span>
             <span class="font-mono text-xs text-blue-700 bg-blue-50 px-1 rounded">{{ wd.id }}</span>
             <span class="text-sm font-medium truncate">{{ wd.title }}</span>
@@ -47,47 +47,159 @@
                 ＋ 新規作成
               </button>
             </div>
-            <div class="flex flex-wrap gap-2">
-              <button
-                v-for="v in wd.versions"
-                :key="v.version"
-                class="px-3 py-1.5 rounded text-sm font-medium border transition-colors"
-                :class="versionButtonClass(v, wd)"
-                :disabled="isVersionDisabled(v, wd)"
-                @click="onVersionClick(wd, v)"
-              >
-                {{ v.version }}
-                <span v-if="v.date" class="text-xs opacity-70 ml-1">{{ formatDate(v.date) }}</span>
-                <span v-for="s in v.statuses" :key="s" class="ml-1 text-xs px-1 rounded" :class="statusBadgeClass(s)">{{ statusLabel(s) }}</span>
-              </button>
+            <div class="flex flex-wrap gap-2 items-start">
+              <div v-for="v in wd.versions" :key="v.version" class="flex flex-col">
+                <button
+                  class="rounded text-sm font-medium border transition-colors flex flex-col"
+                  :class="[versionButtonClass(v), thumbUrlFor(wd.id, v.version) ? 'p-1.5 w-40 items-stretch' : 'px-3 py-1.5 items-start']"
+                  @click="onVersionClick(wd, v)"
+                >
+                  <img
+                    v-if="thumbUrlFor(wd.id, v.version)"
+                    :src="thumbUrlFor(wd.id, v.version)"
+                    class="w-full h-auto rounded border border-gray-200 bg-white mb-1"
+                    alt=""
+                    loading="lazy"
+                  />
+                  <span class="flex flex-wrap items-center gap-x-1">
+                    <span>{{ v.version }}</span>
+                    <span v-if="v.date" class="text-xs opacity-70">{{ formatDate(v.date) }}</span>
+                    <span v-for="s in v.statuses" :key="s" class="text-xs px-1 rounded" :class="statusBadgeClass(s)">{{ statusLabel(s) }}</span>
+                  </span>
+                </button>
+                <!-- 編集中カード：直接オープンに加え、ここから採番モーダル(fork-from)を開く -->
+                <button v-if="v.kind === 'editing'" class="mt-0.5 text-[11px] text-blue-600 hover:underline self-start" @click="openVersionModal(wd, v)">
+                  ＋新版
+                </button>
+              </div>
+              <span v-if="thumbsLoading.has(wd.id)" class="text-xs text-gray-400 self-center">プレビュー生成中...</span>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- チェックアウトモーダル -->
-    <div v-if="checkoutModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+    <!-- 採番モーダル（新版作成／編集開始） -->
+    <div v-if="versionModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 flex flex-col">
         <div class="flex items-center gap-2 px-4 py-3 border-b">
-          <span class="font-semibold">チェックアウト — {{ checkoutModal.wdId }}</span>
-          <span class="text-sm text-gray-500 ml-1">{{ checkoutModal.version }}</span>
-          <button class="ml-auto text-gray-400 hover:text-gray-600" :disabled="checkoutRunning" @click="closeCheckoutModal">✕</button>
+          <span class="font-semibold">編集を開始 — 新しいバージョンを作成</span>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" :disabled="modalPhase === 'running'" @click="closeVersionModal">✕</button>
         </div>
-        <div class="flex-1 overflow-y-auto px-4 py-3 max-h-80 bg-gray-900 rounded-b-none font-mono text-xs">
-          <div v-for="(line, i) in checkoutLog" :key="i" class="text-green-300 whitespace-pre-wrap">{{ line }}</div>
-          <div v-if="checkoutRunning" class="text-yellow-300 animate-pulse">処理中...</div>
-        </div>
-        <div class="px-4 py-3 border-t flex justify-end gap-2">
-          <button
-            v-if="!checkoutDone"
-            class="px-4 py-2 bg-gray-200 rounded text-sm disabled:opacity-50"
-            :disabled="checkoutRunning"
-            @click="closeCheckoutModal"
+
+        <!-- ① 採番方法の選択 -->
+        <div v-if="modalPhase === 'choose'" class="px-4 py-3 space-y-3">
+          <div class="text-sm text-gray-600">
+            <span class="font-mono">{{ versionModal.wdId }}</span>
+            <span class="ml-2">元: {{ versionModal.sourceVersion }}（{{ versionModal.sourceKind === "released" ? "ReleasedVersion" : "編集中" }}）</span>
+          </div>
+          <label
+            v-for="opt in modalOps"
+            :key="opt.value"
+            class="flex items-start gap-2 p-2 rounded border cursor-pointer"
+            :class="selectedOp === opt.value ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'"
           >
-            キャンセル
+            <input v-model="selectedOp" type="radio" :value="opt.value" class="mt-1" />
+            <span class="flex flex-col">
+              <span class="text-sm font-medium">{{ opt.label }}</span>
+              <span class="text-xs text-gray-500 font-mono">{{ opt.preview }}</span>
+            </span>
+          </label>
+        </div>
+
+        <!-- ② SSE ログ -->
+        <div v-else class="flex-1 overflow-y-auto px-4 py-3 max-h-80 font-mono text-xs bg-gray-900">
+          <div v-for="(line, i) in modalLog" :key="i" class="text-green-300 whitespace-pre-wrap">{{ line }}</div>
+          <div v-if="modalPhase === 'running'" class="text-yellow-300 animate-pulse">処理中...</div>
+        </div>
+
+        <div class="px-4 py-3 border-t flex justify-end gap-2">
+          <button v-if="modalPhase === 'choose'" class="px-4 py-2 bg-gray-200 rounded text-sm" @click="closeVersionModal">キャンセル</button>
+          <button v-if="modalPhase === 'choose'" class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="executeVersionOp">
+            {{ selectedOp === "continue" ? "この版を開く" : `${targetVersion} を作成` }}
           </button>
-          <button v-if="checkoutDone" class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="handleCheckoutDone">
+          <button v-if="modalPhase === 'done'" class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="handleModalDone">
+            スライドエディタで開く
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新規デッキ作成モーダル（N3）：テーマ選択＋タイトル入力 → new-deck API -->
+    <div v-if="newDeckModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl mx-4 flex flex-col max-h-[90vh]">
+        <div class="flex items-center gap-2 px-4 py-3 border-b">
+          <span class="font-semibold">新規スライド作成 — {{ newDeckModal.wdId }}（{{ NEW_DECK_VERSION }}）</span>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" :disabled="modalPhase === 'running'" @click="closeNewDeckModal">✕</button>
+        </div>
+
+        <!-- ① テーマ・タイトル入力 -->
+        <div v-if="modalPhase === 'choose'" class="px-4 py-3 space-y-3 overflow-y-auto">
+          <div>
+            <div class="text-sm font-medium mb-1">表紙のテーマ</div>
+            <div class="grid grid-cols-5 gap-2">
+              <button
+                v-for="theme in NEW_DECK_THEMES"
+                :key="theme.id"
+                type="button"
+                class="rounded-lg border-2 p-1 text-left transition-all"
+                :class="deckTheme === theme.id ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200 hover:border-gray-300'"
+                :title="theme.tagline"
+                @click="deckTheme = theme.id"
+              >
+                <div class="h-12 rounded border border-gray-200 flex items-end p-1" :style="{ background: theme.swatch, color: theme.swatchText }">
+                  <span class="text-[9px] leading-tight opacity-80">Smallworld with AI</span>
+                </div>
+                <div class="text-xs mt-1 font-medium truncate">{{ theme.label }}</div>
+                <div class="text-[10px] text-gray-400 truncate">{{ theme.tagline }}</div>
+              </button>
+            </div>
+          </div>
+          <label class="block">
+            <span class="text-sm font-medium">タイトル <span class="text-red-500">*</span></span>
+            <input
+              v-model="deckTitle"
+              type="text"
+              class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+              placeholder="スライドのメインタイトル"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm font-medium">サブタイトル（製品名・文脈／省略可）</span>
+            <input
+              v-model="deckSubtitle"
+              type="text"
+              class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+              placeholder="例: Google AppSheet / Smallworld with AI"
+            />
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input v-model="deckConfidential" type="checkbox" />
+            [社外秘] ラベルを表示する
+          </label>
+          <div class="text-xs text-gray-500">表紙には今日の日付・会社名（テンプレにプレースホルダがあれば WD-ID／バージョンも）が自動で入ります。</div>
+        </div>
+
+        <!-- ② SSE ログ -->
+        <div v-else class="flex-1 overflow-y-auto px-4 py-3 max-h-80 font-mono text-xs bg-gray-900">
+          <div v-for="(line, i) in modalLog" :key="i" class="text-green-300 whitespace-pre-wrap">{{ line }}</div>
+          <div v-if="modalPhase === 'running'" class="text-yellow-300 animate-pulse">処理中...</div>
+        </div>
+
+        <div class="px-4 py-3 border-t flex items-center gap-2">
+          <span v-if="modalPhase === 'done'" class="text-xs text-gray-500 mr-auto"
+            >高解像度表示はエディタの「canvas を更新」で生成できます（PowerPoint を全て閉じてから）</span
+          >
+          <button v-if="modalPhase === 'choose'" class="ml-auto px-4 py-2 bg-gray-200 rounded text-sm" @click="closeNewDeckModal">キャンセル</button>
+          <button
+            v-if="modalPhase === 'choose'"
+            class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+            :disabled="!deckTitle.trim()"
+            @click="executeNewDeck"
+          >
+            表紙を作成
+          </button>
+          <button v-if="modalPhase === 'done'" class="ml-auto px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="handleNewDeckDone">
             スライドエディタで開く
           </button>
         </div>
@@ -97,17 +209,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { apiGet, apiFetchRaw } from "../utils/api";
+import { apiGet, apiPost, apiFetchRaw } from "../utils/api";
 import { API_ROUTES } from "../config/apiRoutes";
 import { PAGE_ROUTES } from "../router/pageRoutes";
+import { nextIncrement, nextBranch, allowedOps, type VersionOp } from "../utils/slides/versioning";
+import { NEW_DECK_THEMES } from "../utils/slides/newDeck";
 
 interface VersionInfo {
   version: string;
   versionNum: number;
+  kind: "released" | "editing";
   filename: string;
   date: string;
+  source?: { kind: string; from: string };
+  locked?: boolean;
   statuses: string[];
 }
 
@@ -137,11 +254,23 @@ const errorMsg = ref<string | null>(null);
 const expandedCategories = ref<Set<string>>(new Set());
 const expandedWds = ref<Set<string>>(new Set());
 
-const checkoutModal = ref<{ wdId: string; version: string; windowsWdPath: string } | null>(null);
-const checkoutLog = ref<string[]>([]);
-const checkoutRunning = ref(false);
-const checkoutDone = ref(false);
-const checkoutDoneWdId = ref<string | null>(null);
+// リリース選択前プレビュー（N5）。wdId → version → workspace 相対サムネパス。
+const releasedThumbs = ref<Record<string, Record<string, string>>>({});
+const thumbsLoading = ref<Set<string>>(new Set());
+
+// ── 採番モーダル状態 ─────────────────────────────────────────────────────────
+interface VersionModal {
+  wdId: string;
+  sourceVersion: string;
+  sourceKind: "released" | "editing";
+  sourceFilename: string;
+  siblings: string[];
+}
+const versionModal = ref<VersionModal | null>(null);
+const selectedOp = ref<VersionOp>("increment");
+const modalPhase = ref<"choose" | "running" | "done">("choose");
+const modalLog = ref<string[]>([]);
+const doneVersion = ref<string | null>(null);
 
 async function scanFiles(): Promise<void> {
   loading.value = true;
@@ -153,26 +282,61 @@ async function scanFiles(): Promise<void> {
     return;
   }
   categories.value = result.data.categories;
-  // デフォルトで全カテゴリ展開
   for (const cat of result.data.categories) {
     expandedCategories.value.add(cat.name);
   }
 }
 
 function toggleCategory(name: string): void {
-  if (expandedCategories.value.has(name)) {
-    expandedCategories.value.delete(name);
+  if (expandedCategories.value.has(name)) expandedCategories.value.delete(name);
+  else expandedCategories.value.add(name);
+}
+
+function toggleWd(wdInfo: WdInfo): void {
+  if (expandedWds.value.has(wdInfo.id)) {
+    expandedWds.value.delete(wdInfo.id);
   } else {
-    expandedCategories.value.add(name);
+    expandedWds.value.add(wdInfo.id);
+    loadReleasedThumbs(wdInfo).catch(() => {});
   }
 }
 
-function toggleWd(wdId: string): void {
-  if (expandedWds.value.has(wdId)) {
-    expandedWds.value.delete(wdId);
-  } else {
-    expandedWds.value.add(wdId);
+interface ReleasedThumb {
+  version: string;
+  path: string;
+  generated: boolean;
+  error?: string;
+}
+
+// 展開時に対象 WD の released サムネ（欠落/古いものだけ）をサーバー生成して取り込む。
+// released 版が無い新規 WD でも windowsWdPath があれば呼ぶ（released-thumbs エンドポイントが
+// D: 側の素材フォルダ構成を WSL へミラーするため）。released 版が無ければサムネは空で返る。
+async function loadReleasedThumbs(wdInfo: WdInfo): Promise<void> {
+  if (!wdInfo.windowsWdPath || thumbsLoading.value.has(wdInfo.id)) return;
+  thumbsLoading.value = new Set(thumbsLoading.value).add(wdInfo.id);
+  try {
+    const result = await apiPost<{ thumbs: ReleasedThumb[] }>(API_ROUTES.work.releasedThumbs, {
+      wdId: wdInfo.id,
+      windowsWdPath: wdInfo.windowsWdPath,
+    });
+    if (!result.ok) return;
+    const map: Record<string, string> = {};
+    for (const thumb of result.data.thumbs) {
+      if (!thumb.error) map[thumb.version] = thumb.path;
+    }
+    releasedThumbs.value = { ...releasedThumbs.value, [wdInfo.id]: map };
+  } finally {
+    const next = new Set(thumbsLoading.value);
+    next.delete(wdInfo.id);
+    thumbsLoading.value = next;
   }
+}
+
+// released バージョンの表紙サムネ URL（無ければ空文字）。
+function thumbUrlFor(wdId: string, version: string): string {
+  const relPath = releasedThumbs.value[wdId]?.[version];
+  if (!relPath) return "";
+  return `${API_ROUTES.files.raw}?path=${encodeURIComponent(relPath)}`;
 }
 
 function formatDate(date: string): string {
@@ -182,109 +346,95 @@ function formatDate(date: string): string {
 
 function statusLabel(statusKey: string): string {
   const labelMap: Record<string, string> = {
-    draft: "編集中",
+    editing: "編集中",
     released: "リリース済",
     "checked-out": "CO済",
     dirty: "未保存",
-    stale: "要更新",
   };
   return labelMap[statusKey] ?? statusKey;
 }
 
 function statusBadgeClass(statusKey: string): string {
   const classMap: Record<string, string> = {
-    draft: "bg-yellow-100 text-yellow-800",
+    editing: "bg-yellow-100 text-yellow-800",
     released: "bg-gray-100 text-gray-600",
     "checked-out": "bg-green-100 text-green-800",
     dirty: "bg-orange-100 text-orange-800",
-    stale: "bg-red-100 text-red-800",
   };
   return classMap[statusKey] ?? "bg-gray-100 text-gray-600";
 }
 
-function versionButtonClass(verInfo: VersionInfo, wdInfo: WdInfo): string {
-  if (verInfo.version === wdInfo.checkedOutVersion) return "border-green-400 bg-green-50 text-green-800";
-  if (verInfo.statuses.includes("stale")) return "border-red-300 bg-red-50 text-red-800";
+function versionButtonClass(verInfo: VersionInfo): string {
+  if (verInfo.statuses.includes("checked-out")) return "border-green-400 bg-green-50 text-green-800";
   if (verInfo.statuses.includes("dirty")) return "border-orange-300 bg-orange-50 text-orange-800";
-  if (verInfo.statuses.includes("draft")) return "border-yellow-300 bg-yellow-50 text-yellow-800";
+  if (verInfo.kind === "editing") return "border-yellow-300 bg-yellow-50 text-yellow-800";
   return "border-gray-300 bg-white text-gray-700 hover:bg-gray-50";
 }
 
-// 他バージョンがCO中なら、そのバージョン以外を全てdisabledにする
-function isVersionDisabled(verInfo: VersionInfo, wdInfo: WdInfo): boolean {
-  return wdInfo.hasCheckedOut && verInfo.version !== wdInfo.checkedOutVersion;
+// エディタへ遷移（version クエリで開く版を指定）。
+function openEditor(wdId: string, version: string): void {
+  router.push({ name: PAGE_ROUTES.slides, params: { wdId }, query: { version } }).catch(() => {});
 }
 
-// YYYYMMDD 形式で今日の日付を返す
-function todayYYYYMMDD(): string {
-  const now = new Date();
-  const yearStr = String(now.getFullYear());
-  const monthStr = String(now.getMonth() + 1).padStart(2, "0");
-  const dayStr = String(now.getDate()).padStart(2, "0");
-  return `${yearStr}${monthStr}${dayStr}`;
-}
-
-// Released ファイル名から次バージョンのファイル名を生成
-// 例: "TRN-00001 タイトル_20260620_v001.pptx" → "TRN-00001 タイトル_20260628_v002.pptx"
-function buildNewVersionFilename(sourceFilename: string): string {
-  const today = todayYYYYMMDD();
-  const matchWithDate = sourceFilename.match(/^(.+?)_\d{8}_v(\d+)(\.pptx)$/i);
-  if (matchWithDate) {
-    const newVer = String(parseInt(matchWithDate[2], 10) + 1).padStart(3, "0");
-    return `${matchWithDate[1]}_${today}_v${newVer}${matchWithDate[3]}`;
-  }
-  const matchNoDate = sourceFilename.match(/^(.+?)_v(\d+)(\.pptx)$/i);
-  if (matchNoDate) {
-    const newVer = String(parseInt(matchNoDate[2], 10) + 1).padStart(3, "0");
-    return `${matchNoDate[1]}_${today}_v${newVer}${matchNoDate[3]}`;
-  }
-  return sourceFilename;
-}
-
-// Released バージョン選択 → 新バージョン作成＆チェックアウト
-function handleReleasedClick(wdInfo: WdInfo, verInfo: VersionInfo): void {
-  const newFilename = buildNewVersionFilename(verInfo.filename);
-  const nextVer = newFilename.match(/_v(\d+)\.pptx$/i)?.[1] ?? "?";
-  if (!confirm(`${verInfo.version} をコピーして v${nextVer} を新規作成し、チェックアウトします。よろしいですか？`)) return;
-  openCheckoutModal(wdInfo, verInfo);
-  startCheckout(wdInfo, "checkout-new-version", { sourceFilename: verInfo.filename, newFilename }).catch(() => {});
-}
-
+// バージョンカードのクリック：編集中→直接オープン／released→採番モーダル。
 function onVersionClick(wdInfo: WdInfo, verInfo: VersionInfo): void {
-  // CO済み（staleでなければ）→ スライドエディタへ直接遷移
-  const isActive = verInfo.statuses.includes("checked-out") || verInfo.statuses.includes("dirty");
-  if (isActive && !verInfo.statuses.includes("stale")) {
-    router.push({ name: PAGE_ROUTES.slides, params: { wdId: wdInfo.id } }).catch(() => {});
+  if (verInfo.kind === "editing") {
+    openEditor(wdInfo.id, verInfo.version);
     return;
   }
-  // Released → 新バージョン作成フロー
-  if (verInfo.statuses.includes("released") && !verInfo.statuses.includes("checked-out")) {
-    handleReleasedClick(wdInfo, verInfo);
-    return;
-  }
-  // Stale → 再チェックアウトの確認
-  if (verInfo.statuses.includes("stale")) {
-    if (!confirm(`${verInfo.version} は Windows 側が更新されています。再チェックアウトしますか？`)) return;
-  }
-  // Draft または stale → checkout
-  openCheckoutModal(wdInfo, verInfo);
-  startCheckout(wdInfo, "checkout", {}).catch(() => {});
+  openVersionModal(wdInfo, verInfo);
 }
 
-function openCheckoutModal(wdInfo: WdInfo, verInfo: VersionInfo): void {
-  checkoutModal.value = { wdId: wdInfo.id, version: verInfo.version, windowsWdPath: wdInfo.windowsWdPath };
-  checkoutLog.value = [];
-  checkoutRunning.value = false;
-  checkoutDone.value = false;
-  checkoutDoneWdId.value = null;
+// 採番モーダルを開く（released カードのクリック or 編集中カードの「＋新版」）。
+function openVersionModal(wdInfo: WdInfo, verInfo: VersionInfo): void {
+  versionModal.value = {
+    wdId: wdInfo.id,
+    sourceVersion: verInfo.version,
+    sourceKind: verInfo.kind,
+    sourceFilename: verInfo.filename,
+    siblings: wdInfo.versions.map((ver) => ver.version),
+  };
+  const ops = allowedOps(verInfo.kind);
+  selectedOp.value = ops.includes("increment") ? "increment" : ops[0];
+  modalPhase.value = "choose";
+  modalLog.value = [];
+  doneVersion.value = null;
 }
 
-function onCreateNew(wdInfo: WdInfo): void {
-  alert(`「${wdInfo.title}」の新規作成機能は準備中です。\nWD: ${wdInfo.id}`);
+function closeVersionModal(): void {
+  if (modalPhase.value === "running") return;
+  versionModal.value = null;
 }
 
-// SSE ストリームを読んでログに追記する
-async function drainSseStream(body: ReadableStream<Uint8Array>): Promise<void> {
+// 選択した操作から新版番号を計算する。
+const targetVersion = computed<string>(() => {
+  const modal = versionModal.value;
+  if (!modal) return "";
+  if (selectedOp.value === "increment") return nextIncrement(modal.sourceVersion, modal.siblings);
+  if (selectedOp.value === "branch") return nextBranch(modal.sourceVersion, modal.siblings);
+  return modal.sourceVersion; // continue
+});
+
+interface ModalOp {
+  value: VersionOp;
+  label: string;
+  preview: string;
+}
+
+// モーダルに表示する採番オプション（kind により継続の可否が変わる）。
+const modalOps = computed<ModalOp[]>(() => {
+  const modal = versionModal.value;
+  if (!modal) return [];
+  return allowedOps(modal.sourceKind).map((value) => {
+    if (value === "increment")
+      return { value, label: "インクリメント（推奨）", preview: `${modal.sourceVersion} → ${nextIncrement(modal.sourceVersion, modal.siblings)}` };
+    if (value === "branch") return { value, label: "枝番を追加", preview: `${modal.sourceVersion} → ${nextBranch(modal.sourceVersion, modal.siblings)}` };
+    return { value, label: "この版のまま継続", preview: `${modal.sourceVersion}（そのまま開く）` };
+  });
+});
+
+// SSE ストリームを読んでログに追記し、DONE を検出する。
+async function drainModalSse(body: ReadableStream<Uint8Array>): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -297,46 +447,121 @@ async function drainSseStream(body: ReadableStream<Uint8Array>): Promise<void> {
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
       const msg = line.slice(6);
-      checkoutLog.value.push(msg);
-      if (msg.startsWith("DONE:")) {
-        checkoutDoneWdId.value = msg.slice(5);
-        checkoutDone.value = true;
-      }
+      modalLog.value.push(msg);
+      if (msg.startsWith("DONE:")) modalPhase.value = "done";
     }
   }
 }
 
-async function startCheckout(wdInfo: WdInfo, action: string, extra: Record<string, string>): Promise<void> {
-  checkoutRunning.value = true;
+// split / fork-from を SSE で叩き、完了まで待つ。preflight エラー（非 SSE の JSON）も処理。
+async function runModalSse(url: string, body: Record<string, unknown>): Promise<void> {
+  modalPhase.value = "running";
   try {
-    const res = await apiFetchRaw(API_ROUTES.work.checkout, {
+    const res = await apiFetchRaw(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ wdId: wdInfo.id, windowsWdPath: wdInfo.windowsWdPath, action, ...extra }),
+      body: JSON.stringify(body),
     });
     if (!res.ok || !res.body) {
-      checkoutLog.value.push(`ERROR: HTTP ${res.status}`);
+      let msg = `HTTP ${res.status}`;
+      try {
+        const errBody = (await res.json()) as { error?: string };
+        if (errBody?.error) msg = errBody.error;
+      } catch {
+        // レスポンスが JSON でない場合はステータスコードのみ
+      }
+      modalLog.value.push(`ERROR: ${msg}`);
+      modalPhase.value = "choose";
       return;
     }
-    await drainSseStream(res.body);
+    await drainModalSse(res.body);
   } catch (err) {
-    checkoutLog.value.push(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    checkoutRunning.value = false;
+    modalLog.value.push(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    modalPhase.value = "choose";
   }
 }
 
-function closeCheckoutModal(): void {
-  if (checkoutRunning.value) return;
-  checkoutModal.value = null;
+function fillRoute(routePattern: string, wdId: string, version: string): string {
+  return routePattern.replace(":wd", wdId).replace(":version", version);
 }
 
-function handleCheckoutDone(): void {
-  const wdId = checkoutDoneWdId.value;
-  checkoutModal.value = null;
-  if (wdId) {
-    router.push({ name: PAGE_ROUTES.slides, params: { wdId } }).catch(() => {});
+// 採番モーダルの「実行」：continue は直接オープン、それ以外は split/fork-from。
+async function executeVersionOp(): Promise<void> {
+  const modal = versionModal.value;
+  if (!modal) return;
+  const target = targetVersion.value;
+
+  // 編集中由来の「継続」は新版を作らずそのまま開く。
+  if (modal.sourceKind === "editing" && selectedOp.value === "continue") {
+    versionModal.value = null;
+    openEditor(modal.wdId, modal.sourceVersion);
+    return;
   }
+
+  doneVersion.value = target;
+  if (modal.sourceKind === "released") {
+    const url = fillRoute(API_ROUTES.work.split, modal.wdId, target);
+    await runModalSse(url, { sourceFilename: modal.sourceFilename, sourceKind: "released", sourceFrom: modal.sourceVersion });
+  } else {
+    const url = fillRoute(API_ROUTES.work.forkFrom, modal.wdId, target);
+    await runModalSse(url, { sourceVersion: modal.sourceVersion });
+  }
+}
+
+function handleModalDone(): void {
+  const modal = versionModal.value;
+  const target = doneVersion.value;
+  versionModal.value = null;
+  if (modal && target) openEditor(modal.wdId, target);
+  scanFiles().catch(() => {});
+}
+
+// ── 新規デッキ作成モーダル（N3）─────────────────────────────────────────────
+// 画面内モーダルでテーマ・タイトルを選び、new-deck API（new_deck.py→gen_thumbs）を
+// SSE で実行する。チャット遷移はしない（2026-07-02 UX 改善）。canvas はエディタの
+// 「更新」ボタンで後追い生成（PowerPoint 全終了の確認付き）。
+const NEW_DECK_VERSION = "v001";
+const newDeckModal = ref<{ wdId: string; windowsWdPath: string } | null>(null);
+const deckTheme = ref("cool");
+const deckTitle = ref("");
+const deckSubtitle = ref("");
+const deckConfidential = ref(true);
+
+// 「＋ 新規作成」：モーダルを開く（タイトル既定値は WD タイトル）。
+function onCreateNew(wdInfo: WdInfo): void {
+  newDeckModal.value = { wdId: wdInfo.id, windowsWdPath: wdInfo.windowsWdPath };
+  deckTheme.value = "cool";
+  deckTitle.value = wdInfo.title;
+  deckSubtitle.value = "";
+  deckConfidential.value = true;
+  modalPhase.value = "choose";
+  modalLog.value = [];
+}
+
+function closeNewDeckModal(): void {
+  if (modalPhase.value === "running") return;
+  newDeckModal.value = null;
+}
+
+// 新規デッキ作成を実行（サーバーが new_deck.py → gen_thumbs を SSE で流す）。
+async function executeNewDeck(): Promise<void> {
+  const modal = newDeckModal.value;
+  if (!modal || !deckTitle.value.trim()) return;
+  const url = fillRoute(API_ROUTES.work.newDeck, modal.wdId, NEW_DECK_VERSION);
+  await runModalSse(url, {
+    title: deckTitle.value.trim(),
+    subtitle: deckSubtitle.value.trim() || undefined,
+    theme: deckTheme.value,
+    confidential: deckConfidential.value,
+    // 新規作成時に D: 側の素材フォルダ構成も WSL へミラーさせる。
+    windowsWdPath: modal.windowsWdPath,
+  });
+}
+
+function handleNewDeckDone(): void {
+  const modal = newDeckModal.value;
+  newDeckModal.value = null;
+  if (modal) openEditor(modal.wdId, NEW_DECK_VERSION);
   scanFiles().catch(() => {});
 }
 

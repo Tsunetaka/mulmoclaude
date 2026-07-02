@@ -1172,10 +1172,6 @@ const zhMessages = {
     defaultCancel: "取消",
   },
   slides: {
-    pickWd: "选择工作目录",
-    wdPlaceholder: "WD-ID（例如 GIT-00001）",
-    open: "打开",
-    available: "可用的 WD",
     backToPicker: "返回 WD 选择",
     noCacheFound: "未找到缩略图缓存，请在聊天中运行 edit-slide 以生成。",
     generatingThumbnails: "正在生成缩略图...",
@@ -1183,6 +1179,8 @@ const zhMessages = {
     nextPage: "下一页",
     editDone: "完成编辑",
     selectDoc: "选择文档",
+    canvasRefresh: "更新画布",
+    toggleChat: "Claude 聊天",
   },
   mulmoPoint: {
     title: "关于 MulmoPoint",

@@ -1198,10 +1198,6 @@ const esMessages = {
     defaultCancel: "Cancelar",
   },
   slides: {
-    pickWd: "Seleccionar directorio de trabajo",
-    wdPlaceholder: "WD-ID (p. ej. GIT-00001)",
-    open: "Abrir",
-    available: "WDs disponibles",
     backToPicker: "Volver a selección de WD",
     noCacheFound: "No se encontró caché de miniaturas. Ejecute edit-slide en el chat.",
     generatingThumbnails: "Generando miniaturas...",
@@ -1209,6 +1205,8 @@ const esMessages = {
     nextPage: "Página siguiente",
     editDone: "Finalizar edición",
     selectDoc: "Seleccionar documento",
+    canvasRefresh: "Actualizar lienzo",
+    toggleChat: "Chat de Claude",
   },
   mulmoPoint: {
     title: "Acerca de MulmoPoint",

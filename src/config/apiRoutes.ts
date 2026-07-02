@@ -340,6 +340,48 @@ const HOST_API_ROUTES = {
   work: {
     scan: "/api/work/scan",
     checkout: "/api/work/checkout",
+    /** Thumbnail-only generation for a WD already present on disk. SSE stream. */
+    thumbnails: "/api/work/thumbnails",
+    /** POST — リリース選択前プレビュー（N5）。body `{ wdId, windowsWdPath }`。
+     *  対象 WD の `ReleasedVersion/*.pptx` の表紙 1 枚を
+     *  `data/work/<wdId>/.releasedthumbs/<version>.png` に生成する（欠落 or
+     *  pptx mtime > thumb mtime の古いものだけ）。JSON で各バージョンの
+     *  workspace 相対サムネパスと生成有無を返す。 */
+    releasedThumbs: "/api/work/released-thumbs",
+    /** POST — ReleasedVersion 由来の新版を **Windows COM 分割**（`split_pages.py`）する。
+     *  `<wd>/ReleasedVersion/<sourceFilename>` を読み `<wd>/<version>/.pages/` に
+     *  ページ単位 pptx ＋ structure.json を生成。SSE ストリーム。
+     *  body `{ sourceFilename, sourceKind?, sourceFrom? }`。 */
+    split: "/api/work/:wd/:version/split",
+    /** POST — `<wd>/<version>/.pages/` を **Windows COM 結合**（`combine_pages.py`）して
+     *  `<wd>/ReleasedVersion/<outFilename>` に 1 つの pptx を生成（リリース）。SSE。
+     *  body `{ outFilename, dedupMasters? }`（dedupMasters 既定 true）。 */
+    combine: "/api/work/:wd/:version/combine",
+    /** POST — `<wd>/<version>/.pages/<id>.pptx` を 1 枚ずつ **Windows COM レンダリング**
+     *  （`gen_pagecanvas.py` ページ単位モード）して `<version>/.pagecanvas/<id>.png` を生成。
+     *  manifest（`.thumbcache/manifest.json`）の dirty を ID で参照し、`full:true` で全再生成、
+     *  省略時は dirty ページのみ。SSE。body `{ full? }`。 */
+    canvasRefresh: "/api/work/:wd/:version/canvas-refresh",
+    /** POST — 編集中由来の新版を作る（§4-4 編集中由来）。元編集中サブフォルダの
+     *  `.pages/`（ページ単位 pptx＋structure.json）を `<wd>/<version>/.pages/` に
+     *  コピーし、structure.json の `version` を新版へ書換・`source={kind:"editing",
+     *  from:<sourceVersion>}` を記録する（再分割不要＝COM 不要）。`.thumbcache`/
+     *  `.pagecanvas` は空で作成し、サムネは gen_thumbs、canvas は明示更新で後追い。
+     *  N1 DELETE と同じ fsp＋正規表現ガード手法。body `{ sourceVersion }`。 */
+    forkFrom: "/api/work/:wd/:version/fork-from",
+    /** POST — 新規デッキ作成（N3・UI モーダル発）。`new_deck.py`（WSL python-pptx・
+     *  COM 非依存）で `<wd>/<version>/.pages/` に表紙 1 枚＋structure.json を生成し、
+     *  続けて gen_thumbs でサムネまで生成する（canvas は明示「更新」ボタンで後追い）。
+     *  SSE ストリーム。body `{ title, subtitle?, theme, confidential? }`。
+     *  作成先に structure.json が既存なら 409（preflight・SSE flush 前に JSON で返す）。 */
+    newDeck: "/api/work/:wd/:version/new-deck",
+    /** DELETE — リリース後始末の「サブフォルダ限定削除」（N1）。対象
+     *  `data/work/<wd>/<version>/` のバージョンサブフォルダだけを WSL と
+     *  Windows（`.checkout-source` の `windows_path`/<version>）の両側で削除する。
+     *  WD ルートや `ReleasedVersion/` には触れず、全体 `--delete` は一切行わない。
+     *  編集中（structure.json に `checked_out:true` ページが残る）バージョンは
+     *  409 で拒否する。 */
+    version: "/api/work/:wd/:version",
   },
 
   wiki: {

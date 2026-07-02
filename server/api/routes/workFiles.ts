@@ -1,10 +1,12 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import path from "path";
 import { promises as fsp } from "fs";
 import { spawn } from "child_process";
 import { workspacePath } from "../../workspace/workspace.js";
 import { log } from "../../system/logger/index.js";
 import { API_ROUTES } from "../../../src/config/apiRoutes.js";
+import { ONE_HOUR_MS } from "../../utils/time.js";
+import { versionSegments } from "../../../src/utils/slides/slideDeck.js";
 
 const router = Router();
 
@@ -14,6 +16,41 @@ const PPTX_VERSION_PATTERN = /_v(\d+)\.pptx$/i;
 // eslint-disable-next-line sonarjs/slow-regex
 const WD_NAME_PATTERN = /^([A-Z]+-\d+)\s+(.+)$/;
 const WD_ROOT_PATTERN = /^[A-Z]+-\d{5}\s+/;
+
+// WD-ID（例 GIT-00003）／バージョン名（例 v001・枝番 v001-002）の厳格パターン。
+// DELETE のパスパラメータを正規表現で固定し、`.` / `..` / パス区切りを構造的に排除する。
+const WD_ID_PATTERN = /^[A-Z]+-\d+$/;
+// `\d+(-\d+)*` は各区切りが `-` リテラルで始まり曖昧な重なりが無く線形時間。
+// eslint-disable-next-line security/detect-unsafe-regex
+const VERSION_NAME_PATTERN = /^v\d+(?:-\d+)*$/;
+
+/** DELETE /api/work/:wd/:version の `:wd` が安全な WD-ID か。 */
+export function isValidWorkWdId(wdId: string): boolean {
+  return WD_ID_PATTERN.test(wdId);
+}
+
+/** DELETE /api/work/:wd/:version の `:version` が安全なバージョン名か。
+ *  `ReleasedVersion` や `.`/`..` などは構造的に弾く。 */
+export function isValidWorkVersion(version: string): boolean {
+  return VERSION_NAME_PATTERN.test(version);
+}
+
+/** COM ツールに渡す pptx ファイル名が安全か（純粋判定）。
+ *  パス区切り・`..`・先頭ドットを排し、`.pptx` 拡張子のみ許可する。 */
+export function isSafePptxFilename(name: string): boolean {
+  if (!name || name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  if (name.startsWith(".")) return false;
+  return /\.pptx$/i.test(name);
+}
+
+/** `target` が `parent` の直下の `name` という名前のディレクトリか（純粋判定）。
+ *  サブフォルダ限定削除の最終ガード：親ディレクトリと basename を照合して
+ *  WD ルートや祖先・別ディレクトリを絶対に消さないことを保証する。 */
+export function isContainedChild(target: string, parent: string, name: string): boolean {
+  const resolvedTarget = path.resolve(target);
+  const resolvedParent = path.resolve(parent);
+  return path.dirname(resolvedTarget) === resolvedParent && path.basename(resolvedTarget) === name && resolvedTarget !== resolvedParent;
+}
 
 // Windows パス → WSL パス変換
 function windowsToWsl(winPath: string): string {
@@ -65,14 +102,6 @@ function parsePptxVersion(filename: string): { version: string; versionNum: numb
   return null;
 }
 
-interface WorkDirState {
-  checkedOutVersion: string | null;
-  dirty: boolean;
-  stale: boolean;
-  windowsMtime: number | null;
-  workMtime: number | null;
-}
-
 // manifest.json から dirty フラグを確認
 async function checkDirtyFlag(manifestPath: string): Promise<boolean> {
   try {
@@ -84,67 +113,20 @@ async function checkDirtyFlag(manifestPath: string): Promise<boolean> {
   }
 }
 
-// Windows 側の mtime と work/ 側の mtime を比較して stale を判定
-async function checkStale(workDir: string, versionNum: number): Promise<{ stale: boolean; windowsMtime: number | null; workMtime: number | null }> {
-  const checkoutSourcePath = path.join(workDir, ".checkout-source");
-  try {
-    const src = await fsp.readFile(checkoutSourcePath, "utf-8");
-    const winPathLine = src.split("\n").find((line) => line.startsWith("windows_path="));
-    if (!winPathLine) return { stale: false, windowsMtime: null, workMtime: null };
-
-    const winPath = winPathLine.slice("windows_path=".length).trim();
-    const wslPath = windowsToWsl(winPath);
-    const vStr = String(versionNum).padStart(3, "0");
-    const versionFilePattern = new RegExp(`_v${vStr}\\.pptx$`, "i");
-
-    const winPptxFiles = await listFiles(wslPath, versionFilePattern);
-    const workPptxFiles = await listFiles(workDir, versionFilePattern);
-    if (winPptxFiles.length === 0 || workPptxFiles.length === 0) return { stale: false, windowsMtime: null, workMtime: null };
-
-    const windowsMtime = await getMtime(path.join(wslPath, winPptxFiles[0]));
-    const workMtime = await getMtime(path.join(workDir, workPptxFiles[0]));
-    const stale = windowsMtime !== null && workMtime !== null && windowsMtime > workMtime + 5000;
-    return { stale, windowsMtime, workMtime };
-  } catch {
-    return { stale: false, windowsMtime: null, workMtime: null };
-  }
-}
-
-// WD の work/ 状態を調べる
-async function scanWorkDir(wdId: string): Promise<WorkDirState> {
-  const workDir = path.join(workspacePath, "data/work", wdId);
-  try {
-    await fsp.access(workDir);
-  } catch {
-    return { checkedOutVersion: null, dirty: false, stale: false, windowsMtime: null, workMtime: null };
-  }
-
-  const pptxFiles = await listFiles(workDir, PPTX_PATTERN);
-  const versionNums = pptxFiles
-    .map((filename) => filename.match(PPTX_VERSION_PATTERN))
-    .filter((mat): mat is RegExpMatchArray => mat !== null)
-    .map((mat) => mat[1])
-    .sort()
-    .reverse();
-
-  if (versionNums.length === 0) {
-    return { checkedOutVersion: null, dirty: false, stale: false, windowsMtime: null, workMtime: null };
-  }
-
-  const versionNum = parseInt(versionNums[0], 10);
-  const checkedOutVersion = `v${versionNums[0].padStart(3, "0")}`;
-  const manifestPath = path.join(workDir, ".thumbcache", checkedOutVersion, "manifest.json");
-  const dirty = await checkDirtyFlag(manifestPath);
-  const { stale, windowsMtime, workMtime } = await checkStale(workDir, versionNum);
-
-  return { checkedOutVersion, dirty, stale, windowsMtime, workMtime };
-}
-
+// 新 3 階層モデルのバージョン。`kind` で released（実体 pptx・split の元）と
+// editing（編集中サブフォルダ）を区別する。採番の兄弟集合はこの version 群。
 interface VersionInfo {
   version: string;
   versionNum: number;
+  /** released: ReleasedVersion の実体 pptx。editing: WD 直下の編集中サブフォルダ。 */
+  kind: "released" | "editing";
+  /** released のみ：split の元 pptx ファイル名。editing は空文字。 */
   filename: string;
   date: string;
+  /** editing のみ：派生元（structure.json の source）。 */
+  source?: { kind: string; from: string };
+  /** editing のみ：checked_out ページを持つか。 */
+  locked?: boolean;
   statuses: string[];
 }
 
@@ -162,67 +144,83 @@ interface CategoryInfo {
   wds: WdInfo[];
 }
 
-// VersionInfo を取得または新規作成してマップに upsert
-function upsertVersion(map: Map<string, VersionInfo>, fname: string, parsed: NonNullable<ReturnType<typeof parsePptxVersion>>): VersionInfo {
-  const existing = map.get(parsed.version);
-  if (existing) return existing;
-  const ver: VersionInfo = { version: parsed.version, versionNum: parsed.versionNum, filename: fname, date: parsed.date, statuses: [] };
-  map.set(parsed.version, ver);
-  return ver;
-}
-
-// work/ 状態をバージョンマップに反映
-function applyWorkState(map: Map<string, VersionInfo>, workState: WorkDirState): void {
-  if (!workState.checkedOutVersion) return;
-  const ver = map.get(workState.checkedOutVersion);
-  if (!ver) return;
-  if (workState.stale) ver.statuses.push("stale");
-  else if (workState.dirty) ver.statuses.push("dirty");
-  else ver.statuses.push("checked-out");
-}
-
-// バージョンマップを構築（draft + released + work/ 状態）
-async function buildVersionMap(wdWslPath: string, workState: WorkDirState): Promise<Map<string, VersionInfo>> {
-  const draftFiles = await listFiles(wdWslPath, PPTX_PATTERN);
-  const releasedFiles = await listFiles(path.join(wdWslPath, "ReleasedVersion"), PPTX_PATTERN);
-  const versionMap = new Map<string, VersionInfo>();
-
-  for (const fname of draftFiles) {
+// ReleasedVersion/*.pptx を released バージョンとして列挙する。
+async function scanReleasedVersions(wdWslPath: string): Promise<VersionInfo[]> {
+  const files = await listFiles(path.join(wdWslPath, "ReleasedVersion"), PPTX_PATTERN);
+  const out: VersionInfo[] = [];
+  for (const fname of files) {
     const parsed = parsePptxVersion(fname);
     if (!parsed) continue;
-    upsertVersion(versionMap, fname, parsed).statuses.push("draft");
+    out.push({ version: parsed.version, versionNum: parsed.versionNum, kind: "released", filename: fname, date: parsed.date, statuses: ["released"] });
   }
-
-  for (const fname of releasedFiles) {
-    const parsed = parsePptxVersion(fname);
-    if (!parsed) continue;
-    const ver = upsertVersion(versionMap, fname, parsed);
-    ver.statuses = ver.statuses.filter((status) => status !== "draft");
-    if (!ver.statuses.includes("released")) ver.statuses.push("released");
-  }
-
-  applyWorkState(versionMap, workState);
-  return versionMap;
+  return out;
 }
 
-// WD フォルダを処理して WdInfo を返す
+interface StructureLite {
+  source?: { kind: string; from: string };
+  pages?: Record<string, { checked_out?: boolean }>;
+}
+
+// 編集中サブフォルダ 1 つを VersionInfo に変換する。structure.json が読めなければ null。
+async function readEditingVersion(workDir: string, name: string): Promise<VersionInfo | null> {
+  let struct: StructureLite;
+  try {
+    struct = JSON.parse(await fsp.readFile(path.join(workDir, name, ".pages", "structure.json"), "utf-8")) as StructureLite;
+  } catch {
+    return null;
+  }
+  const locked = struct.pages ? Object.values(struct.pages).some((page) => page.checked_out === true) : false;
+  const dirty = await checkDirtyFlag(path.join(workDir, name, ".thumbcache", "manifest.json"));
+  const statuses = ["editing"];
+  if (locked) statuses.push("checked-out");
+  if (dirty) statuses.push("dirty");
+  return { version: name, versionNum: versionSegments(name)[0] ?? 0, kind: "editing", filename: "", date: "", source: struct.source, locked, statuses };
+}
+
+// WSL 側 data/work/<wdId>/ のバージョンサブフォルダを editing バージョンとして列挙する。
+async function scanEditingVersions(wdId: string): Promise<VersionInfo[]> {
+  const workDir = path.join(workspacePath, "data/work", wdId);
+  const subdirs = await listDirs(workDir);
+  const out: VersionInfo[] = [];
+  for (const name of subdirs) {
+    if (!VERSION_NAME_PATTERN.test(name)) continue;
+    const info = await readEditingVersion(workDir, name);
+    if (info) out.push(info);
+  }
+  return out;
+}
+
+// バージョン名の昇順比較（v001 < v002 < v002-001 < v003）。
+function compareVersionAsc(verA: VersionInfo, verB: VersionInfo): number {
+  const segsA = versionSegments(verA.version);
+  const segsB = versionSegments(verB.version);
+  const len = Math.max(segsA.length, segsB.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (segsA[i] ?? -1) - (segsB[i] ?? -1);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// WD フォルダを処理して WdInfo を返す（released=Windows/WSL の ReleasedVersion、
+// editing=WSL の編集中サブフォルダ）。両者を採番の兄弟集合として 1 リストに束ねる。
 async function processWdFolder(wdName: string, catWslPath: string, catWinPath: string): Promise<WdInfo | null> {
   const match = wdName.match(WD_NAME_PATTERN);
   if (!match) return null;
 
   const [, wdId, title] = match;
-  const wdWslPath = path.join(catWslPath, wdName);
   const wdWinPath = `${catWinPath}\\${wdName}`;
-  const workState = await scanWorkDir(wdId);
-  const versionMap = await buildVersionMap(wdWslPath, workState);
-  const versions = [...versionMap.values()].sort((verA, verB) => verA.versionNum - verB.versionNum);
+  const released = await scanReleasedVersions(path.join(catWslPath, wdName));
+  const editing = await scanEditingVersions(wdId);
+  const versions = [...released, ...editing].sort(compareVersionAsc);
+  const lockedEditing = editing.find((ver) => ver.locked);
 
   return {
     id: wdId,
     title,
     windowsWdPath: wdWinPath,
-    hasCheckedOut: workState.checkedOutVersion !== null,
-    checkedOutVersion: workState.checkedOutVersion,
+    hasCheckedOut: Boolean(lockedEditing),
+    checkedOutVersion: lockedEditing?.version ?? null,
     versions,
   };
 }
@@ -320,10 +318,21 @@ changed = [pg for pg, hv in hashes.items() if existing_pages.get(pg, {}).get('ha
 print(f'変更ページ数: {len(changed)}/{total}', flush=True)
 
 if changed:
+    soffice_bin = shutil.which('soffice') or shutil.which('libreoffice')
+    pdftoppm_bin = shutil.which('pdftoppm')
+    missing = []
+    if not soffice_bin:
+        missing.append('LibreOffice (soffice)')
+    if not pdftoppm_bin:
+        missing.append('poppler-utils (pdftoppm)')
+    if missing:
+        print('ERROR: サムネイル生成に必要なコマンドが見つかりません: ' + ', '.join(missing), flush=True)
+        print('  サーバー稼働ホスト(WSL)で次を実行してください: sudo apt install -y libreoffice poppler-utils', flush=True)
+        sys.exit(1)
     tmpdir = Path(tempfile.mkdtemp())
     try:
         result = subprocess.run(
-            ['soffice', '--headless', '--convert-to', 'pdf', '--outdir', str(tmpdir), pptx_path],
+            [soffice_bin, '--headless', '--convert-to', 'pdf', '--outdir', str(tmpdir), pptx_path],
             capture_output=True, text=True, timeout=300
         )
         if result.returncode != 0:
@@ -334,7 +343,7 @@ if changed:
             print('ERROR: PDF が生成されませんでした', flush=True)
             sys.exit(1)
         result = subprocess.run(
-            ['pdftoppm', '-png', '-r', '96', str(pdf_files[0]), str(tmpdir / 'slide')],
+            [pdftoppm_bin, '-png', '-r', '96', str(pdf_files[0]), str(tmpdir / 'slide')],
             capture_output=True, text=True, timeout=300
         )
         if result.returncode != 0:
@@ -541,6 +550,973 @@ router.post(API_ROUTES.work.checkout, async (req, res) => {
     log.error("workFiles.checkout", "checkout failed", { err });
     send(`ERROR: ${msg}`);
     res.end();
+  }
+});
+
+// POST /api/work/thumbnails  (SSE ストリーム)
+// wdId だけ受け取り、WD がすでに WSL 上にある前提でサムネイルのみ生成する。
+// checkout なしで slide editor に入ったとき（既存 WD を直接開いた場合など）に
+// フロントエンドから自動呼び出しされる。
+router.post(API_ROUTES.work.thumbnails, async (req, res) => {
+  const { wdId } = req.body as { wdId?: string };
+
+  if (!wdId) {
+    res.status(400).json({ error: "wdId required" });
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  const send = (line: string): void => {
+    res.write(`data: ${line}\n\n`);
+  };
+
+  try {
+    const workDir = path.join(workspacePath, "data/work", wdId);
+    await runThumbnails(workDir, send);
+    send(`DONE:${wdId}`);
+    res.end();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error("workFiles.thumbnails", "thumbnail generation failed", { err });
+    send(`ERROR: ${msg}`);
+    res.end();
+  }
+});
+
+// ── リリース選択前プレビュー（N5）──────────────────────────────────────────
+// ReleasedVersion/*.pptx の表紙 1 枚を data/work/<wd>/.releasedthumbs/<version>.png
+// に生成する。実行時に /tmp に書き出す Python スクリプト（cover のみ・manifest なし）。
+const RELEASED_THUMB_SCRIPT = `
+import sys, subprocess, tempfile, shutil
+from pathlib import Path
+
+pptx_path = sys.argv[1]
+out_png = Path(sys.argv[2])
+
+soffice_bin = shutil.which('soffice') or shutil.which('libreoffice')
+pdftoppm_bin = shutil.which('pdftoppm')
+missing = []
+if not soffice_bin:
+    missing.append('LibreOffice (soffice)')
+if not pdftoppm_bin:
+    missing.append('poppler-utils (pdftoppm)')
+if missing:
+    print('ERROR: 表紙サムネ生成に必要なコマンドが見つかりません: ' + ', '.join(missing), flush=True)
+    print('  サーバー稼働ホスト(WSL)で次を実行してください: sudo apt install -y libreoffice poppler-utils', flush=True)
+    sys.exit(1)
+
+tmpdir = Path(tempfile.mkdtemp())
+try:
+    result = subprocess.run(
+        [soffice_bin, '--headless', '--convert-to', 'pdf', '--outdir', str(tmpdir), pptx_path],
+        capture_output=True, text=True, timeout=300
+    )
+    if result.returncode != 0:
+        print('ERROR: LibreOffice 変換失敗:', result.stderr, flush=True)
+        sys.exit(1)
+    pdf_files = list(tmpdir.glob('*.pdf'))
+    if not pdf_files:
+        print('ERROR: PDF が生成されませんでした', flush=True)
+        sys.exit(1)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    prefix = tmpdir / 'cover'
+    result = subprocess.run(
+        [pdftoppm_bin, '-png', '-f', '1', '-l', '1', '-r', '96', '-singlefile', str(pdf_files[0]), str(prefix)],
+        capture_output=True, text=True, timeout=300
+    )
+    if result.returncode != 0:
+        print('ERROR: pdftoppm 変換失敗:', result.stderr, flush=True)
+        sys.exit(1)
+    cover = Path(str(prefix) + '.png')
+    if not cover.exists():
+        candidates = sorted(tmpdir.glob('cover*.png'))
+        if not candidates:
+            print('ERROR: 表紙 PNG が生成されませんでした', flush=True)
+            sys.exit(1)
+        cover = candidates[0]
+    shutil.copyfile(cover, out_png)
+    print('OK ' + out_png.name, flush=True)
+finally:
+    shutil.rmtree(tmpdir, ignore_errors=True)
+`;
+
+/** サムネを作り直すべきか（純粋判定）。サムネ未生成（thumbMtime=null）なら true、
+ *  pptx が消えている（pptxMtime=null）なら既存サムネ温存で false、
+ *  それ以外は pptx の方が新しい（mtime 比較）なら true。 */
+export function thumbNeedsRebuild(pptxMtime: number | null, thumbMtime: number | null): boolean {
+  if (thumbMtime === null) return true;
+  if (pptxMtime === null) return false;
+  return pptxMtime > thumbMtime;
+}
+
+// 1 つの pptx の表紙サムネを生成（既存 THUMB_SCRIPT と同じ /tmp 書き出し方式）。
+async function runCoverThumb(pptxFull: string, thumbFull: string): Promise<void> {
+  const scriptPath = `/tmp/mulmo_cover_${Date.now()}_${path.basename(thumbFull)}.py`;
+  await fsp.writeFile(scriptPath, RELEASED_THUMB_SCRIPT);
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn("python3", [scriptPath, pptxFull, thumbFull], { env: { ...process.env } });
+    let stderr = "";
+    proc.stdout?.on("data", (data: Buffer) => {
+      if (data.toString().includes("ERROR:")) stderr += data.toString();
+    });
+    proc.stderr?.on("data", (data: Buffer) => {
+      stderr += data.toString();
+    });
+    proc.on("close", (code) => {
+      fsp.unlink(scriptPath).catch(() => {});
+      if (code === 0) resolve();
+      else reject(new Error(`cover thumb script exited with code ${String(code)}: ${stderr.trim()}`));
+    });
+    proc.on("error", reject);
+  });
+}
+
+interface ReleasedThumb {
+  version: string;
+  path: string;
+  generated: boolean;
+  error?: string;
+}
+
+// ReleasedVersion に対応する pptx が無くなった孤児サムネ（<version>.png）を削除し、
+// .releasedthumbs のバージョン集合を ReleasedVersion 側へ常に一致させる。
+// 人間が ReleasedVersion のファイルを差し替え/削除しても孤児サムネが残らないようにする。
+// 返り値：削除したバージョン名の配列。
+async function pruneOrphanReleasedThumbs(thumbsDir: string, liveVersions: Set<string>): Promise<string[]> {
+  const pngs = await listFiles(thumbsDir, /\.png$/i);
+  const pruned: string[] = [];
+  for (const png of pngs) {
+    const version = path.basename(png, path.extname(png));
+    if (!VERSION_NAME_PATTERN.test(version) || liveVersions.has(version)) continue;
+    try {
+      await fsp.unlink(path.join(thumbsDir, png));
+      pruned.push(version);
+    } catch {
+      // 削除失敗は無視（次回再試行）
+    }
+  }
+  return pruned;
+}
+
+// 古い/欠落のサムネだけ生成して結果を返す。1 件失敗しても他は継続する。
+// 生成前に孤児サムネ（ReleasedVersion に実体が無いバージョン）を削除して同期する。
+async function generateReleasedThumbs(wdId: string, releasedDirWsl: string): Promise<ReleasedThumb[]> {
+  const thumbsDir = path.join(workspacePath, "data/work", wdId, ".releasedthumbs");
+  const releasedFiles = await listFiles(releasedDirWsl, PPTX_PATTERN);
+  const byVersion = new Map<string, string>();
+  for (const fname of releasedFiles) {
+    const parsed = parsePptxVersion(fname);
+    if (parsed) byVersion.set(parsed.version, fname);
+  }
+
+  const pruned = await pruneOrphanReleasedThumbs(thumbsDir, new Set(byVersion.keys()));
+  if (pruned.length > 0) log.info("workFiles.releasedThumbs", "pruned orphan released thumbs", { wdId, pruned });
+
+  const results: ReleasedThumb[] = [];
+  for (const [version, fname] of byVersion) {
+    const pptxFull = path.join(releasedDirWsl, fname);
+    const thumbFull = path.join(thumbsDir, `${version}.png`);
+    const relPath = path.join("data/work", wdId, ".releasedthumbs", `${version}.png`);
+    const stale = thumbNeedsRebuild(await getMtime(pptxFull), await getMtime(thumbFull));
+    if (!stale) {
+      results.push({ version, path: relPath, generated: false });
+      continue;
+    }
+    try {
+      await runCoverThumb(pptxFull, thumbFull);
+      results.push({ version, path: relPath, generated: true });
+    } catch (err) {
+      results.push({ version, path: relPath, generated: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return results;
+}
+
+// ── ReleasedVersion ミラー同期（Windows D: を正・WSL を一致）────────────────
+// D: と WSL の ReleasedVersion は常に一致しているべき（D: が正）。WSL 側は
+// resolveSplitSource（split）や 小町谷さんの Explorer 閲覧が参照するため、
+// D: を正としてコピー（D: が新しい/欠落）＋ 削除（WSL 余剰）で完全一致させる。
+export interface MirrorFile {
+  name: string;
+  mtimeMs: number;
+}
+
+/** D: を正として WSL ReleasedVersion を一致させる差分（純粋・テスト対象）。
+ *  toCopy: D: に有って WSL に無い or D: が新しい pptx（D:→WSL コピー対象）。
+ *  toDelete: WSL に有って D: に無い pptx（削除対象＝完全一致方向）。 */
+export function diffReleasedMirror(windows: MirrorFile[], wsl: MirrorFile[]): { toCopy: string[]; toDelete: string[] } {
+  const wslByName = new Map(wsl.map((file) => [file.name, file.mtimeMs]));
+  const winNames = new Set(windows.map((file) => file.name));
+  const toCopy = windows
+    .filter((winFile) => {
+      const wslMtime = wslByName.get(winFile.name);
+      return wslMtime === undefined || winFile.mtimeMs > wslMtime;
+    })
+    .map((winFile) => winFile.name);
+  const toDelete = wsl.filter((wslFile) => !winNames.has(wslFile.name)).map((wslFile) => wslFile.name);
+  return { toCopy, toDelete };
+}
+
+// ディレクトリ内 pptx の {name, mtimeMs} 一覧（ミラー差分用）。
+async function statPptxList(dir: string): Promise<MirrorFile[]> {
+  const names = await listFiles(dir, PPTX_PATTERN);
+  const out: MirrorFile[] = [];
+  for (const name of names) {
+    const mtimeMs = await getMtime(path.join(dir, name));
+    if (mtimeMs !== null) out.push({ name, mtimeMs });
+  }
+  return out;
+}
+
+// .checkout-source から windows_path（/mnt/d 形式）を読む。無ければ null。
+async function readCheckoutWindowsPath(wdId: string): Promise<string | null> {
+  try {
+    const raw = await fsp.readFile(path.join(workspacePath, "data/work", wdId, ".checkout-source"), "utf-8");
+    const line = raw.split(/\r?\n/).find((entry) => entry.startsWith("windows_path="));
+    const value = line ? line.slice("windows_path=".length).trim() : "";
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+// D:→WSL コピー（最終ガード: 直下・安全な pptx 名のみ）。
+async function mirrorCopy(srcDir: string, destDir: string, names: string[]): Promise<string[]> {
+  const done: string[] = [];
+  for (const name of names) {
+    const dest = path.join(destDir, name);
+    if (!isSafePptxFilename(name) || !isContainedChild(dest, destDir, name)) continue;
+    try {
+      await fsp.copyFile(path.join(srcDir, name), dest);
+      done.push(name);
+    } catch {
+      // 個別失敗は無視（次回再試行）
+    }
+  }
+  return done;
+}
+
+// WSL 側 extras 削除（最終ガード: 直下・安全な pptx 名のみ）。
+async function mirrorDelete(dir: string, names: string[]): Promise<string[]> {
+  const done: string[] = [];
+  for (const name of names) {
+    const target = path.join(dir, name);
+    if (!isSafePptxFilename(name) || !isContainedChild(target, dir, name)) continue;
+    try {
+      await fsp.unlink(target);
+      done.push(name);
+    } catch {
+      // 個別失敗は無視（次回再試行）
+    }
+  }
+  return done;
+}
+
+// Windows D: を正として WSL data/work/<wd>/ReleasedVersion を D: の ReleasedVersion に一致させる。
+// D: に有って WSL に無い/古い pptx をコピー、WSL に有って D: に無い pptx を削除（完全一致）。
+// D: 側 ReleasedVersion が存在しない or pptx 0 件のときは WSL を温存し何もしない（誤削除防止の安全弁）。
+// ⚠ combine（リリース）配線時の注意: 新版は D: へ push（checkin）してからミラーすること。
+//    さもないと「WSL に有って D: に無い」判定で作りたての新版が削除され得る。
+async function syncReleasedFromWindows(wdId: string, windowsWdPath: string | null): Promise<{ copied: string[]; deleted: string[] }> {
+  const empty = { copied: [], deleted: [] };
+  if (!isValidWorkWdId(wdId) || !windowsWdPath) return empty;
+  const winReleasedDir = path.join(windowsToWsl(windowsWdPath), "ReleasedVersion");
+  if (!(await pathExists(winReleasedDir))) return empty;
+  const winFiles = await statPptxList(winReleasedDir);
+  if (winFiles.length === 0) return empty; // 安全弁: D: が空なら WSL を温存
+
+  const wslReleasedDir = path.join(workspacePath, "data/work", wdId, "ReleasedVersion");
+  const wslFiles = await statPptxList(wslReleasedDir);
+  const { toCopy, toDelete } = diffReleasedMirror(winFiles, wslFiles);
+  await fsp.mkdir(wslReleasedDir, { recursive: true });
+
+  const copied = await mirrorCopy(winReleasedDir, wslReleasedDir, toCopy);
+  const deleted = await mirrorDelete(wslReleasedDir, toDelete);
+  if (copied.length || deleted.length) {
+    log.info("workFiles.syncReleased", "mirrored ReleasedVersion from Windows (D: master)", { wdId, copied, deleted });
+  }
+  return { copied, deleted };
+}
+
+// ── 素材フォルダ D:→WSL ミラー（スライド生成用の素材・基礎情報）────────────
+// FrameFiles/ScreenShots/RelatedMaterials（ディレクトリ）・ProjectInformation.md/
+// DocumentLayouts.md（単体）・AudioFiles の逐語録 *.md（wav 除外）を D: を正に
+// WSL へミラーする。サンドボックスの Claude は /mnt/d を読めないため、生成の素材を
+// WSL 側へ取り込む。対象は下記 allowlist のみ＝WD 直下の editing サブフォルダ・
+// ReleasedVersion には一切触れない。
+// dir: 再帰フルミラー（D: に無いファイル/サブフォルダは削除）。
+// filter 付き dir: そのディレクトリ直下で filter に合う拡張子のみ管理（他は非干渉）。
+// file: 単体ミラー。各項目とも D: に無ければ温存（誤削除防止の安全弁）。
+interface MaterialItem {
+  name: string;
+  kind: "dir" | "file";
+  filter?: RegExp;
+}
+const SOURCE_MATERIALS: MaterialItem[] = [
+  { name: "FrameFiles", kind: "dir" },
+  { name: "ScreenShots", kind: "dir" },
+  { name: "RelatedMaterials", kind: "dir" },
+  { name: "AudioFiles", kind: "dir", filter: /\.md$/i }, // 逐語録 md のみ（wav は対象外）
+  { name: "ProjectInformation.md", kind: "file" },
+  { name: "DocumentLayouts.md", kind: "file" },
+];
+
+// withFileTypes 版 readdir（失敗時は空配列）。
+async function readdirTypes(dir: string): Promise<import("fs").Dirent[]> {
+  try {
+    return await fsp.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+// 単体ファイルのミラー（D: が新しい/欠落ならコピー）。D: に無ければ no-op（WSL 温存）。
+async function mirrorSingleFile(srcFile: string, destFile: string): Promise<boolean> {
+  const srcMtime = await getMtime(srcFile);
+  if (srcMtime === null) return false; // D: に無い → 温存
+  const destMtime = await getMtime(destFile);
+  if (destMtime !== null && srcMtime <= destMtime) return false; // WSL が最新 → skip
+  await fsp.mkdir(path.dirname(destFile), { recursive: true });
+  await fsp.copyFile(srcFile, destFile);
+  return true;
+}
+
+// filter に合う直下ファイルのみをミラー（他のファイル・サブフォルダは非干渉）。
+async function mirrorFlatFiltered(srcDir: string, destDir: string, filter: RegExp): Promise<{ copied: number; deleted: number }> {
+  const srcNames = await listFiles(srcDir, filter);
+  await fsp.mkdir(destDir, { recursive: true });
+  let copied = 0;
+  for (const name of srcNames) {
+    if (await mirrorSingleFile(path.join(srcDir, name), path.join(destDir, name))) copied++;
+  }
+  const srcSet = new Set(srcNames);
+  let deleted = 0;
+  for (const name of await listFiles(destDir, filter)) {
+    if (srcSet.has(name)) continue;
+    try {
+      await fsp.unlink(path.join(destDir, name));
+      deleted++;
+    } catch {
+      // 個別失敗は無視
+    }
+  }
+  return { copied, deleted };
+}
+
+// ディレクトリの再帰フルミラー（D: を正・D: に無い WSL 側は削除）。
+async function mirrorTreeFull(srcDir: string, destDir: string): Promise<{ copied: number; deleted: number }> {
+  await fsp.mkdir(destDir, { recursive: true });
+  const srcEntries = await readdirTypes(srcDir);
+  const srcNames = new Set(srcEntries.map((ent) => ent.name));
+  let copied = 0;
+  let deleted = 0;
+  for (const ent of srcEntries) {
+    const src = path.join(srcDir, ent.name);
+    const dest = path.join(destDir, ent.name);
+    if (ent.isDirectory()) {
+      const sub = await mirrorTreeFull(src, dest);
+      copied += sub.copied;
+      deleted += sub.deleted;
+    } else if (ent.isFile() && (await mirrorSingleFile(src, dest))) {
+      copied++;
+    }
+  }
+  for (const ent of await readdirTypes(destDir)) {
+    if (srcNames.has(ent.name)) continue;
+    try {
+      await fsp.rm(path.join(destDir, ent.name), { recursive: true, force: true });
+      deleted++;
+    } catch {
+      // 個別失敗は無視
+    }
+  }
+  return { copied, deleted };
+}
+
+// 1 素材項目をミラー（kind/filter に応じて分岐）。
+async function mirrorMaterialItem(item: MaterialItem, src: string, dest: string): Promise<{ copied: number; deleted: number }> {
+  if (item.kind === "file") {
+    const done = await mirrorSingleFile(src, dest);
+    return { copied: done ? 1 : 0, deleted: 0 };
+  }
+  if (!(await pathExists(src))) return { copied: 0, deleted: 0 }; // D: に無い dir は温存
+  if (item.filter) return mirrorFlatFiltered(src, dest, item.filter);
+  return mirrorTreeFull(src, dest);
+}
+
+// D: を正として WD 直下の素材（SOURCE_MATERIALS）を WSL にミラーする。
+// D: 側 WD ルートが存在しない場合は no-op（誤削除防止）。
+async function syncSourceMaterialsFromWindows(wdId: string, windowsWdPath: string | null): Promise<{ copied: number; deleted: number }> {
+  const total = { copied: 0, deleted: 0 };
+  if (!isValidWorkWdId(wdId) || !windowsWdPath) return total;
+  const winWdDir = windowsToWsl(windowsWdPath);
+  if (!(await pathExists(winWdDir))) return total;
+  const wslWdDir = path.join(workspacePath, "data/work", wdId);
+  for (const item of SOURCE_MATERIALS) {
+    const res = await mirrorMaterialItem(item, path.join(winWdDir, item.name), path.join(wslWdDir, item.name));
+    total.copied += res.copied;
+    total.deleted += res.deleted;
+  }
+  if (total.copied || total.deleted) {
+    log.info("workFiles.syncMaterials", "mirrored source materials from Windows (D: master)", { wdId, ...total });
+  }
+  return total;
+}
+
+// POST /api/work/released-thumbs — リリース選択前プレビュー（N5）
+router.post(API_ROUTES.work.releasedThumbs, async (req, res) => {
+  const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
+
+  if (!wdId || !isValidWorkWdId(wdId) || !windowsWdPath) {
+    res.status(400).json({ error: "wdId (valid WD-ID) and windowsWdPath required" });
+    return;
+  }
+
+  try {
+    // WD 展開時: D: を正として WSL の ReleasedVersion を先に同期（孤児サムネ/版ズレ解消）。
+    await syncReleasedFromWindows(wdId, windowsWdPath);
+    // 併せて素材（FrameFiles/ScreenShots/RelatedMaterials/AudioFiles md/*.md 等）を D: を正にミラー。
+    await syncSourceMaterialsFromWindows(wdId, windowsWdPath);
+    const releasedDirWsl = path.join(windowsToWsl(windowsWdPath), "ReleasedVersion");
+    const thumbs = await generateReleasedThumbs(wdId, releasedDirWsl);
+    res.json({ thumbs });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error("workFiles.releasedThumbs", "released thumb generation failed", { err });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ── Windows COM 分割/結合の配線（split / combine）──────────────────────────
+// data/work/scripts/sw-com.sh を WSL ホストが spawn し、SSE で進捗を流す。
+// sw-com.sh が python.exe 検出・wslpath 変換・COM ツール実行・終了コード変換を担う。
+
+// sw-com.sh の終了コードを人間向けメッセージにする（split/combine 共通）。
+function comExitMessage(code: number | null): string {
+  switch (code) {
+    case 0:
+      return "✅ 完了";
+    case 2:
+      return "ERROR: pywin32 が使える Windows Python が見つかりません（pip install pywin32）";
+    case 3:
+      return "ERROR: PowerPoint が起動中、または入力が不正です。PowerPoint を全て閉じて再実行してください";
+    default:
+      return `ERROR: COM ツールが失敗しました（exit ${String(code)}）`;
+  }
+}
+
+// gen_thumbs.py（WSL LibreOffice・COM 非依存）を spawn してページサムネを生成する。
+// 対象バージョンの `.pages`（structure.json 同梱）→ `.thumbcache/<id>_md.png`。
+// 失敗しても呼び出し側フローは止めない（サムネは後追い再生成できる）。
+async function runGenThumbs(wdId: string, version: string, send: (line: string) => void): Promise<void> {
+  const versionDir = path.join(workspacePath, "data/work", wdId, version);
+  const pagesDir = path.join(versionDir, ".pages");
+  const thumbDir = path.join(versionDir, ".thumbcache");
+  await fsp.mkdir(thumbDir, { recursive: true });
+  const scriptPath = path.join(workspacePath, "data/work/tools/gen_thumbs.py");
+  await new Promise<void>((resolve) => {
+    const proc = spawn("python3", [scriptPath, "--pages-dir", pagesDir, "--thumb-dir", thumbDir, "--full"], {
+      env: { ...process.env },
+    });
+    pipeToSse(proc, send, "🖼 ");
+    proc.on("close", () => resolve());
+    proc.on("error", (err) => {
+      send(`⚠ gen_thumbs: ${err.message}`);
+      resolve();
+    });
+  });
+}
+
+// sw-com.sh を spawn して SSE に流す。成功(0)なら（onSuccess があれば実行してから）
+// DONE、それ以外は ERROR を送る。onSuccess は成功時の後処理（例: gen_thumbs）。
+async function runComScript(args: string[], wdId: string, send: (line: string) => void, onSuccess?: () => Promise<void>): Promise<void> {
+  const scriptPath = path.join(workspacePath, "data/work/scripts/sw-com.sh");
+  await new Promise<void>((resolve) => {
+    const proc = spawn("bash", [scriptPath, ...args], {
+      cwd: path.join(workspacePath, "data/work"),
+      env: { ...process.env },
+    });
+    pipeToSse(proc, send);
+    proc.on("close", (code) => {
+      send(comExitMessage(code));
+      const finish = async (): Promise<void> => {
+        if (code === 0 && onSuccess) await onSuccess();
+        send(code === 0 ? `DONE:${wdId}` : `ERROR: exit ${String(code)}`);
+        resolve();
+      };
+      finish().catch((err) => {
+        send(`⚠ ${err instanceof Error ? err.message : String(err)}`);
+        send(`DONE:${wdId}`);
+        resolve();
+      });
+    });
+    proc.on("error", (err) => {
+      send(`ERROR: ${err.message}`);
+      resolve();
+    });
+  });
+}
+
+// COM 系エンドポイント共通の前処理（パラメータ検証 ＋ SSE ヘッダ）。
+// 不正なら 400 を返して null、OK なら send 関数を返す。
+function beginComStream(req: Request, res: Response): { wd: string; version: string; send: (line: string) => void } | null {
+  const { wd, version } = req.params as { wd: string; version: string };
+  if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return null;
+  }
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+  return { wd, version, send: (line: string) => res.write(`data: ${line}\n\n`) };
+}
+
+// split の実ソースファイル名を解決する。要求されたファイルが ReleasedVersion に
+// 実在すればそれを使う。実在しない場合でも ReleasedVersion に .pptx が
+// ちょうど 1 つならそれを採用する（stale 名の自己回復）。
+// 注: ReleasedVersion は D:→WSL ミラー（D: が正）で複数版を持ち得る。split 前に
+// syncReleasedFromWindows で D: と一致させるため、通常は要求名が実在して分岐 1 で解決する。
+// 複数版あって要求名が見つからない場合のみ自動選択不能エラー（ブラウザ再読込で解消）。
+// 返り値 { name, note }：name が null なら解決不能。note は警告メッセージ（無ければ空）。
+async function resolveSplitSource(wdId: string, requested: string): Promise<{ name: string | null; note: string }> {
+  const releasedDir = path.join(workspacePath, "data/work", wdId, "ReleasedVersion");
+  if ((await getMtime(path.join(releasedDir, requested))) !== null) {
+    return { name: requested, note: "" };
+  }
+  const pptxs = await listFiles(releasedDir, PPTX_PATTERN);
+  if (pptxs.length === 1) {
+    return {
+      name: pptxs[0],
+      note: `⚠ 要求されたソース「${requested}」が見つからないため、ReleasedVersion 内の唯一の pptx「${pptxs[0]}」を使用します（ブラウザが古い一覧の可能性。再読込を推奨）`,
+    };
+  }
+  if (pptxs.length === 0) {
+    return { name: null, note: `❌ ReleasedVersion に pptx がありません（要求: ${requested}）` };
+  }
+  return { name: null, note: `❌ 要求されたソース「${requested}」が見つからず、ReleasedVersion に pptx が複数（${pptxs.length}）あり自動選択できません` };
+}
+
+// POST /api/work/:wd/:version/split — ReleasedVersion 由来の新版を COM 分割（SSE）
+router.post(API_ROUTES.work.split, async (req, res) => {
+  const { sourceFilename, sourceKind, sourceFrom } = req.body as { sourceFilename?: string; sourceKind?: string; sourceFrom?: string };
+  if (!sourceFilename || !isSafePptxFilename(sourceFilename)) {
+    res.status(400).json({ error: "valid sourceFilename (*.pptx) required" });
+    return;
+  }
+  const ctx = beginComStream(req, res);
+  if (!ctx) return;
+  // split 前の安全網: D: を正として ReleasedVersion を同期（stale 名の自己回復）。
+  // windowsWdPath は body に無いため .checkout-source（windows_path）から解決する。
+  const synced = await syncReleasedFromWindows(ctx.wd, await readCheckoutWindowsPath(ctx.wd));
+  if (synced.copied.length || synced.deleted.length) {
+    ctx.send(`🔄 ReleasedVersion を D: に同期（+${synced.copied.length}/-${synced.deleted.length}）`);
+  }
+  const resolved = await resolveSplitSource(ctx.wd, sourceFilename);
+  if (resolved.note) ctx.send(resolved.note);
+  if (!resolved.name) {
+    ctx.send(`ERROR: ${resolved.note}`);
+    ctx.send(`ERROR: exit 1`);
+    res.end();
+    return;
+  }
+  // フォールバックで別ファイルを採用した場合は、古い版を指す sourceFrom を捨てて
+  // ツール側の「ファイル名から既定」に委ねる（誤った由来メタの記録を防ぐ）。
+  const effectiveFrom = resolved.name === sourceFilename ? (sourceFrom ?? "") : "";
+  const args = ["split", ctx.wd, ctx.version, resolved.name, sourceKind ?? "released", effectiveFrom];
+  // 案A：COM 分割の成功後にサーバー側 gen_thumbs でサムネまで生成し、エディタが
+  // 即サムネ表示できるようにする（canvas は明示「更新」ボタンで後追い）。
+  await runComScript(args, ctx.wd, ctx.send, () => runGenThumbs(ctx.wd, ctx.version, ctx.send));
+  res.end();
+});
+
+// POST /api/work/:wd/:version/combine — .pages を COM 結合して ReleasedVersion へ（SSE）
+router.post(API_ROUTES.work.combine, async (req, res) => {
+  const { outFilename, dedupMasters } = req.body as { outFilename?: string; dedupMasters?: boolean };
+  if (!outFilename || !isSafePptxFilename(outFilename)) {
+    res.status(400).json({ error: "valid outFilename (*.pptx) required" });
+    return;
+  }
+  const ctx = beginComStream(req, res);
+  if (!ctx) return;
+  const args = ["combine", ctx.wd, ctx.version, outFilename];
+  if (dedupMasters === false) args.push("nodedup");
+  await runComScript(args, ctx.wd, ctx.send);
+  res.end();
+});
+
+// POST /api/work/:wd/:version/canvas-refresh — .pages を COM でページ単位 canvas 再生成（SSE）
+router.post(API_ROUTES.work.canvasRefresh, async (req, res) => {
+  const { full } = req.body as { full?: boolean };
+  const ctx = beginComStream(req, res);
+  if (!ctx) return;
+  const args = ["canvas", ctx.wd, ctx.version];
+  if (full === true) args.push("full");
+  await runComScript(args, ctx.wd, ctx.send);
+  res.end();
+});
+
+// 現在時刻を JST (+09:00) ISO 文字列で返す（structure.json の created/updated 用）。
+function jstIsoNow(): string {
+  const jst = new Date(Date.now() + 9 * ONE_HOUR_MS);
+  return jst.toISOString().replace("Z", "+09:00");
+}
+
+/** フォーク先 structure.json を構築（純粋）。元の構造（sections/pages）は温存し、
+ *  version・source・created_at・updated_at だけを新版向けに差し替える。 */
+export function buildForkedStructure(
+  source: Record<string, unknown>,
+  wdId: string,
+  targetVersion: string,
+  sourceVersion: string,
+  nowIso: string,
+): Record<string, unknown> {
+  return {
+    ...source,
+    wd: wdId,
+    version: targetVersion,
+    source: { kind: "editing", from: sourceVersion },
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+}
+
+/** フォーク先 manifest.json を構築（純粋）。ページは元版とバイト同一なので
+ *  レンダ情報（thumb/canvas/content_hash/dirty）はそのまま引き継ぎ、version だけ差し替える。 */
+export function buildForkedManifest(source: Record<string, unknown>, targetVersion: string): Record<string, unknown> {
+  return { ...source, version: targetVersion };
+}
+
+// パス（ファイル/ディレクトリ）が存在するか。
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fsp.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// fork-from の事前検証（JSON エラーで返す・SSE ヘッダ flush 前に呼ぶ）。
+// 元に structure.json が無ければ 400、作成先が既存なら 409、元にロックが
+// 残っていれば 409。問題なければ null。
+async function preflightFork(wdId: string, targetVersion: string, sourceVersion: string): Promise<{ status: number; error: string } | null> {
+  const wdDir = path.join(workspacePath, "data/work", wdId);
+  const srcStruct = path.join(wdDir, sourceVersion, ".pages", "structure.json");
+  try {
+    await fsp.access(srcStruct);
+  } catch {
+    return { status: 400, error: "元バージョンの structure.json が見つかりません" };
+  }
+  try {
+    await fsp.access(path.join(wdDir, targetVersion, ".pages"));
+    return { status: 409, error: "作成先バージョンは既に存在します" };
+  } catch {
+    // 作成先が無いのが正常
+  }
+  if (await hasLockedPages(path.join(wdDir, sourceVersion))) {
+    return { status: 409, error: "元バージョンにチェックアウト中のページが残っています" };
+  }
+  return null;
+}
+
+// フォーク先 structure.json の version/source を新版へ書き換える。
+async function patchForkStructure(structPath: string, wdId: string, targetVersion: string, sourceVersion: string): Promise<void> {
+  const raw = await fsp.readFile(structPath, "utf-8");
+  const patched = buildForkedStructure(JSON.parse(raw) as Record<string, unknown>, wdId, targetVersion, sourceVersion, jstIsoNow());
+  await fsp.writeFile(structPath, `${JSON.stringify(patched, null, 2)}\n`, "utf-8");
+}
+
+// 元の .thumbcache があればコピーし manifest の version を差し替える。コピーしたら true。
+async function copyForkThumbcache(srcDir: string, dstDir: string, targetVersion: string): Promise<boolean> {
+  const srcThumb = path.join(srcDir, ".thumbcache");
+  if (!(await pathExists(srcThumb))) return false;
+  const dstThumb = path.join(dstDir, ".thumbcache");
+  await fsp.cp(srcThumb, dstThumb, { recursive: true });
+  const manifestPath = path.join(dstThumb, "manifest.json");
+  if (await pathExists(manifestPath)) {
+    const raw = await fsp.readFile(manifestPath, "utf-8");
+    const patched = buildForkedManifest(JSON.parse(raw) as Record<string, unknown>, targetVersion);
+    await fsp.writeFile(manifestPath, `${JSON.stringify(patched, null, 2)}\n`, "utf-8");
+  }
+  return true;
+}
+
+// 元の .pagecanvas があればコピー、無ければ空ディレクトリを作る。
+async function copyForkCanvas(srcDir: string, dstDir: string): Promise<void> {
+  const srcCanvas = path.join(srcDir, ".pagecanvas");
+  const dstCanvas = path.join(dstDir, ".pagecanvas");
+  if (await pathExists(srcCanvas)) {
+    await fsp.cp(srcCanvas, dstCanvas, { recursive: true });
+  } else {
+    await fsp.mkdir(dstCanvas, { recursive: true });
+  }
+}
+
+// fork-from の本体（案A）：元 .pages / .thumbcache / .pagecanvas をコピーして新版を作る。
+// ページは元版とバイト同一なので canvas/thumb もコピーすれば dirty 無しで即・高解像度表示できる。
+// 元に .thumbcache が無い場合のみ gen_thumbs でサムネを生成する。
+async function performFork(wdId: string, targetVersion: string, sourceVersion: string, send: (line: string) => void): Promise<void> {
+  const wdDir = path.join(workspacePath, "data/work", wdId);
+  const srcDir = path.join(wdDir, sourceVersion);
+  const dstDir = path.join(wdDir, targetVersion);
+
+  send(`📄 ${sourceVersion} をコピー中...`);
+  await fsp.cp(path.join(srcDir, ".pages"), path.join(dstDir, ".pages"), { recursive: true });
+  await patchForkStructure(path.join(dstDir, ".pages", "structure.json"), wdId, targetVersion, sourceVersion);
+
+  const hasThumb = await copyForkThumbcache(srcDir, dstDir, targetVersion);
+  await copyForkCanvas(srcDir, dstDir);
+  send(`✅ ${sourceVersion} → ${targetVersion} をコピーしました`);
+
+  if (hasThumb) {
+    send("🖼 サムネ・canvas を元版から引き継ぎ（再生成不要）");
+  } else {
+    await runGenThumbs(wdId, targetVersion, send);
+  }
+}
+
+// ── 新規デッキ作成（N3・UI モーダル発）─────────────────────────────────────
+// new_deck.py（WSL python-pptx・COM 非依存）で表紙 1 枚＋structure.json を生成し、
+// 続けて gen_thumbs でサムネまで作る。canvas は明示「更新」ボタンで後追い。
+
+/** new_deck.py の --theme に渡せるテーマ ID（純粋定数・フロントの 10 択と一致）。 */
+export const NEW_DECK_THEME_IDS = ["cool", "warm", "vivid", "dark", "plain", "earth", "neutral", "soft", "forest", "premium"] as const;
+
+/** new-deck body の純粋検証。問題があればエラーメッセージ、無ければ null。 */
+export function validateNewDeckBody(body: { title?: unknown; theme?: unknown }): string | null {
+  if (typeof body.title !== "string" || !body.title.trim()) return "title は必須です";
+  if (body.title.length > 200) return "title が長すぎます（200 文字以内）";
+  if (typeof body.theme !== "string" || !(NEW_DECK_THEME_IDS as readonly string[]).includes(body.theme)) {
+    return `theme は ${NEW_DECK_THEME_IDS.join("/")} のいずれかを指定してください`;
+  }
+  return null;
+}
+
+// new_deck.py の CLI 引数を組み立てる（純粋）。
+export function buildNewDeckArgs(
+  scriptPath: string,
+  versionDir: string,
+  wdId: string,
+  version: string,
+  body: { title: string; subtitle?: string; theme: string; confidential?: boolean },
+): string[] {
+  const args = [scriptPath, "--version-dir", versionDir, "--wd", wdId, "--version", version, "--title", body.title.trim(), "--theme", body.theme];
+  if (body.subtitle?.trim()) args.push("--subtitle", body.subtitle.trim());
+  if (body.confidential === false) args.push("--no-confidential");
+  return args;
+}
+
+// 新規作成時に D: 側の WD フォルダ構成（ReleasedVersion＋素材フォルダ）を WSL へミラーする。
+// released-thumbs エンドポイントと同じ D: を正・allowlist 固定の安全ミラー。
+// windowsWdPath が無ければ no-op（誤削除防止）。SSE に進捗を流す。
+async function mirrorWindowsWdFolder(wdId: string, windowsWdPath: string | null, send: (line: string) => void): Promise<void> {
+  if (!windowsWdPath) return;
+  send("🔄 D: の WD フォルダ構成（ReleasedVersion・素材）を WSL にミラー中...");
+  const released = await syncReleasedFromWindows(wdId, windowsWdPath);
+  const materials = await syncSourceMaterialsFromWindows(wdId, windowsWdPath);
+  const copied = released.copied.length + materials.copied;
+  const deleted = released.deleted.length + materials.deleted;
+  send(`🔄 ミラー完了: コピー ${String(copied)} 件 / 削除 ${String(deleted)} 件`);
+}
+
+// new_deck.py を spawn して SSE に流す。成功(0)なら gen_thumbs → DONE、失敗なら ERROR。
+async function runNewDeck(
+  wdId: string,
+  version: string,
+  body: { title: string; subtitle?: string; theme: string; confidential?: boolean },
+  send: (line: string) => void,
+): Promise<void> {
+  const versionDir = path.join(workspacePath, "data/work", wdId, version);
+  const scriptPath = path.join(workspacePath, "data/work/tools/new_deck.py");
+  const args = buildNewDeckArgs(scriptPath, versionDir, wdId, version, body);
+  await new Promise<void>((resolve) => {
+    const proc = spawn("python3", args, { env: { ...process.env } });
+    pipeToSse(proc, send, "📄 ");
+    proc.on("close", (code) => {
+      const finish = async (): Promise<void> => {
+        if (code === 0) {
+          await runGenThumbs(wdId, version, send);
+          send(`DONE:${wdId}`);
+        } else {
+          send("ERROR: new_deck.py が失敗しました（WSL ホストに python-pptx / lxml が必要: pip install python-pptx lxml --break-system-packages）");
+          send(`ERROR: exit ${String(code)}`);
+        }
+        resolve();
+      };
+      finish().catch((err) => {
+        send(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+        resolve();
+      });
+    });
+    proc.on("error", (err) => {
+      send(`ERROR: ${err.message}`);
+      resolve();
+    });
+  });
+}
+
+// POST /api/work/:wd/:version/new-deck — 新規デッキ作成（SSE）
+router.post(API_ROUTES.work.newDeck, async (req, res) => {
+  const { wd, version } = req.params as { wd: string; version: string };
+  const body = req.body as { title?: string; subtitle?: string; theme?: string; confidential?: boolean; windowsWdPath?: string };
+  if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return;
+  }
+  const bodyError = validateNewDeckBody(body);
+  if (bodyError) {
+    res.status(400).json({ error: bodyError });
+    return;
+  }
+  // preflight: 作成先に structure.json が既存なら誤上書き防止（new_deck.py と同じガードを JSON で先に返す）
+  if (await pathExists(path.join(workspacePath, "data/work", wd, version, ".pages", "structure.json"))) {
+    res.status(409).json({ error: "作成先バージョンには既に structure.json が存在します" });
+    return;
+  }
+  const ctx = beginComStream(req, res);
+  if (!ctx) return;
+  // 先に D: 側の WD フォルダ構成（素材・ReleasedVersion）を WSL へミラーしてから v001 を生成する。
+  await mirrorWindowsWdFolder(wd, body.windowsWdPath ?? null, ctx.send);
+  await runNewDeck(wd, version, { title: body.title ?? "", subtitle: body.subtitle, theme: body.theme ?? "cool", confidential: body.confidential }, ctx.send);
+  res.end();
+});
+
+// POST /api/work/:wd/:version/fork-from — 編集中由来の新版を .pages コピーで作成（SSE）
+router.post(API_ROUTES.work.forkFrom, async (req, res) => {
+  const { wd, version } = req.params as { wd: string; version: string };
+  const { sourceVersion } = req.body as { sourceVersion?: string };
+  if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return;
+  }
+  if (!sourceVersion || !isValidWorkVersion(sourceVersion)) {
+    res.status(400).json({ error: "valid sourceVersion required" });
+    return;
+  }
+  if (sourceVersion === version) {
+    res.status(400).json({ error: "sourceVersion と同じバージョンにはフォークできません" });
+    return;
+  }
+  const pre = await preflightFork(wd, version, sourceVersion);
+  if (pre) {
+    res.status(pre.status).json({ error: pre.error });
+    return;
+  }
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+  const send = (line: string): void => {
+    res.write(`data: ${line}\n\n`);
+  };
+  try {
+    await performFork(wd, version, sourceVersion, send);
+    send(`DONE:${wd}`);
+  } catch (err) {
+    log.error("workFiles.forkFrom", "fork failed", { err });
+    send(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  res.end();
+});
+
+// .checkout-source から Windows 側 WD ベースパスを読み、WSL マウントパスに変換する。
+// 取得できない（未チェックアウト等）場合は null。
+async function resolveWindowsBaseWsl(wdId: string): Promise<string | null> {
+  const checkoutSourcePath = path.join(workspacePath, "data/work", wdId, ".checkout-source");
+  try {
+    const src = await fsp.readFile(checkoutSourcePath, "utf-8");
+    const line = src.split("\n").find((srcLine) => srcLine.startsWith("windows_path="));
+    if (!line) return null;
+    const winPath = line.slice("windows_path=".length).trim();
+    return winPath ? windowsToWsl(winPath) : null;
+  } catch {
+    return null;
+  }
+}
+
+// structure.json に checked_out:true のページが残っているか（編集中ガード）。
+// structure.json が無い／壊れている場合は「ロック無し」とみなす（後始末は許可）。
+async function hasLockedPages(versionDir: string): Promise<boolean> {
+  try {
+    const raw = await fsp.readFile(path.join(versionDir, ".pages", "structure.json"), "utf-8");
+    const struct = JSON.parse(raw) as { pages?: Record<string, { checked_out?: boolean }> };
+    return struct.pages ? Object.values(struct.pages).some((page) => page.checked_out === true) : false;
+  } catch {
+    return false;
+  }
+}
+
+// 親ディレクトリ直下の指定名フォルダだけを安全に削除する。
+// 二重ガード（正規表現＋ isContainedChild）に通らなければ例外で中止。
+// 既に存在しない場合は false（削除なし）を返す。
+async function removeContainedDir(target: string, parent: string, name: string): Promise<boolean> {
+  if (!isContainedChild(target, parent, name)) {
+    throw new Error(`refusing to delete a path outside the expected parent: ${target}`);
+  }
+  try {
+    await fsp.access(target);
+  } catch {
+    return false;
+  }
+  await fsp.rm(target, { recursive: true, force: true });
+  return true;
+}
+
+interface DeleteSide {
+  path: string | null;
+  deleted: boolean;
+}
+type DeleteVersionResult = { ok: true; wd: string; version: string; wsl: DeleteSide; windows: DeleteSide } | { ok: false; status: number; error: string };
+
+// リリース後始末：WSL と Windows のバージョンサブフォルダだけを削除する（N1 本体）。
+async function deleteVersionSubfolder(wdId: string, version: string): Promise<DeleteVersionResult> {
+  const wdDir = path.join(workspacePath, "data/work", wdId);
+  const wslVersionDir = path.join(wdDir, version);
+
+  if (await hasLockedPages(wslVersionDir)) {
+    return { ok: false, status: 409, error: "チェックアウト中のページが残っています。先にページをチェックインしてください。" };
+  }
+
+  const wslDeleted = await removeContainedDir(wslVersionDir, wdDir, version);
+
+  const winBaseWsl = await resolveWindowsBaseWsl(wdId);
+  const winVersionDir = winBaseWsl ? path.join(winBaseWsl, version) : null;
+  const winDeleted = winVersionDir && winBaseWsl ? await removeContainedDir(winVersionDir, winBaseWsl, version) : false;
+
+  return {
+    ok: true,
+    wd: wdId,
+    version,
+    wsl: { path: wslVersionDir, deleted: wslDeleted },
+    windows: { path: winVersionDir, deleted: winDeleted },
+  };
+}
+
+// DELETE /api/work/:wd/:version — リリース後始末のサブフォルダ限定削除（N1）
+router.delete(API_ROUTES.work.version, async (req, res) => {
+  const { wd: wdId, version } = req.params as { wd: string; version: string };
+
+  if (!isValidWorkWdId(wdId) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return;
+  }
+
+  try {
+    const result = await deleteVersionSubfolder(wdId, version);
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error("workFiles.deleteVersion", "version subfolder delete failed", { err });
+    res.status(500).json({ error: msg });
   }
 });
 

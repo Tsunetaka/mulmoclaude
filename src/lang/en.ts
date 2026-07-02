@@ -1185,10 +1185,6 @@ const enMessages = {
     defaultCancel: "Cancel",
   },
   slides: {
-    pickWd: "Select a work directory to open",
-    wdPlaceholder: "WD-ID (e.g. GIT-00001)",
-    open: "Open",
-    available: "Available WDs",
     backToPicker: "Back to WD selection",
     noCacheFound: "No thumbnail cache found. Run edit-slide in chat to generate it.",
     generatingThumbnails: "Generating thumbnails...",
@@ -1196,6 +1192,8 @@ const enMessages = {
     nextPage: "Next page",
     editDone: "Done Editing",
     selectDoc: "Select Document",
+    canvasRefresh: "Update Canvas",
+    toggleChat: "Claude Chat",
   },
   mulmoPoint: {
     title: "About MulmoPoint",

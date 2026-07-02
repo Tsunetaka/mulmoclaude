@@ -12,18 +12,19 @@
           :sandbox-enabled="sandboxEnabled"
           :gemini-available="geminiAvailable"
           :title-style="debugTitleStyle"
-          :logo-src="currentPage === 'slides' ? takoLogoUrl : undefined"
-          :home-label="currentPage === 'slides' ? t('mulmoPoint.title') : undefined"
-          :hide-journal-button="currentPage === 'slides'"
-          :app-title="currentPage === 'slides' ? 'MulmoPoint' : undefined"
+          :logo-src="isSlideEditorChrome ? takoLogoUrl : undefined"
+          :home-label="isSlideEditorChrome ? t('mulmoPoint.title') : undefined"
+          :hide-journal-button="isSlideEditorChrome"
+          :app-title="isSlideEditorChrome ? 'MulmoPoint' : undefined"
           @test-query="(q) => sendMessage(q)"
           @open-settings="showSettings = true"
           @home="handleHomeClick"
         />
         <div class="flex-1 min-w-0">
-          <!-- Slide editor ribbon — shown instead of PluginLauncher while the
-               slide editor is active to prevent accidental page navigation. -->
-          <SlideEditorRibbon v-if="currentPage === 'slides'" />
+          <!-- Slide editor ribbon — shown instead of PluginLauncher across the
+               slide-editor chrome (document picker + editor) to keep the top
+               bar identical and to prevent accidental page navigation. -->
+          <SlideEditorRibbon v-if="isSlideEditorChrome" />
           <PluginLauncher
             v-else
             :active-tool-name="selectedResult?.toolName ?? null"
@@ -652,6 +653,14 @@ const currentPage = computed<PageRouteName | null>(() => {
   return typeof name === "string" && isPageRouteName(name) ? name : null;
 });
 
+// Slide-editor chrome spans BOTH the document picker (workFiles) and the
+// editor itself (slides): both get the MulmoPoint brand in the header and
+// the SlideEditorRibbon instead of the global PluginLauncher. Keeping the
+// two pages on one flag means the top bar stays identical across the
+// pick → edit transition, and any future ribbon button shows up in both
+// places by editing only SlideEditorRibbon's button list.
+const isSlideEditorChrome = computed(() => currentPage.value === PAGE_ROUTES.slides || currentPage.value === PAGE_ROUTES.workFiles);
+
 // Refresh the files tree after each agent run so newly written files
 // appear without a manual reload.
 const filesRefreshToken = ref(0);
@@ -724,10 +733,25 @@ const canvasDropHandlers = computed(() =>
 // would unmount the panel AND keep the canvas hidden, blanking plugin
 // pages until the panel is collapsed again.
 watch(isChatPage, (isChat, wasChat) => {
-  if (!(wasChat && !isChat)) return;
-  removeCurrentIfEmpty();
-  currentSessionId.value = "";
-  sidePanelExpanded.value = false;
+  if (wasChat && !isChat) {
+    removeCurrentIfEmpty();
+    currentSessionId.value = "";
+    sidePanelExpanded.value = false;
+    return;
+  }
+  // Entering /chat. When the URL carries a sessionId, the route-param
+  // watcher (and loadSession) activates it. But a *bare* push to
+  // { name: chat } with no params — e.g. the slide-editor "編集完了"
+  // ribbon button (SlideEditorRibbon.goHome) — never triggers that
+  // watcher (undefined sessionId), so currentSessionId stays "" and the
+  // first sendMessage is silently dropped at `if (!session) return`.
+  // Mirror the onMounted bootstrap so a session is resumed/created.
+  if (!wasChat && isChat) {
+    const hasSessionId = typeof route.params.sessionId === "string" && route.params.sessionId !== "";
+    if (!hasSessionId) {
+      resumeOrCreateChatSession().catch((err) => console.error("[chat-enter] resume failed:", err));
+    }
+  }
 });
 
 function handleSessionSelect(sessionId: string): void {
@@ -741,10 +765,10 @@ function handleNewSessionClick(roleId: string): void {
 }
 
 function handleHomeClick(): void {
-  // On the slide editor page the home button opens the MulmoPoint popup
-  // instead of navigating away — accidental navigation is disruptive
-  // when the user is mid-edit.
-  if (currentPage.value === "slides") {
+  // Across the slide-editor chrome (document picker + editor) the home
+  // button opens the MulmoPoint popup instead of navigating away —
+  // accidental navigation is disruptive when the user is mid-edit.
+  if (isSlideEditorChrome.value) {
     showMulmoPointPopup.value = true;
     return;
   }
@@ -1164,6 +1188,25 @@ function startNewChat(message: string, roleId?: string): void {
   void seedCollectionPresentation(message);
 }
 
+// Send `message` forcing the conversation onto `roleId`, but WITHOUT a
+// router push. The slide-editor chat pane lives on /slides, where
+// currentSessionId is "" (cleared on leaving /chat) so a plain
+// sendMessage would be dropped at `if (!session) return`, and
+// startNewChat would yank the user onto /chat. Instead: continue the
+// active session when it already uses `roleId`, otherwise spin up a
+// fresh in-memory session bound to `roleId` and activate it in place
+// (set currentSessionId directly — no navigateToSession). sessionRole
+// then resolves to that role, so the agent run is dispatched as it.
+function sendMessageAs(message: string, roleId: string): void {
+  const active = sessionMap.get(currentSessionId.value);
+  if (!active || active.roleId !== roleId) {
+    const session = createEmptySession(uuidv4(), roleId);
+    sessionMap.set(session.id, session);
+    currentSessionId.value = session.id;
+  }
+  void sendMessage(message);
+}
+
 // A chat started from a collection view carries that collection's slash command
 // (`/<slug> …`). Present the collection in the canvas immediately — a
 // client-side stand-in for the presentCollection call the agent makes when the
@@ -1222,6 +1265,7 @@ function handleAskGemini(): void {
 provideAppApi({
   refreshRoles,
   sendMessage: (message: string) => sendMessage(message),
+  sendMessageAs: (message: string, roleId: string) => sendMessageAs(message, roleId),
   startNewChat: (message: string, roleId?: string) => startNewChat(message, roleId),
   navigateToWorkspacePath: (href: string) => navigateToWorkspacePath(href),
   getResultTimestamp: (uuid: string) => activeSession.value?.resultTimestamps.get(uuid),
