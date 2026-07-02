@@ -34,6 +34,7 @@ interface SessionMeta {
   hasUnread?: boolean;
   isBookmarked?: boolean;
   origin?: SessionOrigin;
+  userQueryCount?: number;
 }
 
 async function readSessionMeta(__chatDir: string, sessionId: string): Promise<SessionMeta | null> {
@@ -77,6 +78,9 @@ export interface SessionSummary {
   // User-toggled bookmark — surfaced in the history panel as a
   // dedicated filter chip and a green role-icon tint.
   isBookmarked?: boolean;
+  // Number of user turns sent to this session. Lets the history panel
+  // tell a one-shot (1) apart from a long-running conversation.
+  userQueryCount?: number;
   // Live state from the in-memory session store. Absent when the
   // session has no active entry in the store (i.e. idle / historical).
   //
@@ -130,6 +134,20 @@ interface SessionRow {
   changeMs: number;
 }
 
+// Fold the live in-memory session state onto a summary. Extracted so
+// `buildSessionSummary` stays under the cognitive-complexity threshold.
+function applyLiveState(summary: SessionSummary, live: NonNullable<ReturnType<typeof getSession>>): void {
+  // Background generations (image/audio/movie) keep the session "busy"
+  // even when the agent turn has ended, so the sidebar indicator stays
+  // lit across view navigation.
+  summary.isRunning = live.isRunning || Object.keys(live.pendingGenerations).length > 0;
+  // Narrow predicate — must stay byte-identical to the DELETE 409 gate
+  // (`getSession(sessionId)?.isRunning`) so a caller polling this can
+  // trust "false ⇒ DELETE will be accepted".
+  summary.liveIsRunning = live.isRunning;
+  summary.statusMessage = live.statusMessage;
+}
+
 // Build a SessionSummary from the gathered inputs. Conditional spreads
 // honour the server tsconfig's `exactOptionalPropertyTypes`; that's
 // why each optional field is set with `if (… !== undefined)` rather
@@ -153,19 +171,10 @@ function buildSessionSummary(
   };
   if (meta.origin) summary.origin = meta.origin;
   if (meta.isBookmarked) summary.isBookmarked = true;
+  if (typeof meta.userQueryCount === "number") summary.userQueryCount = meta.userQueryCount;
   if (indexEntry?.summary !== undefined) summary.summary = indexEntry.summary;
   if (indexEntry?.keywords !== undefined) summary.keywords = indexEntry.keywords;
-  if (live) {
-    // Background generations (image/audio/movie) keep the session
-    // "busy" even when the agent turn has ended, so the sidebar
-    // indicator stays lit across view navigation.
-    summary.isRunning = live.isRunning || Object.keys(live.pendingGenerations).length > 0;
-    // Narrow predicate — must stay byte-identical to the DELETE
-    // 409 gate (`getSession(sessionId)?.isRunning`) so a caller
-    // polling this can trust "false ⇒ DELETE will be accepted".
-    summary.liveIsRunning = live.isRunning;
-    summary.statusMessage = live.statusMessage;
-  }
+  if (live) applyLiveState(summary, live);
   return summary;
 }
 

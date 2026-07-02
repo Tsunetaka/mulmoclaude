@@ -1,45 +1,35 @@
-// Read endpoints for the curated collection registry (Discover tab). Backs
-// `GET /api/collections-registry` by server-fetching the published index.json
-// (receptron/mulmoclaude-collections) and returning its entries. The host never
-// exposes the upstream URL to the client; it proxies + caches it.
+// Read endpoints for the curated collection registries (Discover tab). Backs
+// `GET /api/collections-registry` by server-fetching every configured registry's
+// published index.json (official receptron/mulmoclaude-collections plus any
+// user-added entries from `config/collections-registries.json`) and returning
+// merged entries. The host never exposes upstream URLs to the client; it proxies
+// + caches each one.
+//
+// The registry import/export engine lives in @mulmoclaude/core/collection/registry,
+// wired to this workspace through the shared `configureCollectionHost` binding (see
+// server/workspace/collections/configure.ts). This route is thin host glue.
 
 import { Router, Request, Response } from "express";
 
+import type { RegistryEntry, RegistryListResponse, RegistryImportResponse } from "@mulmoclaude/core/collection/registry";
+import { listRegistry, previewCollection, importRegistry, performExport } from "@mulmoclaude/core/collection/registry/server";
+
 import { API_ROUTES } from "../../../src/config/apiRoutes.js";
 import { badRequest } from "../../utils/httpError.js";
-import { fetchRegistryIndex } from "../../workspace/collectionsRegistry/client.js";
-import { previewCollection } from "../../workspace/collectionsRegistry/collectionFiles.js";
-import { performImport } from "../../workspace/collectionsRegistry/importWriter.js";
-import { performExport } from "../../workspace/collectionsRegistry/performExport.js";
-import type { RegistryCollectionEntry } from "../../workspace/collectionsRegistry/registryIndex.js";
 import { workspacePath } from "../../workspace/workspace.js";
 
 const router = Router();
-
-interface RegistryListResponse {
-  registry: string;
-  generatedAt: string;
-  /** True when the upstream was unreachable and a previously-cached index is served. */
-  stale: boolean;
-  collections: RegistryCollectionEntry[];
-}
 
 interface ErrorResponse {
   error: string;
 }
 
 router.get(API_ROUTES.collectionsRegistry.list, async (_req: Request, res: Response<RegistryListResponse | ErrorResponse>) => {
-  const result = await fetchRegistryIndex();
-  if (!result.ok) {
-    res.status(result.status).json({ error: result.error });
-    return;
-  }
-  const { registry, generatedAt, collections } = result.index;
-  res.json({ registry, generatedAt, stale: result.stale, collections });
+  res.json(await listRegistry());
 });
 
 interface RegistryPreviewResponse {
-  entry: RegistryCollectionEntry;
+  entry: RegistryEntry;
   schema: Record<string, unknown>;
   meta: Record<string, unknown>;
 }
@@ -47,11 +37,12 @@ interface RegistryPreviewResponse {
 router.get(API_ROUTES.collectionsRegistry.preview, async (req: Request, res: Response<RegistryPreviewResponse | ErrorResponse>) => {
   const author = typeof req.query.author === "string" ? req.query.author : "";
   const slug = typeof req.query.slug === "string" ? req.query.slug : "";
+  const registry = typeof req.query.registry === "string" && req.query.registry ? req.query.registry : null;
   if (!author || !slug) {
     badRequest(res, "author and slug query params are required");
     return;
   }
-  const result = await previewCollection(author, slug);
+  const result = await previewCollection(author, slug, registry);
   if (!result.ok) {
     res.status(result.status).json({ error: result.error });
     return;
@@ -62,28 +53,23 @@ router.get(API_ROUTES.collectionsRegistry.preview, async (req: Request, res: Res
 interface ImportBody {
   author?: unknown;
   slug?: unknown;
+  registry?: unknown;
 }
 
-interface ImportResponse {
-  localSlug: string;
-  updated: boolean;
-  seedWritten: number;
-  seedSkipped: boolean;
-}
-
-router.post(API_ROUTES.collectionsRegistry.import, async (req: Request<object, unknown, ImportBody>, res: Response<ImportResponse | ErrorResponse>) => {
+router.post(API_ROUTES.collectionsRegistry.import, async (req: Request<object, unknown, ImportBody>, res: Response<RegistryImportResponse | ErrorResponse>) => {
   const author = typeof req.body.author === "string" ? req.body.author : "";
   const slug = typeof req.body.slug === "string" ? req.body.slug : "";
+  const registry = typeof req.body.registry === "string" && req.body.registry ? req.body.registry : null;
   if (!author || !slug) {
     badRequest(res, "author and slug are required");
     return;
   }
-  const result = await performImport(author, slug, workspacePath);
+  const result = await importRegistry(author, slug, workspacePath, registry);
   if (!result.ok) {
     res.status(result.status).json({ error: result.error });
     return;
   }
-  res.json({ localSlug: result.localSlug, updated: result.updated, seedWritten: result.seedWritten, seedSkipped: result.seedSkipped });
+  res.json(result.response);
 });
 
 interface ExportBody {

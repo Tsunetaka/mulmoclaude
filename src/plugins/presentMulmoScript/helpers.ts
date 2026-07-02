@@ -50,7 +50,7 @@ export function parseSSEEventLine(line: string): SSEEvent | null {
  * characters must be rendered first so they can be referenced by
  * any character-using beat.
  */
-export function shouldAutoRenderBeat(beat: { image?: { type?: string } | undefined }, hasCharacters: boolean, autoRenderTypes: readonly string[]): boolean {
+export function shouldAutoRenderBeat(beat: { image?: { type?: string } }, hasCharacters: boolean, autoRenderTypes: readonly string[]): boolean {
   if (hasCharacters) return false;
   const type = beat.image?.type;
   if (typeof type !== "string") return false;

@@ -23,6 +23,8 @@ const de: Messages = {
   marpSplitEnter: "Quelle neben der Vorschau bearbeiten",
   marpSplitExit: "Quelleneditor schließen",
   marpSplitEditorLabel: "Quelle",
+  mermaidLoadFailed: "⚠ Mermaid konnte nicht geladen werden: {error}",
+  mermaidRenderFailed: "⚠ Mermaid-Rendering fehlgeschlagen: {error}",
 };
 
 export default de;

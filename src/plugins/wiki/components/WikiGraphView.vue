@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import * as echarts from "echarts";
-import type { WikiGraph } from "../../../lib/wiki-page/graph";
+import type { WikiGraph } from "@mulmoclaude/core/wiki";
 
 const props = defineProps<{ graph: WikiGraph }>();
 const emit = defineEmits<{ navigate: [slug: string] }>();

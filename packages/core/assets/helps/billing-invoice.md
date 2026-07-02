@@ -3,11 +3,12 @@
 Read this when the user asks to **set up invoicing / billing** (sample query:
 *"Set up invoicing for my business"*). It scaffolds **two** collection skills:
 
-- **`profile`** — the user's **own** business identity (the "bill-from" block:
-  company name, tax ID, payment details). A singleton (one record, id `me`).
-- **`invoice`** — an invoice ledger; each invoice references a client, embeds the
-  profile as the issuer, and carries a table of line items with host-computed
-  subtotal / tax / total.
+- **`profile`** — the user's **own** business identit(ies) (the "bill-from" block:
+  company name, tax ID, payment details). One or more records, one per issuer; the
+  primary one is id `me`.
+- **`invoice`** — an invoice ledger; each invoice references a client, picks an
+  issuer profile (`issuerId` → `profile`) which it embeds as the bill-from block,
+  and carries a table of line items with host-computed subtotal / tax / total.
 
 This is **Bundle B** of the billing suite. It **builds on Bundle A**
 (`clients` + `worklog`, see `config/helps/billing-clients-worklog.md`):
@@ -37,7 +38,10 @@ use the `mc-` prefix.**
 > other collections in the workspace. The whole point is a reproducible billing
 > suite. (For a *custom* collection, use `config/helps/collection-skills.md`
 > instead.) Existing records under `data/invoice/items` / `data/profile/items`
-> already match these schemas and will render as-is — no data edits needed.
+> render as-is, with one exception: because `invoice.issuerId` is new and
+> required, **backfill `issuerId: "me"` on any pre-existing invoice records** (a
+> `manageCollection` `putItems` with `mode: "merge"`) so their issuer block
+> resolves — otherwise they show a "missing issuer" prompt until set.
 
 ## Slug contract (do not change these)
 
@@ -45,7 +49,7 @@ use the `mc-` prefix.**
 
 | Collection | slug | `dataPath` | referenced by |
 |---|---|---|---|
-| Profile | `profile` | `data/profile/items` | `invoice.issuer` (embed `profile/me`) |
+| Profile | `profile` | `data/profile/items` | `invoice.issuerId` (ref) + `invoice.issuer` (embed via `idField`) |
 | Invoice | `invoice` | `data/invoice/items` | — |
 | Clients | `clients` | `data/clients/items` | `invoice.clientId` (ref, from Bundle A) |
 
@@ -56,13 +60,15 @@ use the `mc-` prefix.**
 
 ## Order: `profile` before `invoice`
 
-`invoice.issuer` embeds the `profile/me` record, so create `profile` first.
+`invoice.issuerId` references a `profile` record (and `issuer` embeds it), so
+create `profile` first.
 
 ---
 
 ## 1. `profile`
 
-`data/skills/profile/schema.json` (a **singleton** — exactly one record, id `me`):
+`data/skills/profile/schema.json` (one record per issuer; the primary one is id
+`me` — **not** a singleton, so an invoice can pick among several issuers):
 
 ```json
 {
@@ -70,7 +76,6 @@ use the `mc-` prefix.**
   "icon": "badge",
   "dataPath": "data/profile/items",
   "primaryKey": "id",
-  "singleton": "me",
   "fields": {
     "id":                { "type": "string",   "label": "ID", "primary": true, "required": true },
     "companyName":       { "type": "string",   "label": "Company / legal name", "required": true },
@@ -90,25 +95,27 @@ use the `mc-` prefix.**
 ```markdown
 ---
 name: profile
-description: The user's own business profile — the issuer ("bill-from") identity
-  used on invoices. A singleton collection with exactly one record, id `me`. The
-  record lives at `data/profile/items/me.json`; the user views and edits it at
-  `/collections/profile`. Record I/O via the `manageCollection` tool (raw
-  Read / Write / Edit on the JSON file is the escape hatch).
+description: The user's own business profile(s) — the issuer ("bill-from") identity
+  used on invoices. One or more records, each an issuer; the primary one is `me`.
+  Records live at `data/profile/items/<id>.json`; the user views and edits them at
+  `/collections/profile`. Each invoice picks one via its `issuerId` ref. Record I/O
+  via the `manageCollection` tool (raw Read / Write / Edit on the JSON is the escape hatch).
 ---
 
 # Business Profile (schema-driven collection)
 
-Holds the user's **own** business identity — the "bill-from" side of an invoice.
-Counterpart to `clients`, which holds the "bill-to" parties.
+Holds the user's **own** business identit(ies) — the "bill-from" side of an
+invoice. Counterpart to `clients`, which holds the "bill-to" parties.
 
-## Singleton — exactly one record, id `me`
-This collection has **one** record. Its primary key is always the literal string
-`me`, stored at `data/profile/items/me.json`. Never create a second record and
-never invent another id — read, create, and update `me.json` only.
+## Multiple issuers — `me` is the primary one
+This collection can hold **several** records, one per issuer identity (a personal
+name, a company, a second LLC). The primary profile keeps the id `me`, stored at
+`data/profile/items/me.json`; add more with their own kebab-case ids (e.g.
+`pervasive`, `personal`). An invoice points at one via its `issuerId`, so a
+profile must exist before an invoice can reference it.
 
 ## Record shape
-- `id` — string, **primary key**, always `me`
+- `id` — string, **primary key** (kebab-case slug; the primary profile is `me`)
 - `companyName` — string, **required** (the legal/company name shown on invoices)
 - `taxRegistrationId` — string (VAT / EIN / JP T-number — region-dependent)
 - `email` — email
@@ -123,18 +130,20 @@ never invent another id — read, create, and update `me.json` only.
 Leave optional fields the user hasn't given you out of the JSON entirely.
 
 ## What to do
-**Set up / update**: Read `data/profile/items/me.json` (may not exist yet), merge
-changes, Write back. Preserve fields you weren't asked to change. If missing and
-the user wants to set their profile, create it with `id: "me"` plus the fields
-they provided.
+**Set up / update**: Read the relevant `data/profile/items/<id>.json` (the primary
+one is `me.json`, may not exist yet), merge changes, Write back. Preserve fields
+you weren't asked to change. When creating the primary profile use `id: "me"`; for
+an additional issuer, list `data/profile/items/` first and pick a fresh kebab-case
+id.
 
-**Look up**: Read `me.json` and answer from it. If missing, tell the user their
-profile isn't set up yet and offer to collect it (`presentForm` only if several
-fields are needed at once).
+**Look up**: Read the relevant profile JSON and answer from it. If the primary
+`me.json` is missing, tell the user their profile isn't set up yet and offer to
+collect it (`presentForm` only if several fields are needed at once).
 
-**Never delete** the profile unless the user explicitly asks to reset it.
+**Never delete** a profile unless the user explicitly asks to — an invoice's
+`issuerId` ref breaks if you remove a profile it points at.
 
-## Linking to the profile in chat
+## Linking to a profile in chat
 - Do: `[your business profile](/collections/profile?selected=me)`
 - Don't: link the raw JSON path.
 
@@ -147,8 +156,9 @@ only when you genuinely need several fields they haven't provided.
 
 ## 2. `invoice`
 
-`data/skills/invoice/schema.json` (`issuer` embeds `profile/me`; `clientId` is a
-`ref` **to `clients`**; subtotal / tax / total are `derived`):
+`data/skills/invoice/schema.json` (`issuerId` is a `ref` **to `profile`** and
+`issuer` embeds whichever profile it names via `idField`; `clientId` is a `ref`
+**to `clients`**; subtotal / tax / total are `derived`):
 
 ```json
 {
@@ -158,7 +168,8 @@ only when you genuinely need several fields they haven't provided.
   "primaryKey": "id",
   "fields": {
     "id":        { "type": "string", "label": "ID", "primary": true, "required": true },
-    "issuer":    { "type": "embed",  "to": "profile", "id": "me", "label": "From (issuer)" },
+    "issuerId":  { "type": "ref",    "to": "profile", "label": "From (issuer)", "required": true },
+    "issuer":    { "type": "embed",  "to": "profile", "idField": "issuerId", "label": "From (issuer)" },
     "clientId":  { "type": "ref",    "to": "clients", "label": "Client", "required": true },
     "issueDate": { "type": "date",   "label": "Issued", "required": true },
     "dueDate":   { "type": "date",   "label": "Due" },
@@ -196,7 +207,8 @@ name: invoice
 description: A simple invoice ledger — create, list, edit, and remove invoices.
   Records live at `data/invoice/items/<id>.json`; the user views them at
   `/collections/invoice`. Each invoice references a client (`clientId` → the
-  `clients` collection) and embeds the user's `profile/me` as the issuer.
+  `clients` collection) and an issuer profile (`issuerId` → the `profile`
+  collection), which it embeds as the bill-from block.
   Subtotal / tax / total are host-computed — you don't write them.
 ---
 
@@ -207,9 +219,13 @@ description: A simple invoice ledger — create, list, edit, and remove invoices
   counter): `INV-2026-0001`. List `data/invoice/items/` first to find the highest
   number for the year, then increment; pick the next free number rather than
   overwriting.
-- `issuer` — **display-only** embed of `profile/me` (the bill-from block). You do
-  **not** write this — it carries no stored value. If the profile isn't set up,
-  the view shows a "set it up" prompt; point the user at `/collections/profile`.
+- `issuerId` — ref → `profile`, **required**. The bill-from identity. Write the
+  raw profile slug (the primary profile is `me`); the host renders it as a dropdown
+  picker. List `data/profile/items/` to find the right slug; no profile set up yet
+  → point the user at `/collections/profile`.
+- `issuer` — **display-only** embed of the profile named by `issuerId` (the
+  bill-from block). You do **not** write this — it carries no stored value; it
+  follows whatever `issuerId` points at.
 - `clientId` — ref → `clients`, **required**
 - `issueDate` — ISO date `YYYY-MM-DD`, **required** (default today)
 - `dueDate` — ISO date (optional)
@@ -232,8 +248,10 @@ or supply a literal slug. Never invent a clientId — it renders as a broken lin
 
 ## What to do
 **Create**: derive an `id`, build the record, Write `data/invoice/items/<id>.json`.
-Defaults: `status: "draft"`, `issueDate: <today>`. Set `currency` from context —
-don't silently default to USD. Don't write `subtotal` / `tax` / `total`.
+Defaults: `status: "draft"`, `issueDate: <today>`, `issuerId: "me"` (the primary
+profile) unless the user names a different issuer — then resolve it to a real
+`profile` slug. Set `currency` from context — don't silently default to USD. Don't
+write `subtotal` / `tax` / `total`.
 
 **Create from worklog hours** (common): when the user says "invoice Acme for the
 work I did this month":
@@ -304,11 +322,12 @@ and present it in the canvas with the `presentDocument` tool. Steps:
 
 1. **Resolve the recipient (Bill To).** Read `data/clients/items/<clientId>.json`
    for the client's `name`, `address`, `email`.
-2. **Resolve the issuer (From).** Read `data/profile/items/me.json` for
-   `companyName`, `taxRegistrationId`, `address`, `email`, `phone`,
-   `paymentDetails`. **If that file does not exist**, stop and tell the user their
-   business profile isn't set up — point them at `/collections/profile` — and do
-   not write a half-blank invoice.
+2. **Resolve the issuer (From).** Read `data/profile/items/<issuerId>.json` — the
+   invoice's own `issuerId` (fall back to `me` for a legacy invoice without one) —
+   for `companyName`, `taxRegistrationId`, `address`, `email`, `phone`,
+   `paymentDetails`. **If that file does not exist**, stop and tell the user that
+   issuer's business profile isn't set up — point them at `/collections/profile` —
+   and do not write a half-blank invoice.
 3. **Compute totals** from line items: `subtotal` = Σ(`quantity` × `rate`), `tax`
    = `subtotal` × `taxRate` (missing `taxRate` = 0), `total` = `subtotal` + `tax`.
    Format money with the invoice's `currency`.
@@ -332,8 +351,11 @@ The invoice record is in the `<record_data_json>` block above. You are the
 `accounting` role and own `manageAccounting`. Post the double-entry sale journal.
 
 ### 1. Resolve the book
-1. Read `data/profile/items/me.json`. If it has a non-empty `defaultBookId`, use
-   it as `bookId` and skip the rest of this step.
+1. Read `data/profile/items/<issuerId>.json` — the invoice's own `issuerId` (fall
+   back to `me` for a legacy invoice without one). If it has a non-empty
+   `defaultBookId`, use it as `bookId` and skip the rest of this step. If that
+   profile file doesn't exist, tell the user that issuer's profile isn't set up
+   (point them at `/collections/profile`) and stop.
 2. Otherwise call `manageAccounting` `getBooks`. One book → use it. Several →
    keep books whose currency/country fit the invoice; if one remains use it; else
    prefer the book whose name matches the issuer's `companyName`; only if still
@@ -378,11 +400,14 @@ The invoice record is in the `<record_data_json>` block above. You are the
 `accounting` role and own `manageAccounting`. The invoice is paid; post the
 cash-receipt journal that clears the receivable. Payment is always direct deposit
 to the issuer's bank account (the issuer's `paymentDetails` on
-`data/profile/items/me.json`), so the debit is the book's Cash / Checking account.
+`data/profile/items/<issuerId>.json`), so the debit is the book's Cash / Checking
+account.
 
 ### 1. Resolve the book
-Read `data/profile/items/me.json` for a non-empty `defaultBookId`; else `getBooks`
-and pick as in the sale flow. No book → tell the user to set one up and stop.
+Read `data/profile/items/<issuerId>.json` — the invoice's own `issuerId` (fall
+back to `me` for a legacy invoice) — for a non-empty `defaultBookId`; else
+`getBooks` and pick as in the sale flow. No book → tell the user to set one up and
+stop.
 
 ### 2. Resolve real account codes
 `getAccounts` — never invent: **Cash / Checking / Bank** (asset, the debit; if
@@ -418,7 +443,8 @@ The invoice record is in the `<record_data_json>` block above. You are the
 journals posted for it.
 
 ### 1. Resolve the book
-Read `data/profile/items/me.json` for a non-empty `defaultBookId`; else resolve
+Read `data/profile/items/<issuerId>.json` — the invoice's own `issuerId` (fall
+back to `me` for a legacy invoice) — for a non-empty `defaultBookId`; else resolve
 via `getBooks` (as in the sale flow). No book → nothing to void; say so and stop.
 
 ### 2. Resolve the Accounts Receivable code

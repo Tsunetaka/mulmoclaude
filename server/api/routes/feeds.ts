@@ -9,7 +9,7 @@
 import { Router, Request, Response } from "express";
 import { workspacePath } from "../../workspace/workspace.js";
 import { API_ROUTES } from "../../../src/config/apiRoutes.js";
-import { listFeeds, readFeedState, removeFeed } from "../../workspace/feeds/index.js";
+import { listFeeds, readFeedState, removeFeed } from "@mulmoclaude/core/feeds/server";
 import { errorMessage } from "../../utils/errors.js";
 import { serverError } from "../../utils/httpError.js";
 import { log } from "../../system/logger/index.js";

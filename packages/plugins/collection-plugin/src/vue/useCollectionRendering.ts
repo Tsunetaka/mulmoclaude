@@ -7,9 +7,9 @@
 // rows). Pure-but-stateful: instantiate ONCE per collection surface and
 // pass the returned object down to child panels.
 
-import { computed, ref, type ComputedRef, type Ref } from "vue";
+import { ref, type Ref } from "vue";
 import { collectionUi } from "./uiContext";
-import { deriveAll } from "@mulmoclaude/core/collection";
+import { deriveAll, embedTargetId } from "@mulmoclaude/core/collection";
 import type {
   CollectionDetail,
   CollectionItem,
@@ -35,7 +35,8 @@ export interface CollectionRendering {
   loadLinkedCollections: (schema: CollectionSchema, expectedSlug: string) => Promise<void>;
   refDisplay: (targetSlug: string, itemSlug: string) => string;
   refOptions: (targetSlug: string) => RefOption[];
-  embedViews: ComputedRef<Record<string, EmbedView>>;
+  embedOptions: (targetSlug: string) => RefOption[];
+  embedViewsFor: (record: CollectionItem | null) => Record<string, EmbedView>;
   resolveCurrency: (field: FieldSpec, record: CollectionItem | null | undefined) => string | undefined;
   currencySymbol: (currency: string | undefined) => string;
   formatMoney: (value: unknown, currency: string | undefined, displayLocale: string) => string;
@@ -171,11 +172,32 @@ export function useCollectionRendering(collection: Ref<CollectionDetail | null>,
       .sort((left, right) => left.display.localeCompare(right.display));
   }
 
-  function resolveEmbed(field: FieldSpec): { schema: CollectionSchema | null; item: CollectionItem | null } {
-    if (field.type !== "embed" || !field.to || !field.id) return { schema: null, item: null };
-    const data = embedCache.value[field.to];
+  /** Dropdown options for an `embed` field's per-record picker (`idField`):
+   *  every record in the target collection, labelled by its name/title (or
+   *  primary key). Built from `embedCache` so it works for embed targets
+   *  that aren't also `ref` targets (the profile collection, say). */
+  function embedOptions(targetSlug: string): RefOption[] {
+    const data = embedCache.value[targetSlug];
+    if (!data) return [];
+    const { fields, primaryKey } = data.schema;
+    const displayField = "name" in fields ? "name" : "title" in fields ? "title" : primaryKey;
+    return data.items
+      .map((item) => {
+        const slug = String(item[primaryKey] ?? "");
+        const labelRaw = item[displayField];
+        const display = typeof labelRaw === "string" && labelRaw.length > 0 ? labelRaw : slug;
+        return { slug, display };
+      })
+      .filter((opt) => opt.slug.length > 0)
+      .sort((left, right) => left.display.localeCompare(right.display));
+  }
+
+  function resolveEmbed(field: FieldSpec, record: CollectionItem | null): { schema: CollectionSchema | null; item: CollectionItem | null } {
+    if (field.type !== "embed" || !field.to) return { schema: null, item: null };
+    const targetId = embedTargetId(field, record);
+    const data = targetId ? embedCache.value[field.to] : undefined;
     if (!data) return { schema: null, item: null };
-    const item = data.items.find((entry) => String(entry[data.schema.primaryKey] ?? "") === field.id) ?? null;
+    const item = data.items.find((entry) => String(entry[data.schema.primaryKey] ?? "") === targetId) ?? null;
     return { schema: data.schema, item };
   }
 
@@ -184,12 +206,15 @@ export function useCollectionRendering(collection: Ref<CollectionDetail | null>,
     return detailText(value);
   }
 
-  const embedViews = computed<Record<string, EmbedView>>(() => {
+  /** Build the read-only embed view-models for one record. A function of
+   *  the open record (not a bare computed) because a per-record `idField`
+   *  embed resolves a different target per row. */
+  function embedViewsFor(record: CollectionItem | null): Record<string, EmbedView> {
     const out: Record<string, EmbedView> = {};
     if (!collection.value) return out;
     for (const [key, field] of Object.entries(collection.value.schema.fields)) {
       if (field.type !== "embed") continue;
-      const { schema, item } = resolveEmbed(field);
+      const { schema, item } = resolveEmbed(field, record);
       const rows: EmbedRow[] = [];
       if (schema && item) {
         for (const [subKey, subField] of Object.entries(schema.fields)) {
@@ -200,10 +225,10 @@ export function useCollectionRendering(collection: Ref<CollectionDetail | null>,
           rows.push({ key: subKey, label: subField.label, type: subField.type, value, display: embedValue(subField, value, item) });
         }
       }
-      out[key] = { found: Boolean(item), rows, targetSlug: field.to ?? "", recordId: field.id ?? "" };
+      out[key] = { found: Boolean(item), rows, targetSlug: field.to ?? "", recordId: embedTargetId(field, record) };
     }
     return out;
-  });
+  }
 
   function resolveCurrency(field: FieldSpec, record: CollectionItem | null | undefined): string | undefined {
     if (field.currencyField && record) {
@@ -321,7 +346,8 @@ export function useCollectionRendering(collection: Ref<CollectionDetail | null>,
     loadLinkedCollections,
     refDisplay,
     refOptions,
-    embedViews,
+    embedOptions,
+    embedViewsFor,
     resolveCurrency,
     currencySymbol,
     formatMoney,

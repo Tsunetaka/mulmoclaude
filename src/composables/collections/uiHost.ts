@@ -10,7 +10,13 @@
 // they're deferred behind `installCollectionAppBindings`, which App.vue calls in
 // its setup (see App.vue). Until it does, `startChat` is a no-op and
 // `notifiedSeverities` returns an empty map.
-import { configureCollectionUi, type CollectionViewToken, type RegistryListResponse, type RegistryImportResponse } from "@mulmoclaude/collection-plugin/vue";
+import {
+  configureCollectionUi,
+  type CollectionViewI18nResult,
+  type CollectionViewToken,
+  type RegistryListResponse,
+  type RegistryImportResponse,
+} from "@mulmoclaude/collection-plugin/vue";
 // The package's compiled Tailwind classes — the library build extracts the SFCs'
 // styles into this file rather than injecting them, and node_modules isn't in
 // this host's Tailwind content scan, so the classes must be loaded explicitly.
@@ -33,6 +39,7 @@ import { useShortcuts } from "../useShortcuts";
 import PinToggle from "../../components/PinToggle.vue";
 import type { NotifierSeverity } from "../../utils/collections/notifiedItems";
 import type { CollectionsListResponse, FeedsListResponse } from "@mulmoclaude/core/collection";
+import type { TranslateResponse } from "@mulmoclaude/core/translation/client";
 import type { CollectionDetailResponse, ItemMutationResponse } from "../../components/collectionTypes";
 
 const { openConfirm } = useConfirm();
@@ -90,6 +97,7 @@ configureCollectionUi({
       return { ok: false, status: 0 };
     }
   },
+  fetchViewI18n: (slug, viewId, locale) => apiGet<CollectionViewI18nResult>(withSlug(API_ROUTES.collections.viewI18n, slug), { id: viewId, locale }),
   buildViewSrcdoc: (html, boot) => buildCustomViewSrcdoc(html, boot),
 
   // record CRUD + actions
@@ -133,7 +141,7 @@ configureCollectionUi({
   listCollections: () => apiGet<CollectionsListResponse>(API_ROUTES.collections.list),
   listFeeds: () => apiGet<FeedsListResponse>(API_ROUTES.feeds.list),
   listRegistry: () => apiGet<RegistryListResponse>(API_ROUTES.collectionsRegistry.list),
-  importRegistry: (author, slug) => apiPost<RegistryImportResponse>(API_ROUTES.collectionsRegistry.import, { author, slug }),
+  importRegistry: (author, slug, registry) => apiPost<RegistryImportResponse>(API_ROUTES.collectionsRegistry.import, { author, slug, registry }),
   reconcileShortcuts: (kind, live) => useShortcuts().reconcile(kind, live),
 
   // app integration
@@ -153,4 +161,9 @@ configureCollectionUi({
   subscribeChanges: (slug, onChange) => usePubSub().subscribe(collectionChannel(slug), () => onChange()),
 
   pinToggle: PinToggle,
+
+  // Runtime translation of UI strings (collection starter cards) — same route
+  // and bearer the host's role-query chips use; `null` on any failure so the
+  // view falls back to English.
+  translate: (req) => apiPost<TranslateResponse>(API_ROUTES.translation.translate, req).then((result) => (result.ok ? result.data : null)),
 });

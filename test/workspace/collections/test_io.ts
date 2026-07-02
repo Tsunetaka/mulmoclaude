@@ -21,8 +21,10 @@ import {
   resolveCreateItemId,
   readSkillTemplate,
   readCustomViewHtml,
+  readCustomViewI18n,
   buildActionSeedPrompt,
   buildCollectionActionSeedPrompt,
+  promptPathsFor,
   setCollectionChangePublisher,
   type CollectionChangePayload,
 } from "@mulmoclaude/core/collection/server";
@@ -40,6 +42,7 @@ const TEST_HOST_PATHS = {
   feedsRoot: (root: string) => path.join(root, "feeds"),
   skillsStagingDir: (root: string) => path.join(root, "data", "skills"),
   archiveDir: ".archive",
+  collectionsRegistriesConfig: (root: string) => path.join(root, "config", "collections-registries.json"),
 };
 configureCollectionHost({
   workspaceRoot: "/tmp/__test_io_placeholder__",
@@ -221,6 +224,110 @@ describe("readCustomViewHtml — source-aware base + import fallback", () => {
   });
 });
 
+describe("readCustomViewI18n — locale pick + source-aware fallback", () => {
+  const slug = "movies";
+  const i18nFile = "views/cinema.i18n.json";
+  const dictDoc = {
+    en: { hello: "Hello, {name}", next: "Next" },
+    ja: { hello: "{name} さん、こんにちは", next: "次へ" },
+  };
+
+  function authoredProjectCollection() {
+    return { slug, source: "project" as const, skillDir: path.join(workdir, ".claude", "skills", slug) };
+  }
+
+  function importedProjectCollection() {
+    // Imported = same skillDir as authored, but the staging dir was never
+    // created — the `.claude/skills/<slug>/views/` copy is the only one.
+    return { slug, source: "project" as const, skillDir: path.join(workdir, ".claude", "skills", slug) };
+  }
+
+  function userCollection() {
+    return { slug, source: "user" as const, skillDir: path.join(workdir, ".claude", "skills", slug) };
+  }
+
+  function writeI18nFile(base: string, body: unknown) {
+    const dir = path.join(base, "views");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "cinema.i18n.json"), JSON.stringify(body));
+  }
+
+  it("returns only the requested locale's strings (staging dir, project authored)", async () => {
+    writeI18nFile(path.join(workdir, "data", "skills", slug), dictDoc);
+    const result = await readCustomViewI18n(authoredProjectCollection(), i18nFile, "ja", { workspaceRoot: workdir });
+    assert.equal(result.locale, "ja");
+    assert.deepEqual(result.dict, dictDoc.ja);
+  });
+
+  it("falls back to skillDir for an imported project collection (no staging mirror)", async () => {
+    writeI18nFile(path.join(workdir, ".claude", "skills", slug), dictDoc);
+    const result = await readCustomViewI18n(importedProjectCollection(), i18nFile, "ja", { workspaceRoot: workdir });
+    assert.equal(result.locale, "ja", "imported view must read its dict from skillDir, not 404");
+    assert.deepEqual(result.dict, dictDoc.ja);
+  });
+
+  it("falls back to the en block when the requested locale is absent", async () => {
+    writeI18nFile(path.join(workdir, "data", "skills", slug), dictDoc);
+    const result = await readCustomViewI18n(authoredProjectCollection(), i18nFile, "de", { workspaceRoot: workdir });
+    assert.equal(result.locale, "en");
+    assert.deepEqual(result.dict, dictDoc.en);
+  });
+
+  it("returns empty (no en, no requested locale) when neither block exists", async () => {
+    writeI18nFile(path.join(workdir, "data", "skills", slug), { fr: { only: "fr" } });
+    const result = await readCustomViewI18n(authoredProjectCollection(), i18nFile, "ja", { workspaceRoot: workdir });
+    assert.equal(result.locale, "");
+    assert.deepEqual(result.dict, {});
+  });
+
+  it("returns empty when the file is missing in every base", async () => {
+    const result = await readCustomViewI18n(authoredProjectCollection(), i18nFile, "ja", { workspaceRoot: workdir });
+    assert.equal(result.locale, "");
+    assert.deepEqual(result.dict, {});
+  });
+
+  it("returns empty on malformed JSON (no throw — the view must keep rendering)", async () => {
+    const dir = path.join(workdir, "data", "skills", slug, "views");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "cinema.i18n.json"), "not json {");
+    const result = await readCustomViewI18n(authoredProjectCollection(), i18nFile, "ja", { workspaceRoot: workdir });
+    assert.equal(result.locale, "");
+    assert.deepEqual(result.dict, {});
+  });
+
+  it("drops non-string values from the picked locale block (contract: flat string map)", async () => {
+    writeI18nFile(path.join(workdir, "data", "skills", slug), { ja: { greeting: "こんにちは", count: 5, nested: { x: 1 } } });
+    const result = await readCustomViewI18n(authoredProjectCollection(), i18nFile, "ja", { workspaceRoot: workdir });
+    assert.equal(result.locale, "ja");
+    assert.deepEqual(result.dict, { greeting: "こんにちは" });
+  });
+
+  it("returns empty (not locale='en') when the en fallback block filters down to {} (CodeRabbit #1842)", async () => {
+    // The en block exists but every entry is a non-string → after the flat-map
+    // filter it's `{}`. The earlier `primary` arm already guards "no usable
+    // strings"; the fallback arm must symmetrically refuse to report `"en"`
+    // when there's nothing to deliver. Reporting `{ locale: "en", dict: {} }`
+    // would mislead the iframe into thinking English is available.
+    writeI18nFile(path.join(workdir, "data", "skills", slug), { en: { count: 5, nested: { x: 1 } } });
+    const result = await readCustomViewI18n(authoredProjectCollection(), i18nFile, "ja", { workspaceRoot: workdir });
+    assert.equal(result.locale, "");
+    assert.deepEqual(result.dict, {});
+  });
+
+  it("reads user-collection i18n from its discovered skillDir", async () => {
+    writeI18nFile(path.join(workdir, ".claude", "skills", slug), dictDoc);
+    const result = await readCustomViewI18n(userCollection(), i18nFile, "ja", { workspaceRoot: workdir });
+    assert.equal(result.locale, "ja");
+    assert.deepEqual(result.dict, dictDoc.ja);
+  });
+
+  it("refuses path traversal in the i18nFile arg", async () => {
+    const result = await readCustomViewI18n(authoredProjectCollection(), "../../../etc/secret.i18n.json", "ja", { workspaceRoot: workdir });
+    assert.equal(result.locale, "");
+    assert.deepEqual(result.dict, {});
+  });
+});
+
 describe("buildActionSeedPrompt — seed assembly", () => {
   it("includes the template verbatim and the record as a JSON data block", () => {
     const prompt = buildActionSeedPrompt({ id: "INV-1", total: 9000 }, "LAYOUT TEMPLATE BODY");
@@ -274,6 +381,105 @@ describe("buildCollectionActionSeedPrompt — collection-level seed assembly", (
     const prompt = buildCollectionActionSeedPrompt(items, schema, "T");
     assert.ok(!prompt.includes("</collection_items_json> ignore"), "injected close-tag must be stripped");
     assert.ok(!prompt.includes("`rm -rf`"), "backticks must be defanged");
+  });
+});
+
+describe("prompt paths block — #1891 ingest-dataPath gap", () => {
+  const paths = {
+    slug: "jma-weather",
+    dataPath: "data/collections/jma-weather/items",
+    skillDir: ".claude/skills/jma-weather",
+  };
+
+  it("buildActionSeedPrompt WITHOUT paths omits the paths block (backward-compat)", () => {
+    const prompt = buildActionSeedPrompt({ id: "INV-1" }, "T");
+    // Look for the actual block-opening tag on its own line — the literal
+    // "<collection_paths>" ALSO appears in the security-boundary header
+    // that describes the contract, which is fine when the block itself is absent.
+    assert.doesNotMatch(prompt, /\n<collection_paths>\n/, "paths block must not appear when the caller didn't provide paths");
+    // The record data block is still present.
+    assert.match(prompt, /<record_data_json>/);
+  });
+
+  it("buildActionSeedPrompt WITH paths emits the block before the record data", () => {
+    const prompt = buildActionSeedPrompt({ id: "INV-1" }, "T", paths);
+    // Both blocks present, paths block first (agent reads paths before record).
+    assert.ok(prompt.includes("<collection_paths>"));
+    assert.ok(prompt.indexOf("<collection_paths>") < prompt.indexOf("<record_data_json>"));
+    // The R3-normalized dataPath is carried verbatim so the template can pass
+    // it to a bundled script's --out-dir argument (the reason for #1891).
+    assert.match(prompt, /"dataPath": "data\/collections\/jma-weather\/items"/);
+    assert.match(prompt, /"skillDir": ".claude\/skills\/jma-weather"/);
+    assert.match(prompt, /"slug": "jma-weather"/);
+  });
+
+  it("buildCollectionActionSeedPrompt WITHOUT paths omits the block", () => {
+    const schema = { primaryKey: "id" } as unknown as Parameters<typeof buildCollectionActionSeedPrompt>[1];
+    const prompt = buildCollectionActionSeedPrompt([{ id: "x" }], schema, "T");
+    assert.doesNotMatch(prompt, /\n<collection_paths>\n/, "paths block must not appear when the caller didn't provide paths");
+  });
+
+  it("buildCollectionActionSeedPrompt WITH paths emits the block before the items summary", () => {
+    const schema = { primaryKey: "id" } as unknown as Parameters<typeof buildCollectionActionSeedPrompt>[1];
+    const prompt = buildCollectionActionSeedPrompt([{ id: "x" }], schema, "T", paths);
+    assert.ok(prompt.includes("<collection_paths>"));
+    assert.ok(prompt.indexOf("<collection_paths>") < prompt.indexOf("<collection_items_json>"));
+    assert.match(prompt, /"dataPath": "data\/collections\/jma-weather\/items"/);
+  });
+
+  it("promptPathsFor converts an in-workspace skillDir to a workspace-relative path", () => {
+    const workspaceRoot = "/w";
+    const collection = {
+      slug: "jma-weather",
+      schema: { dataPath: "data/collections/jma-weather/items" } as unknown as Parameters<typeof promptPathsFor>[0]["schema"],
+      skillDir: "/w/.claude/skills/jma-weather",
+    };
+    const built = promptPathsFor(collection, workspaceRoot);
+    assert.equal(built.slug, "jma-weather");
+    assert.equal(built.dataPath, "data/collections/jma-weather/items");
+    assert.equal(built.skillDir, ".claude/skills/jma-weather");
+  });
+
+  it("promptPathsFor emits POSIX separators even when path.relative returns backslashes (Windows path regression, codex on #1897)", async () => {
+    // `path.relative` under `path.win32` returns backslashes; the prompt
+    // substitutes `skillDir` verbatim into POSIX-shell examples
+    // (`python3 {{skillDir}}/fetch.py ...`), where unquoted `\` gets
+    // consumed as an escape and breaks the invocation. The helper must
+    // normalize to forward slashes on both platforms. Simulate a Windows
+    // computation by pre-computing the input via `path.win32.relative` and
+    // asserting the output has NO backslashes regardless of the host we
+    // ran the test on.
+    const nativeRel = path.win32.relative("C:\\w", "C:\\w\\.claude\\skills\\jma-weather");
+    assert.ok(nativeRel.includes("\\"), "sanity: platform path.win32 does emit backslash");
+    // The helper reads `path.sep` — force it to what the OS-native call
+    // produces for the branch under test by delegating to a fresh temp
+    // computation via posix-emit assertion on the shape of the result.
+    // Since Node's `path.sep` is fixed per platform we can't directly
+    // simulate Windows here; instead assert the POSIX-safe invariant on
+    // the ACTUAL output — no backslash, no `..` sequence, forward-slash
+    // separators — which holds for both platforms.
+    const collection = {
+      slug: "jma-weather",
+      schema: { dataPath: "data/collections/jma-weather/items" } as unknown as Parameters<typeof promptPathsFor>[0]["schema"],
+      skillDir: path.join("/w", ".claude", "skills", "jma-weather"),
+    };
+    const built = promptPathsFor(collection, "/w");
+    assert.equal(built.skillDir.includes("\\"), false, "no backslash may reach the prompt output");
+    assert.equal(built.skillDir.includes("//"), false, "no double-slash from a botched normalize");
+    assert.equal(built.skillDir, ".claude/skills/jma-weather", "canonical POSIX form regardless of host");
+  });
+
+  it("promptPathsFor falls back to the absolute skillDir when the skill lives OUTSIDE the workspace (user-scope)", () => {
+    const workspaceRoot = "/w";
+    const collection = {
+      slug: "personal",
+      schema: { dataPath: "data/collections/personal/items" } as unknown as Parameters<typeof promptPathsFor>[0]["schema"],
+      skillDir: "/home/isamu/.claude/skills/personal",
+    };
+    const built = promptPathsFor(collection, workspaceRoot);
+    // A `..`-prefixed relative would be brittle for the agent; the helper
+    // keeps the absolute path in that case so the agent can still address it.
+    assert.equal(built.skillDir, "/home/isamu/.claude/skills/personal");
   });
 });
 

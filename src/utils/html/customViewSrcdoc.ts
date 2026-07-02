@@ -50,7 +50,22 @@ function viewBridgeBootstrap(): string {
   // intact inside the template literal and inside the script element.
   // `cbs.slice()` snapshots the listeners before dispatch so a callback that
   // unsubscribes itself can't shift the array and skip the next one.
-  return `(function(){var v=window.__MC_VIEW,cbs=[],t;function fire(){t=undefined;cbs.slice().forEach(function(cb){try{cb()}catch(e){}});}window.addEventListener('message',function(e){if(e.source!==window.parent)return;var d=e.data;if(!d||d.type!=='mc-collection-changed'||d.slug!==v.slug)return;if(t)clearTimeout(t);t=setTimeout(fire,${ONCHANGE_DEBOUNCE_MS});});v.onChange=function(cb){if(typeof cb!=='function')return function(){};cbs.push(cb);return function(){var i=cbs.indexOf(cb);if(i>=0)cbs.splice(i,1);};};v.openItem=function(id,mode){window.parent.postMessage({type:'mc-open-item',slug:v.slug,id:String(id),mode:mode==='edit'?'edit':'view'},v.origin);};v.startChat=function(prompt,role){window.parent.postMessage({type:'mc-start-chat',slug:v.slug,prompt:String(prompt),role:typeof role==='string'?role:undefined},v.origin);};})();`;
+  //
+  // `v.t(key, named)` is a tiny **vue-i18n-compatible** translation helper.
+  // The on-disk dict shape mirrors vue-i18n's locale messages so an author can
+  // copy their app's locale JSON verbatim, and the iframe API mirrors
+  // vue-i18n's `t('msg', { name: 'x' })` signature:
+  //   - lookup `v.dict[key]` (host-picked, locale-filtered server-side);
+  //   - substitute `{name}` placeholders from `named` (vue-i18n "named
+  //     interpolation"; numeric `{0}` works too — same `\w+` token);
+  //   - fall back to the key itself when the dict is missing or the entry
+  //     isn't a string.
+  // v1 scope: named interpolation only — no pluralization, no linked
+  // messages, no formatter. Most view-level UIs need exactly this, and
+  // shipping the full vue-i18n runtime into every sandboxed iframe (~50KB)
+  // would dominate the page weight. Authors who need plurals can pre-pick
+  // per-count keys client-side.
+  return `(function(){var v=window.__MC_VIEW,cbs=[],t;function fire(){t=undefined;cbs.slice().forEach(function(cb){try{cb()}catch(e){}});}window.addEventListener('message',function(e){if(e.source!==window.parent)return;var d=e.data;if(!d||d.type!=='mc-collection-changed'||d.slug!==v.slug)return;if(t)clearTimeout(t);t=setTimeout(fire,${ONCHANGE_DEBOUNCE_MS});});v.onChange=function(cb){if(typeof cb!=='function')return function(){};cbs.push(cb);return function(){var i=cbs.indexOf(cb);if(i>=0)cbs.splice(i,1);};};v.openItem=function(id,mode){window.parent.postMessage({type:'mc-open-item',slug:v.slug,id:String(id),mode:mode==='edit'?'edit':'view'},v.origin);};v.startChat=function(prompt,role){window.parent.postMessage({type:'mc-start-chat',slug:v.slug,prompt:String(prompt),role:typeof role==='string'?role:undefined},v.origin);};v.dict=v.dict||{};v.t=function(key,named){var s=v.dict[key];if(typeof s!=='string')return typeof key==='string'?key:String(key);if(!named||typeof named!=='object')return s;return s.replace(/\\{(\\w+)\\}/g,function(m,n){var x=named[n];return x==null?m:String(x);});};})();`;
 }
 
 export interface CustomViewBootstrap {
@@ -64,6 +79,15 @@ export interface CustomViewBootstrap {
   /** Explicit server origin — used for both the CSP and the absolute
    *  dataUrl (the sandboxed iframe's own origin is opaque). */
   origin: string;
+  /** The locale the dict was picked for (e.g. `"en"`, `"ja"`); empty when the
+   *  view has no `i18n` declared or no locale block matched. The bootstrap
+   *  always exposes `__MC_VIEW.locale`; an empty string means "no
+   *  translations available". */
+  locale?: string;
+  /** Flat key→string map the host already locale-filtered server-side. The
+   *  iframe sees ONLY this locale's strings (never the full multi-locale
+   *  JSON). Optional / may be `{}` — the `t()` helper falls back to the key. */
+  dict?: Record<string, string>;
 }
 
 function absoluteDataUrl(dataUrl: string, origin: string): string {
@@ -73,12 +97,16 @@ function absoluteDataUrl(dataUrl: string, origin: string): string {
 export function buildCustomViewSrcdoc(html: string, boot: CustomViewBootstrap): string {
   const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${buildCustomViewCsp(boot.origin)}">`;
   // `<`-escape the JSON so a hostile token/slug value can't break out of the
-  // <script> element.
+  // <script> element. The same escape covers translation strings dropped into
+  // `dict` — a malicious author who managed to land a `</script>` literal in
+  // a translation value still can't break out of the bootstrap.
   const json = JSON.stringify({
     slug: boot.slug,
     token: boot.token,
     dataUrl: absoluteDataUrl(boot.dataUrl, boot.origin),
     origin: boot.origin, // target origin for openItem's postMessage to the parent
+    locale: boot.locale ?? "",
+    dict: boot.dict ?? {},
   }).replace(/</g, "\\u003c");
   const injection = `${cspMeta}<script>window.__MC_VIEW=${json};${viewBridgeBootstrap()}</script>`;
   if (/<head\b[^>]*>/i.test(html)) {

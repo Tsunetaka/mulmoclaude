@@ -68,6 +68,9 @@ export interface SessionSummary {
   origin?: SessionOrigin;
   /** User-set bookmark flag. Persisted in the meta sidecar. */
   isBookmarked?: boolean;
+  /** Number of user turns sent to this session (server-derived from the
+   *  meta sidecar). One-shot sessions have 1; long conversations more. */
+  userQueryCount?: number;
   // Live state from the server session store (present when the
   // session has an active in-memory entry on the server).
   //

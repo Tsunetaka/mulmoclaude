@@ -248,7 +248,7 @@ async function renderPdf(fullHtml: string, format: "Letter" | "A4" = "Letter"): 
   }
 }
 
-async function renderMarpPdf(markdown: string, baseDir?: string): Promise<Buffer> {
+async function renderMarpHtml(markdown: string, baseDir?: string): Promise<{ fullHtml: string; slideWidth: number; slideHeight: number }> {
   // Shared render core (@mulmoclaude/markdown-plugin) — the MarpView
   // preview and every host's PDF export use the same Marp config + theme
   // registration + custom-size bridging, so they can't drift. Twemoji
@@ -292,6 +292,11 @@ div.marpit > svg > foreignObject > section {
                "Noto Sans CJK JP", "Noto Sans JP", sans-serif;
 }
 </style></head><body>${inlinedHtml}</body></html>`;
+  return { fullHtml, slideWidth, slideHeight };
+}
+
+async function renderMarpPdf(markdown: string, baseDir?: string): Promise<Buffer> {
+  const { fullHtml, slideWidth, slideHeight } = await renderMarpHtml(markdown, baseDir);
   const browser = await puppeteer.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -320,18 +325,34 @@ export interface RenderMarkdownPdfOptions {
   stripFrontmatter?: boolean;
 }
 
+export interface RenderMarkdownHtmlOptions {
+  markdown: string;
+  /** Render via Marp (slide deck) instead of the `marked` pipeline. */
+  marp?: boolean;
+  /** Workspace-relative source dir for resolving relative `<img>` refs. */
+  baseDir?: string;
+  stripFrontmatter?: boolean;
+}
+
+/** Markdown (or a Marp deck) → a self-contained HTML string: CSS inlined
+ *  and local images embedded as data URIs. Shared by the PDF render
+ *  (`renderMarkdownPdf`) and the zip share (`packMarkdownZip`) so the two
+ *  can never drift. */
+export async function renderMarkdownHtml(options: RenderMarkdownHtmlOptions): Promise<string> {
+  const { markdown, marp = false, baseDir, stripFrontmatter = false } = options;
+  if (marp) return (await renderMarpHtml(markdown, baseDir)).fullHtml;
+  const source = stripFrontmatter ? parseFrontmatter(markdown).body : markdown;
+  return wrapHtml(inlineImages(await marked.parse(source), { sourceDir: baseDir }), MARKDOWN_CSS);
+}
+
 /** Render markdown (or a Marp deck) to a PDF buffer. The single code
  *  path behind both `POST /api/pdf/markdown` and the markdown plugin's
  *  `exportPdf` host capability (`server/plugins/markdown-builtin.ts`),
  *  so the HTTP route and the plugin dispatch can never drift. */
 export async function renderMarkdownPdf(options: RenderMarkdownPdfOptions): Promise<Buffer> {
-  const { markdown, marp = false, baseDir, format = "Letter", stripFrontmatter = false } = options;
-  if (marp) {
-    return renderMarpPdf(markdown, baseDir);
-  }
-  const source = stripFrontmatter ? parseFrontmatter(markdown).body : markdown;
-  const html = inlineImages(await marked.parse(source), { sourceDir: baseDir });
-  return renderPdf(wrapHtml(html, MARKDOWN_CSS), format);
+  const { markdown, marp = false, baseDir, format = "Letter" } = options;
+  if (marp) return renderMarpPdf(markdown, baseDir);
+  return renderPdf(await renderMarkdownHtml(options), format);
 }
 
 function sendPdf(res: Response, buffer: Buffer, filename: string): void {

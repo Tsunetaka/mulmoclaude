@@ -150,6 +150,29 @@ describe("enrichItems — derived across refs", () => {
     assert.equal(withoutProfile?.owner, null);
   });
 
+  it("resolves a per-record embed (`idField`) to a different target per row", async () => {
+    // Profile is non-singleton here (multiple issuers), and the embed
+    // points at whichever one the row's `ownerId` names.
+    writeSkill("profile", { ...profileSchema, singleton: undefined });
+    writeSkill("portfolio", {
+      ...portfolioSchema,
+      fields: {
+        ...portfolioSchema.fields,
+        ownerId: { type: "ref", label: "Owner", to: "profile" },
+        owner: { type: "embed", label: "Owner", to: "profile", idField: "ownerId" },
+      },
+    });
+    writeRecord("data/profile/items", "acme", { id: "acme", name: "Acme LLC" });
+    const enriched = await enrichPortfolio([
+      { id: "h1", ownerId: "me" },
+      { id: "h2", ownerId: "acme" },
+      { id: "h3" }, // no ownerId → no embed
+    ]);
+    assert.deepEqual(enriched[0]?.owner, { id: "me", name: "Satoshi" });
+    assert.deepEqual(enriched[1]?.owner, { id: "acme", name: "Acme LLC" });
+    assert.equal(enriched[2]?.owner, null);
+  });
+
   it("does not mutate the input records", async () => {
     const input = { id: "h1", ticker: "aapl", shares: 10 };
     await enrichPortfolio([input]);

@@ -1,5 +1,5 @@
 import type { PluginEntry, PluginRegistration } from "../../tools/types";
-import type { WikiGraph } from "../../lib/wiki-page/graph";
+import type { WikiGraph } from "@mulmoclaude/core/wiki";
 import { wrapWithScope } from "../scope";
 import View from "./View.vue";
 import Preview from "./Preview.vue";

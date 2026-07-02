@@ -22,6 +22,8 @@ const ja: Messages = {
   marpSplitEnter: "ソースを並べて編集",
   marpSplitExit: "ソースエディタを閉じる",
   marpSplitEditorLabel: "ソース",
+  mermaidLoadFailed: "⚠ Mermaid の読み込みに失敗しました: {error}",
+  mermaidRenderFailed: "⚠ Mermaid の描画に失敗しました: {error}",
 };
 
 export default ja;

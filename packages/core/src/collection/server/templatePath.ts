@@ -49,3 +49,15 @@ const VIEWS_PREFIX = "views/";
 export function isSafeCustomViewPath(value: string): boolean {
   return value.startsWith(VIEWS_PREFIX) && /\.html$/.test(value) && isSafeTemplatePath(value);
 }
+
+/**
+ * A custom-view `i18n` value: the JSON dictionary file authors ship next to
+ * their `views/<id>.html`. Constrained to `views/<name>.i18n.json` so the
+ * field can only point at a translation file co-located with the view it
+ * translates — the same `views/` containment the HTML reader uses. The
+ * `.i18n.json` suffix (vs plain `.json`) makes the file's purpose grep-able
+ * for both authors and tooling.
+ */
+export function isSafeCustomViewI18nPath(value: string): boolean {
+  return value.startsWith(VIEWS_PREFIX) && /\.i18n\.json$/.test(value) && isSafeTemplatePath(value);
+}

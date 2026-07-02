@@ -22,6 +22,8 @@ const zh: Messages = {
   marpSplitEnter: "并排编辑源代码",
   marpSplitExit: "关闭源代码编辑器",
   marpSplitEditorLabel: "源代码",
+  mermaidLoadFailed: "⚠ Mermaid 加载失败: {error}",
+  mermaidRenderFailed: "⚠ Mermaid 渲染失败: {error}",
 };
 
 export default zh;

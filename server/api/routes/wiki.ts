@@ -1,10 +1,7 @@
 import { Router, Request, Response } from "express";
 import path from "path";
-import { WORKSPACE_PATHS } from "../../workspace/paths.js";
-import { readTextSafeSync, readTextSafe } from "../../utils/files/safe.js";
+import { workspacePath } from "../../workspace/paths.js";
 import { writeWikiPage } from "../../workspace/wiki-pages/io.js";
-import { getPageIndex } from "./wiki/pageIndex.js";
-import { parseFrontmatterTags } from "./wiki/frontmatter.js";
 import { badRequest, notFound } from "../../utils/httpError.js";
 import { getOptionalStringQuery } from "../../utils/request.js";
 import { API_ROUTES } from "../../../src/config/apiRoutes.js";
@@ -15,115 +12,28 @@ import { previewSnippet } from "../../utils/logPreview.js";
 // different name avoids the no-shadow clash without renaming the
 // long-standing local.
 import { errorMessage as formatError } from "../../utils/errors.js";
-// All wiki-text helpers (slug rules, index parsing, lint rules)
-// live in `src/lib/wiki-page/` as pure modules so the frontend can
-// share them without pulling in server-only deps. This route is
-// just the HTTP shell on top of those.
-import { parseWikiLink } from "../../../src/lib/wiki-page/link.js";
-import { wikiSlugify } from "../../../src/lib/wiki-page/slug.js";
-import { type WikiPageEntry, parseIndexEntries } from "../../../src/lib/wiki-page/index-parse.js";
-import { findBrokenLinksInPage, findMissingFiles, findOrphanPages, findTagDrift, formatLintReport } from "../../../src/lib/wiki-page/lint.js";
-import { buildWikiGraph, type WikiGraph } from "../../../src/lib/wiki-page/graph.js";
+// Pure wiki-text helpers (slug rules, lint formatting, types) live in
+// `@mulmoclaude/core/wiki`; the workspace-injected fs read-engine
+// (resolve / index / page / log / graph / lint) lives in
+// `@mulmoclaude/core/wiki/server`, shared with MulmoTerminal. This
+// route is the thin HTTP shell that shapes their output into the
+// canvas response envelope.
+import { wikiSlugify, formatLintReport, type WikiPageEntry, type WikiGraph } from "@mulmoclaude/core/wiki";
+import { resolvePagePath, readWikiIndex, readWikiPage, readWikiLog, loadWikiGraph, collectLintIssues } from "@mulmoclaude/core/wiki/server";
 
 const router = Router();
 
-const pagesDir = () => WORKSPACE_PATHS.wikiPages;
-const indexFile = () => WORKSPACE_PATHS.wikiIndex;
-const logFile = () => WORKSPACE_PATHS.wikiLog;
+// Re-exports kept here for legacy callers that import wiki-text
+// helpers via this route module (e.g. tests in
+// `test/routes/test_wikiHelpers.ts`).
+export { wikiSlugify, buildTableColumnMap, extractHashTags, extractSlugFromBulletHref, parseIndexEntries, parseTagsCell } from "@mulmoclaude/core/wiki";
+export type { WikiPageEntry } from "@mulmoclaude/core/wiki";
+export { findBrokenLinksInPage, findMissingFiles, findOrphanPages, findTagDrift, formatLintReport } from "@mulmoclaude/core/wiki";
 
-function readFileOrEmpty(absPath: string): string {
-  return readTextSafeSync(absPath) ?? "";
-}
-
-// Wiki-text helpers (slugify, index parsing, lint rules) now live
-// under `src/lib/wiki-page/` as pure modules — see imports above.
-// Re-exports kept here for legacy callers that import via this
-// route module (e.g. tests in `test/routes/test_wikiHelpers.ts`).
-export { wikiSlugify } from "../../../src/lib/wiki-page/slug.js";
-export type { WikiPageEntry } from "../../../src/lib/wiki-page/index-parse.js";
-export { buildTableColumnMap, extractHashTags, extractSlugFromBulletHref, parseIndexEntries, parseTagsCell } from "../../../src/lib/wiki-page/index-parse.js";
-export { findBrokenLinksInPage, findMissingFiles, findOrphanPages, findTagDrift, formatLintReport } from "../../../src/lib/wiki-page/lint.js";
-
-// Resolve a page name to an absolute `.md` path using the in-memory
-// page index (see ./wiki/pageIndex.ts). Index is kept fresh via
-// pagesDir mtime, so zero readdir cost on cache hit.
-//
-// `pageName` may carry the `[[target|display]]` form on legacy
-// codepaths (e.g. an old chat-history entry that pre-dates the
-// renderer fix). `parseWikiLink` strips the display half so the
-// lookup uses just the target — same parser the renderer + lint
-// agree on, which is the whole point of the #1297 refactor.
-// Below this length the fuzzy `includes` step skips altogether.
-// CJK / emoji-only / very-short page names get slugified down to a
-// short noise tail (e.g. "日本語タイトル-chromium-{nonce}" →
-// "-chromium-{nonce}"), and that noise will partial-match almost
-// any page that happens to share the suffix. Skipping fuzzy for
-// these slugs avoids silent miss-resolves; the index.md title-match
-// fallback below still handles the legitimate non-ASCII case (#1194).
-const MIN_FUZZY_SLUG_LEN = 6;
-
-async function resolvePagePath(pageName: string): Promise<string | null> {
-  const dir = pagesDir();
-  const { slugs } = await getPageIndex(dir);
-  if (slugs.size === 0) return null;
-
-  const { target } = parseWikiLink(pageName);
-  const slug = wikiSlugify(target);
-
-  if (slug.length > 0) {
-    const exact = slugs.get(slug);
-    if (exact) return path.join(dir, exact);
-
-    const fuzzy = pickFuzzyMatch(slug, slugs);
-    if (fuzzy) return path.join(dir, fuzzy);
-  }
-
-  // Non-ASCII page names (e.g. Japanese [[wiki links]]) produce empty
-  // slugs after slugification. Fall back to matching by title in the
-  // wiki index so the link resolves to its page file.
-  const indexContent = readFileOrEmpty(indexFile());
-  const entries = parseIndexEntries(indexContent);
-  const titleMatch = entries.find((entry) => entry.title === target);
-  if (titleMatch) {
-    const file = slugs.get(titleMatch.slug);
-    if (file) return path.join(dir, file);
-  }
-
-  return null;
-}
-
-// Walk every indexed slug looking for an `includes`-style match.
-// Returns the single best candidate, or null when the slug is too
-// short to be meaningful OR multiple candidates tie at the top score
-// (ambiguous — leave the resolution to the caller's title-match
-// fallback rather than silently picking iteration-order-first).
-//
-// Score = min(slug.length, key.length) / max(slug.length, key.length).
-// A perfect match where both strings are identical scores 1.0 (but
-// that path is taken by the exact `slugs.get` above, never reaches
-// here). Otherwise the highest-scoring partial match wins, and the
-// score is decoupled from Map iteration order (= filesystem readdir
-// order) so the resolver is deterministic across hosts.
-export function pickFuzzyMatch(slug: string, slugs: ReadonlyMap<string, string>): string | null {
-  if (slug.length < MIN_FUZZY_SLUG_LEN) return null;
-  let bestFile: string | null = null;
-  let bestScore = 0;
-  let bestIsTied = false;
-  for (const [key, file] of slugs) {
-    if (!slug.includes(key) && !key.includes(slug)) continue;
-    const shorter = Math.min(slug.length, key.length);
-    const longer = Math.max(slug.length, key.length);
-    const score = shorter / longer;
-    if (score > bestScore) {
-      bestScore = score;
-      bestFile = file;
-      bestIsTied = false;
-    } else if (score === bestScore) {
-      bestIsTied = true;
-    }
-  }
-  return bestIsTied ? null : bestFile;
-}
+// `resolvePagePath` / `pickFuzzyMatch` now live in
+// `@mulmoclaude/core/wiki/server` (shared with MulmoTerminal). This
+// route resolves pages through the imported `readWikiPage` /
+// `resolvePagePath`.
 
 router.get(API_ROUTES.wiki.base, async (req: Request, res: Response<WikiResponse | ErrorResponse>) => {
   const slug = getOptionalStringQuery(req, "slug");
@@ -144,8 +54,7 @@ router.get(API_ROUTES.wiki.base, async (req: Request, res: Response<WikiResponse
     return;
   }
   log.info("wiki", "GET index: start");
-  const content = readFileOrEmpty(indexFile());
-  const pageEntries = parseIndexEntries(content);
+  const { content, entries: pageEntries } = readWikiIndex(workspacePath);
   log.info("wiki", "GET index: ok", { pages: pageEntries.length, bytes: content.length });
   res.json({
     data: { action: "index", title: "Wiki Index", content, pageEntries },
@@ -187,8 +96,7 @@ interface ErrorResponse {
 }
 
 function buildIndexResponse(action: string): WikiResponse {
-  const content = readFileOrEmpty(indexFile());
-  const pageEntries = parseIndexEntries(content);
+  const { content, entries: pageEntries } = readWikiIndex(workspacePath);
   return {
     data: { action, title: "Wiki Index", content, pageEntries },
     message: content ? `Wiki index — ${pageEntries.length} page(s)` : "Wiki index is empty.",
@@ -261,13 +169,12 @@ export function toPageResponse(args: { action: string; pageName: string; filePat
 }
 
 async function buildPageResponse(action: string, pageName: string): Promise<WikiResponse> {
-  const filePath = await resolvePagePath(pageName);
-  const content = filePath ? readFileOrEmpty(filePath) : "";
+  const { filePath, content } = await readWikiPage(workspacePath, pageName);
   return toPageResponse({ action, pageName, filePath, content });
 }
 
 function buildLogResponse(action: string): WikiResponse {
-  const content = readFileOrEmpty(logFile());
+  const content = readWikiLog(workspacePath);
   return {
     data: { action, title: "Activity Log", content },
     message: content ? "Wiki activity log" : "Activity log is empty.",
@@ -277,67 +184,12 @@ function buildLogResponse(action: string): WikiResponse {
   };
 }
 
-// Pure lint helpers (findOrphanPages, findMissingFiles,
-// findBrokenLinksInPage, findTagDrift, formatLintReport) now live
-// in `src/lib/wiki-page/lint.ts` and are re-exported above. The
-// route below is the thin filesystem shell around them.
-
-async function collectLintIssues(): Promise<string[]> {
-  const dir = pagesDir();
-  const { slugs } = await getPageIndex(dir);
-  if (slugs.size === 0) {
-    return ["- Wiki `pages/` directory does not exist yet. Start ingesting sources."];
-  }
-  const indexContent = readFileOrEmpty(indexFile());
-  const pageEntries = parseIndexEntries(indexContent);
-  const indexedSlugs = new Set(pageEntries.map((entry) => entry.slug));
-  const pageFiles = [...slugs.values()];
-  const fileSlugs = new Set(slugs.keys());
-
-  const issues: string[] = [];
-  issues.push(...findOrphanPages(fileSlugs, indexedSlugs));
-  issues.push(...findMissingFiles(pageEntries, fileSlugs));
-  // Parallel read: N small markdown files, ~50 KB each. Bounded by
-  // the number of wiki pages, not by CPU.
-  const contents = await Promise.all(
-    pageFiles.map(async (fileName) => {
-      const content = await readTextSafe(path.join(dir, fileName));
-      return content ?? "";
-    }),
-  );
-  const frontmatterTagsBySlug = new Map<string, string[]>();
-  for (let i = 0; i < pageFiles.length; i++) {
-    issues.push(...findBrokenLinksInPage(pageFiles[i], contents[i], fileSlugs));
-    // Lowercase the map key so a `MyPage.md` filename still matches
-    // an `entry.slug` of `mypage` produced by `wikiSlugify` on the
-    // wiki-link parser path. `findTagDrift` lowercases the lookup
-    // side to match.
-    const slug = pageFiles[i].replace(/\.md$/i, "").toLowerCase();
-    frontmatterTagsBySlug.set(slug, parseFrontmatterTags(contents[i]));
-  }
-  issues.push(...findTagDrift(pageEntries, frontmatterTagsBySlug));
-  return issues;
-}
-
-// Read every page + the index and build the page→page link graph
-// (#wiki-backlinks-graph). Same parallel-read shape as
-// `collectLintIssues` — the link resolution is shared with lint via
-// the pure `buildWikiGraph` helper. No cache: the `graph` action is
-// explicit (user opens the Graph tab / a page's backlinks), and a
-// page-content edit doesn't advance the pagesDir mtime that the page
-// index caches on, so a content-keyed cache would go stale silently.
-async function loadWikiGraph(): Promise<WikiGraph> {
-  const dir = pagesDir();
-  const { slugs } = await getPageIndex(dir);
-  const fileEntries = [...slugs.entries()];
-  const contents = await Promise.all(fileEntries.map(async ([, fileName]) => (await readTextSafe(path.join(dir, fileName))) ?? ""));
-  const pages = fileEntries.map(([slug], i) => ({ slug, content: contents[i] }));
-  const indexEntries = parseIndexEntries(readFileOrEmpty(indexFile()));
-  return buildWikiGraph(pages, indexEntries);
-}
+// `collectLintIssues` and `loadWikiGraph` (the read-all-pages loops
+// over the pure lint rules / `buildWikiGraph`) now live in
+// `@mulmoclaude/core/wiki/server`, shared with MulmoTerminal.
 
 async function buildGraphResponse(action: string): Promise<WikiResponse> {
-  const graph = await loadWikiGraph();
+  const graph = await loadWikiGraph(workspacePath);
   log.info("wiki", "POST graph: ok", { nodes: graph.nodes.length, edges: graph.edges.length });
   return {
     data: { action, title: "Wiki Graph", content: "", graph },
@@ -353,7 +205,7 @@ async function buildGraphResponse(action: string): Promise<WikiResponse> {
 type SaveOutcome = { ok: true; absPath: string } | { ok: false; reason: "not-found" };
 
 async function saveExistingPage(pageName: string, content: string): Promise<SaveOutcome> {
-  const absPath = await resolvePagePath(pageName);
+  const absPath = await resolvePagePath(workspacePath, pageName);
   if (!absPath) return { ok: false, reason: "not-found" };
   // Funnel through the wiki-page write helper. Atomic write is
   // guaranteed inside; the helper also routes the (old, new) pair
@@ -400,7 +252,7 @@ async function handleSaveAction(
 }
 
 async function buildLintReportResponse(action: string): Promise<WikiResponse> {
-  const issues = await collectLintIssues();
+  const issues = await collectLintIssues(workspacePath);
   const report = formatLintReport(issues);
   const healthy = issues.length === 0;
   return {

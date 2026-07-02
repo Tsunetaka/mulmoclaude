@@ -121,7 +121,7 @@
                cannot bind @click directly on each `<input>` because
                v-html bypasses Vue's template compiler. -->
           <!-- eslint-disable-next-line vue/no-v-html -- marked.parse output of app-owned markdown content; trusted in-process render -->
-          <div class="markdown-content prose prose-slate max-w-none" @click="onMarkdownClick" v-html="renderedHtml"></div>
+          <div ref="markdownContainerRef" class="markdown-content prose prose-slate max-w-none" @click="onMarkdownClick" v-html="renderedHtml"></div>
         </div>
       </div>
 
@@ -154,6 +154,8 @@ import type { ToolResult } from "gui-chat-protocol";
 import { isFilePath, type MarkdownToolData } from "./definition";
 import { rewriteMarkdownImageRefs } from "../../utils/image/rewriteMarkdownImageRefs";
 import { findTaskLines, makeTasksInteractive, toggleTaskAt } from "../../utils/markdown/taskList";
+import { mermaidExtension } from "../../utils/markdown/mermaidExtension";
+import { useMermaidRenderer } from "../../utils/markdown/useMermaid";
 import { usePdfExport } from "./usePdfExport";
 import { handleExternalLinkClick } from "../../utils/dom/externalLink";
 import { useClipboardCopy } from "../../composables/useClipboardCopy";
@@ -163,6 +165,14 @@ import { isMarpDocument } from "../../utils/markdown/marpDetect";
 import { useT } from "../../lang";
 import MarpView from "./MarpView.vue";
 import MarpSplitEditor from "./MarpSplitEditor.vue";
+
+// Register the mermaid block extension once at module load. `marked`
+// in this plugin is a bundled copy (not the host's global instance),
+// so `.use()` is a plugin-local side effect — safe to call at import
+// time, but idempotent-ish: registering the same extension twice
+// would double-tokenise; module-level call fires exactly once per
+// bundle load.
+marked.use(mermaidExtension);
 
 const t = useT();
 const { dispatch } = useRuntime();
@@ -366,6 +376,9 @@ const renderedHtml = computed(() => {
   // even though clicks there only update local state.
   return makeTasksInteractive(marked(withImages) as string);
 });
+
+const markdownContainerRef = ref<HTMLElement | null>(null);
+useMermaidRenderer(markdownContainerRef, renderedHtml);
 
 // Watch for scroll requests from viewState
 watch(

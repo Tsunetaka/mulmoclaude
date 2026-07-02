@@ -29,6 +29,7 @@ export {
   type CollectionConfirmOptions,
   type CollectionViewToken,
   type CollectionViewHtmlResult,
+  type CollectionViewI18nResult,
   type CollectionViewSrcdocBoot,
   type CollectionActionResult,
   type CollectionRefreshResult,

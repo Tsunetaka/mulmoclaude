@@ -3,6 +3,9 @@ import type { Messages } from "./messages";
 const ko: Messages = {
   saveAsPdf: "PDF 로 저장 (인쇄 대화 상자 열기)",
   pdf: "PDF",
+  download: "ZIP",
+  downloadZip: "자체 포함 zip으로 다운로드(에셋 포함)",
+  downloadError: (error) => `⚠ 다운로드 실패: ${error}`,
   untitled: "HTML 페이지",
   editSource: "HTML 소스 편집",
   cancel: "취소",

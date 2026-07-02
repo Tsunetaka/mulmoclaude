@@ -33,11 +33,13 @@ type ResolveRoutes<R extends Readonly<Record<string, RouteSpec>>> = {
   readonly [K in keyof R]: ResolvedRoute;
 };
 type PluginApiRoutesMap<T extends BuiltInPluginMetas> = {
-  readonly [M in T[number] as M extends { readonly apiRoutes: Readonly<Record<string, RouteSpec>> }
-    ? M extends { readonly apiNamespace: infer K extends string }
-      ? K
-      : M["toolName"]
-    : never]: M extends { readonly apiRoutes: infer R extends Readonly<Record<string, RouteSpec>> } ? ResolveRoutes<R> : never;
+  readonly [
+    M in T[number] as M extends { readonly apiRoutes: Readonly<Record<string, RouteSpec>> }
+      ? M extends { readonly apiNamespace: infer K extends string }
+        ? K
+        : M["toolName"]
+      : never
+  ]: M extends { readonly apiRoutes: infer R extends Readonly<Record<string, RouteSpec>> } ? ResolveRoutes<R> : never;
 };
 
 /** Resolve every plugin route into a `ResolvedRoute` keyed by the
@@ -136,6 +138,25 @@ const HOST_API_ROUTES = {
   // same route now — image.upload remains for canvas drawings.
   attachments: {
     upload: "/api/attachments",
+  },
+
+  // Sharing: pack an HTML artifact + its referenced local assets into a
+  // self-contained zip (index.html + assets/), streamed as a download.
+  // `packMarkdown` renders markdown / a wiki page to a self-contained
+  // HTML (images inlined) and zips that.
+  share: {
+    pack: "/api/share/pack",
+    packMarkdown: "/api/share/pack-markdown",
+  },
+
+  // Remote host over Firestore (phase 1). The server signs in to Firebase as
+  // the user (connect, body carries a browser-minted Google idToken), runs the
+  // command-loop + presence heartbeat, and exposes its running state. See
+  // plans/feat-remote-host-firestore-list-collections.md.
+  remoteHost: {
+    connect: "/api/remote-host/connect",
+    disconnect: "/api/remote-host/disconnect",
+    status: "/api/remote-host/status",
   },
 
   mcpTools: {
@@ -272,6 +293,14 @@ const HOST_API_ROUTES = {
     /** GET ?id=<viewId> → the custom view's HTML file (global-bearer auth),
      *  read from data/skills/:slug/views/. The parent renders it sandboxed. */
     viewFile: "/api/collections/:slug/view-file",
+    /** GET ?id=<viewId>&locale=<tag> → translation dict for one custom view
+     *  (global-bearer auth) → { locale, dict }. `dict` is the host-picked
+     *  flat map for the requested locale (fallback `"en"`, else `{}`); the
+     *  host never streams other locales' strings. Empty dict + `locale: ""`
+     *  when the view declares no `i18n` file or the file is missing /
+     *  malformed — the view keeps working via `__MC_VIEW.t()`'s key
+     *  fallback. */
+    viewI18n: "/api/collections/:slug/view-i18n",
     /** POST → mint a slug- and capability-scoped token for a custom view
      *  (global-bearer auth) → { token, exp, dataUrl, capabilities }. */
     viewToken: "/api/collections/:slug/view-token",
@@ -413,9 +442,7 @@ const HOST_API_ROUTES = {
 // `defineHostAggregate` is runtime-generic; the cast on the merged
 // result narrows it back to the literal-preserving shape above.
 type ApiRoutesAggregateValue =
-  | (typeof HOST_API_ROUTES)[keyof typeof HOST_API_ROUTES]
-  | Readonly<Record<string, string>>
-  | Readonly<Record<string, ResolvedRoute>>;
+  (typeof HOST_API_ROUTES)[keyof typeof HOST_API_ROUTES] | Readonly<Record<string, string>> | Readonly<Record<string, ResolvedRoute>>;
 
 const API_ROUTES_AGGREGATE = defineHostAggregate<ApiRoutesAggregateValue>(BUILT_IN_PLUGIN_METAS, {
   label: "API_ROUTES",

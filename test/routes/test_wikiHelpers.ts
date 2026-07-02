@@ -16,7 +16,7 @@ import {
   wikiSlugify,
   type WikiPageEntry,
 } from "../../server/api/routes/wiki.js";
-import { parseFrontmatterTags } from "../../server/api/routes/wiki/frontmatter.js";
+import { parseFrontmatterTags } from "@mulmoclaude/core/wiki/server";
 
 describe("wikiSlugify", () => {
   it("lowercases input", () => {

@@ -8,7 +8,7 @@
 //
 // Path safety: both `:slug` and `:stamp` are validated *before*
 // they are joined with the workspace root. The slug check is the
-// shared `isSafeSlug` from `src/lib/wiki-page/slug.ts`; the stamp
+// shared `isSafeSlug` from `@mulmoclaude/core/wiki`; the stamp
 // check is the `FILENAME_RE` shape exposed via `isSafeStamp`.
 
 import { Router, type Request, type Response } from "express";
@@ -25,7 +25,7 @@ import { workspacePath } from "../../../workspace/workspace.js";
 import { pushToolResult } from "../../../events/session-store/index.js";
 import { log } from "../../../system/logger/index.js";
 import { errorMessage } from "../../../utils/errors.js";
-import { isSafeSlug } from "../../../../src/lib/wiki-page/slug.js";
+import { isSafeSlug } from "@mulmoclaude/core/wiki";
 
 const router = Router();
 

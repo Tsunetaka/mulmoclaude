@@ -26,10 +26,10 @@
     "test": "tsx --test test/test_*.ts"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.1.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "vite": "^8.1.0",
+    "vite": "^8.1.2",
     "vite-plugin-dts": "^5.0.3"
   },
   "license": "MIT"

@@ -23,7 +23,7 @@ test.describe("LockStatusPopup", () => {
     // them in sync when adding / removing sample queries.
     const queries = page.getByTestId("sandbox-test-query");
     await expect(queries.first()).toBeVisible();
-    expect(await queries.count()).toBe(5);
+    await expect(queries).toHaveCount(5);
   });
 
   test("clicking a test query closes the popup", async ({ page }) => {

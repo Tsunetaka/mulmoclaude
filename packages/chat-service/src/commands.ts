@@ -263,7 +263,12 @@ export function createCommandHandler(opts: {
         };
       }
     }
-    const updated = await connectSession(transportId, chatState.externalChatId, target.id);
+    // Pass `target.roleId` so the persisted state's role tracks the session
+    // we just repointed at. Without this, `connectSession` would swap the
+    // sessionId but leave the previous role in place, and the next relay's
+    // `startChat` would run the resumed session under the wrong role
+    // (issue #1888).
+    const updated = await connectSession(transportId, chatState.externalChatId, target.id, target.roleId);
     if (!updated) {
       return { reply: "Failed to switch session." };
     }

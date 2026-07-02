@@ -753,8 +753,7 @@ router.get(API_ROUTES.files.content, (req: Request<object, unknown, unknown, Pat
 });
 
 type PutContentValidation =
-  | { ok: true; relPath: string; content: string; bytes: number }
-  | { ok: false; logMsg: string; logExtra?: Record<string, unknown>; message: string };
+  { ok: true; relPath: string; content: string; bytes: number } | { ok: false; logMsg: string; logExtra?: Record<string, unknown>; message: string };
 
 // Runtime-shape gate for PUT /api/files/content's body. Returns either
 // the narrowed inputs + their byte length (computed once and reused

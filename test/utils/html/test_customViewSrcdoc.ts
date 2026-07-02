@@ -106,4 +106,39 @@ describe("buildCustomViewSrcdoc", () => {
     assert.ok(body.length > 0);
     assert.ok(!body.includes("<"), "inlined bootstrap must not contain a raw '<'");
   });
+
+  describe("i18n injection (vue-i18n-shaped dict + t() helper)", () => {
+    it("emits __MC_VIEW.locale + __MC_VIEW.dict when the boot carries them", () => {
+      const out = buildCustomViewSrcdoc("<head></head>", { ...boot, locale: "ja", dict: { hello: "こんにちは {name}", next: "次へ" } });
+      assert.match(out, /"locale":"ja"/);
+      assert.match(out, /"dict":\{"hello":"こんにちは \{name\}","next":"次へ"\}/);
+    });
+
+    it("falls back to empty contract when the boot omits locale + dict", () => {
+      const out = buildCustomViewSrcdoc("<head></head>", boot);
+      // Empty `locale` + `{}` dict is the documented "no translations" contract;
+      // the iframe-side `t()` then echoes the key.
+      assert.match(out, /"locale":""/);
+      assert.match(out, /"dict":\{\}/);
+    });
+
+    it("installs a vue-i18n-shaped t(key, named?) helper alongside the existing bridge", () => {
+      const out = buildCustomViewSrcdoc("<head></head>", boot);
+      assert.match(out, /v\.t=function/);
+      // Named interpolation: {paramName} → named[paramName]
+      assert.match(out, /\\\{\(\\w\+\)\\\}/);
+    });
+
+    it("escapes < in dict values so a hostile translation can't break out of the bootstrap <script>", () => {
+      const out = buildCustomViewSrcdoc("<head></head>", { ...boot, dict: { evil: "</script><img onerror=alert(1)>" } });
+      // The defence escapes ONLY `<` (to `<`); a leftover `>` from the
+      // hostile string is fine because what closes a <script> tag is `</`
+      // (an open angle + slash), which we've broken into `</`. Assert
+      // both halves: no extra `</script>` parser would see, AND the literal
+      // appears in its escaped form inside the JSON.
+      const scripts = out.match(/<\/script>/gi);
+      assert.equal(scripts?.length, 1, "only the bootstrap's own closing </script> may appear");
+      assert.match(out, /\\u003c\/script>/);
+    });
+  });
 });

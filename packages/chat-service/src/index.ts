@@ -20,7 +20,7 @@ import type http from "http";
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { CHAT_SERVICE_ROUTES } from "@mulmobridge/protocol";
-import { createChatStateStore } from "./chat-state.js";
+import { createChatStateStore, isSafeSessionId } from "./chat-state.js";
 import { createCommandHandler } from "./commands.js";
 import { createRelay } from "./relay.js";
 import type { RelayFn } from "./relay.js";
@@ -148,8 +148,42 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       badRequest(res, "chatSessionId is required");
       return;
     }
+    // Reject hostile / malformed sessionIds at the entry so they can't be
+    // persisted into transport state. Without this gate a caller could POST
+    // `{"chatSessionId": "../../etc/x"}`, the value would land in the state
+    // file, and a later `/history` command would read it back and hand it to
+    // `readSessionJsonl` — whose backing reader is documented as "internal
+    // fixed paths only, no `..` traversal guard". Also defended inside
+    // `connectSession` for defense-in-depth (issue #1896 follow-up to #1895).
+    if (!isSafeSessionId(chatSessionId)) {
+      badRequest(res, "chatSessionId has an unsafe format");
+      return;
+    }
 
-    const updated = await store.connectSession(transportId, externalChatId, chatSessionId);
+    // Resolve the target session's role BEFORE calling connectSession so the
+    // persisted state's `roleId` tracks the new session's role — otherwise the
+    // next relay's `startChat` would resume the new session under the previous
+    // role (#1888 / #1894). Three fallback paths all treated as "preserve
+    // existing role":
+    //   1. No `getSessionRole` wired at all (backward compat for older hosts).
+    //   2. Resolver returns null (unknown / corrupt session metadata).
+    //   3. Resolver throws (host bug / timeout / IO error) — catch here so
+    //      the route can never bubble the failure as a 500 to the API caller
+    //      (codex review on #1895; the MulmoClaude host's resolver is
+    //      hardened but the DI contract doesn't require hosts to be).
+    let resolvedRole: string | null = null;
+    if (deps.getSessionRole) {
+      try {
+        resolvedRole = await deps.getSessionRole(chatSessionId);
+      } catch (err) {
+        logger.warn("chat-service", "getSessionRole threw; falling back to preserving existing role", {
+          chatSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        resolvedRole = null;
+      }
+    }
+    const updated = await store.connectSession(transportId, externalChatId, chatSessionId, resolvedRole ?? undefined);
     if (!updated) {
       notFound(res, "No chat state found for this transport");
       return;

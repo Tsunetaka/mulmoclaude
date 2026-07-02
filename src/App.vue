@@ -366,7 +366,7 @@ import SlideEditorRibbon from "./components/SlideEditorRibbon.vue";
 import MulmoPointPopup from "./components/MulmoPointPopup.vue";
 // Octopus mascot — shown in the header while the slide editor is active
 import takoLogoUrl from "./assets/mulmo_tako.png";
-import { buildWikiRouteParams } from "./plugins/wiki/route";
+import { buildWikiRouteParams } from "@mulmoclaude/core/wiki";
 import { CollectionView, CollectionsIndexView, FeedsView } from "@mulmoclaude/collection-plugin/vue";
 import PluginScopedRoot from "./components/PluginScopedRoot.vue";
 import SettingsModal from "./components/SettingsModal.vue";

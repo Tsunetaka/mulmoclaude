@@ -18,7 +18,7 @@ const ACCOUNTS: Account[] = [
 
 describe("bucketize — month granularity", () => {
   it("returns one bucket per calendar month, ignoring fiscalYearEnd", () => {
-    const buckets = bucketize({ from: "2025-02-15", to: "2025-04-10", granularity: "month", fiscalYearEnd: "Q4" });
+    const buckets = bucketize({ from: "2025-02-15", to: "2025-04-10", granularity: "month", fiscalYearEnd: 12 });
     assert.deepEqual(
       buckets.map((bucket) => bucket.label),
       ["2025-02", "2025-03", "2025-04"],
@@ -31,12 +31,12 @@ describe("bucketize — month granularity", () => {
   });
 
   it("handles February in a leap year", () => {
-    const [feb] = bucketize({ from: "2024-02-15", to: "2024-02-15", granularity: "month", fiscalYearEnd: "Q4" });
+    const [feb] = bucketize({ from: "2024-02-15", to: "2024-02-15", granularity: "month", fiscalYearEnd: 12 });
     assert.equal(feb.to, "2024-02-29");
   });
 
   it("crosses calendar-year boundaries cleanly", () => {
-    const buckets = bucketize({ from: "2024-12-15", to: "2025-01-05", granularity: "month", fiscalYearEnd: "Q4" });
+    const buckets = bucketize({ from: "2024-12-15", to: "2025-01-05", granularity: "month", fiscalYearEnd: 12 });
     assert.deepEqual(
       buckets.map((bucket) => bucket.label),
       ["2024-12", "2025-01"],
@@ -44,19 +44,19 @@ describe("bucketize — month granularity", () => {
   });
 
   it("returns a single bucket when from and to land in the same month", () => {
-    const buckets = bucketize({ from: "2025-06-02", to: "2025-06-29", granularity: "month", fiscalYearEnd: "Q4" });
+    const buckets = bucketize({ from: "2025-06-02", to: "2025-06-29", granularity: "month", fiscalYearEnd: 12 });
     assert.equal(buckets.length, 1);
     assert.equal(buckets[0].label, "2025-06");
   });
 
   it("returns [] when from > to", () => {
-    assert.deepEqual(bucketize({ from: "2025-04-01", to: "2025-03-31", granularity: "month", fiscalYearEnd: "Q4" }), []);
+    assert.deepEqual(bucketize({ from: "2025-04-01", to: "2025-03-31", granularity: "month", fiscalYearEnd: 12 }), []);
   });
 });
 
 describe("bucketize — quarter granularity, fiscalYearEnd shifts", () => {
   it("Q4 books align with calendar quarters and label by calendar year", () => {
-    const buckets = bucketize({ from: "2025-01-01", to: "2025-12-31", granularity: "quarter", fiscalYearEnd: "Q4" });
+    const buckets = bucketize({ from: "2025-01-01", to: "2025-12-31", granularity: "quarter", fiscalYearEnd: 12 });
     assert.deepEqual(
       buckets.map((bucket) => ({ label: bucket.label, from: bucket.from, to: bucket.to })),
       [
@@ -71,7 +71,7 @@ describe("bucketize — quarter granularity, fiscalYearEnd shifts", () => {
   it("Q1 books (March close) — Apr 2025 → Mar 2026 is FY2026", () => {
     // FY2026 runs Apr 2025 → Mar 2026 — labelled by its END year per
     // the plan / Japanese 令和N年度 convention.
-    const buckets = bucketize({ from: "2025-04-01", to: "2026-03-31", granularity: "quarter", fiscalYearEnd: "Q1" });
+    const buckets = bucketize({ from: "2025-04-01", to: "2026-03-31", granularity: "quarter", fiscalYearEnd: 3 });
     assert.deepEqual(
       buckets.map((bucket) => ({ label: bucket.label, from: bucket.from, to: bucket.to })),
       [
@@ -84,7 +84,7 @@ describe("bucketize — quarter granularity, fiscalYearEnd shifts", () => {
   });
 
   it("Q2 books (June close) — Jul 2025 → Jun 2026 is FY2026", () => {
-    const buckets = bucketize({ from: "2025-07-01", to: "2026-06-30", granularity: "quarter", fiscalYearEnd: "Q2" });
+    const buckets = bucketize({ from: "2025-07-01", to: "2026-06-30", granularity: "quarter", fiscalYearEnd: 6 });
     assert.deepEqual(
       buckets.map((bucket) => bucket.label),
       ["FY2026-Q1", "FY2026-Q2", "FY2026-Q3", "FY2026-Q4"],
@@ -93,10 +93,26 @@ describe("bucketize — quarter granularity, fiscalYearEnd shifts", () => {
     assert.equal(buckets[3].to, "2026-06-30");
   });
 
+  it("August-close books (month 8) — fiscal quarters start in September", () => {
+    // A non-calendar-quarter close (Aug 31). FY runs Sep 1 2025 →
+    // Aug 31 2026, so the fiscal quarters are Sep-Nov / Dec-Feb /
+    // Mar-May / Jun-Aug, all labelled by the FY's END calendar year.
+    const buckets = bucketize({ from: "2025-09-01", to: "2026-08-31", granularity: "quarter", fiscalYearEnd: 8 });
+    assert.deepEqual(
+      buckets.map((bucket) => `${bucket.label} ${bucket.from}..${bucket.to}`),
+      ["FY2026-Q1 2025-09-01..2025-11-30", "FY2026-Q2 2025-12-01..2026-02-28", "FY2026-Q3 2026-03-01..2026-05-31", "FY2026-Q4 2026-06-01..2026-08-31"],
+    );
+  });
+
+  it("August-close books (month 8) — year bucket spans Sep → Aug", () => {
+    const [bucket] = bucketize({ from: "2026-01-15", to: "2026-01-15", granularity: "year", fiscalYearEnd: 8 });
+    assert.deepEqual({ label: bucket.label, from: bucket.from, to: bucket.to }, { label: "FY2026", from: "2025-09-01", to: "2026-08-31" });
+  });
+
   it("expands the request to the containing quarter on both ends", () => {
     // from / to both mid-quarter in a Q4 book → the response covers
     // the full quarter, not the requested slice.
-    const buckets = bucketize({ from: "2025-02-15", to: "2025-08-04", granularity: "quarter", fiscalYearEnd: "Q4" });
+    const buckets = bucketize({ from: "2025-02-15", to: "2025-08-04", granularity: "quarter", fiscalYearEnd: 12 });
     assert.deepEqual(
       buckets.map((bucket) => `${bucket.from}..${bucket.to}`),
       ["2025-01-01..2025-03-31", "2025-04-01..2025-06-30", "2025-07-01..2025-09-30"],
@@ -106,7 +122,7 @@ describe("bucketize — quarter granularity, fiscalYearEnd shifts", () => {
 
 describe("bucketize — year granularity", () => {
   it("Q4 books label by the calendar year", () => {
-    const buckets = bucketize({ from: "2024-01-15", to: "2025-08-01", granularity: "year", fiscalYearEnd: "Q4" });
+    const buckets = bucketize({ from: "2024-01-15", to: "2025-08-01", granularity: "year", fiscalYearEnd: 12 });
     assert.deepEqual(
       buckets.map((bucket) => ({ label: bucket.label, from: bucket.from, to: bucket.to })),
       [
@@ -118,12 +134,12 @@ describe("bucketize — year granularity", () => {
 
   it("Q1 books label by the fiscal-year END calendar year", () => {
     // 2025-05-15 is in FY2026 (Apr 2025 → Mar 2026).
-    const [bucket] = bucketize({ from: "2025-05-15", to: "2025-05-15", granularity: "year", fiscalYearEnd: "Q1" });
+    const [bucket] = bucketize({ from: "2025-05-15", to: "2025-05-15", granularity: "year", fiscalYearEnd: 3 });
     assert.deepEqual(bucket, { label: "FY2026", from: "2025-04-01", to: "2026-03-31" });
   });
 
   it("Q1 books — a request mid-FY returns one FY bucket whose boundaries echo the FY, not the input", () => {
-    const buckets = bucketize({ from: "2025-09-01", to: "2025-12-31", granularity: "year", fiscalYearEnd: "Q1" });
+    const buckets = bucketize({ from: "2025-09-01", to: "2025-12-31", granularity: "year", fiscalYearEnd: 3 });
     assert.equal(buckets.length, 1);
     assert.equal(buckets[0].from, "2025-04-01");
     assert.equal(buckets[0].to, "2026-03-31");
@@ -136,7 +152,7 @@ describe("bucketize — year granularity", () => {
 // All buildTimeSeries tests use monthly Q4 buckets — keep the call
 // sites short and dodge the id-length lint on `to: string` params.
 function monthBuckets(fromDate: string, toDate: string): ReturnType<typeof bucketize> {
-  return bucketize({ from: fromDate, to: toDate, granularity: "month", fiscalYearEnd: "Q4" });
+  return bucketize({ from: fromDate, to: toDate, granularity: "month", fiscalYearEnd: 12 });
 }
 
 describe("buildTimeSeries — revenue / expense / netIncome", () => {

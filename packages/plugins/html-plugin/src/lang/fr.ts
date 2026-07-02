@@ -3,6 +3,9 @@ import type { Messages } from "./messages";
 const fr: Messages = {
   saveAsPdf: "Enregistrer en PDF (ouvre la boîte de dialogue d'impression)",
   pdf: "PDF",
+  download: "ZIP",
+  downloadZip: "Télécharger en zip autonome (ressources incluses)",
+  downloadError: (error) => `⚠ Échec du téléchargement : ${error}`,
   untitled: "Page HTML",
   editSource: "Modifier la source HTML",
   cancel: "Annuler",

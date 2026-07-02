@@ -127,13 +127,24 @@
                 paths don't resolve under `srcdoc` (base URL is
                 `about:srcdoc`), but that's the historical behavior
                 for non-`artifacts/html/` HTML. -->
-        <iframe
-          v-else-if="isHtml && htmlPreviewUrl"
-          :src="htmlPreviewUrl"
-          class="w-full h-full border-0"
-          sandbox="allow-scripts"
-          :title="t('fileContentRenderer.htmlPreview')"
-        />
+        <div v-else-if="isHtml && htmlPreviewUrl" class="relative w-full h-full">
+          <!-- Only `.html` is packable (server gates on `isHtmlPath`); a
+               `.htm` preview shows no button so the action can't 400. -->
+          <div v-if="canDownloadZip" class="absolute top-2 right-2 z-10 flex flex-col items-end gap-1">
+            <button
+              class="px-2 py-1 text-xs rounded border border-gray-300 bg-white/90 text-gray-600 hover:bg-gray-50 disabled:opacity-50 shadow-sm"
+              :title="t('fileContentRenderer.downloadZip')"
+              :disabled="packing"
+              data-testid="file-html-download"
+              @click="downloadHtmlZip"
+            >
+              <span class="material-icons text-sm align-middle">download</span>
+              {{ t("fileContentRenderer.download") }}
+            </button>
+            <span v-if="packFailed" class="text-xs text-red-600 bg-white/90 px-1 rounded" role="alert">{{ t("fileContentRenderer.downloadError") }}</span>
+          </div>
+          <iframe :src="htmlPreviewUrl" class="w-full h-full border-0" sandbox="allow-scripts" :title="t('fileContentRenderer.htmlPreview')" />
+        </div>
         <iframe
           v-else-if="isHtml"
           :srcdoc="sandboxedHtml"
@@ -247,6 +258,7 @@ import type { JsonToken, JsonlLine } from "../utils/format/jsonSyntax";
 import { formatScalarField, type MarkdownDocView } from "../composables/useMarkdownDoc";
 import { rewriteMarkdownImageRefs } from "../utils/image/rewriteMarkdownImageRefs";
 import { API_ROUTES } from "../config/apiRoutes";
+import { useSharePack } from "../composables/useSharePack";
 import { descriptorForPath, jsonEditableByPolicy } from "../config/systemFileDescriptors";
 import { isMarpDocument } from "../utils/markdown/marpDetect";
 import { buildPdfFilename } from "../utils/files/filename";
@@ -288,6 +300,19 @@ const emit = defineEmits<{
 }>();
 
 const systemDescriptor = computed(() => (props.selectedPath ? descriptorForPath(props.selectedPath) : null));
+
+const { packing, packFailed, downloadZip, reset: resetSharePack } = useSharePack();
+// `htmlPreviewUrl` also matches `.htm`, but the pack route only accepts
+// canonical `.html`, so gate the button on `.html` to match server policy.
+const canDownloadZip = computed(() => Boolean(props.isHtml && props.htmlPreviewUrl && props.selectedPath?.toLowerCase().endsWith(".html")));
+function downloadHtmlZip() {
+  if (props.selectedPath) void downloadZip(props.selectedPath);
+}
+// Drop a stale error banner when the user navigates to another file.
+watch(
+  () => props.selectedPath,
+  () => resetSharePack(),
+);
 
 const marpMode = computed(() => Boolean(props.mdFrontmatter && isMarpDocument(props.mdFrontmatter.meta)));
 

@@ -37,6 +37,11 @@ export interface CollectionHost {
     skillsStagingDir: (workspaceRoot: string) => string;
     /** Workspace-relative archive dir (a removed collection's files move here). */
     archiveDir: string;
+    /** Absolute path to the user-supplied extra-registries config file for a
+     *  workspace (`<root>/config/collections-registries.json`). Injected so the
+     *  registry engine owns no app layout literal and a downstream host can point
+     *  it at its own workspace. */
+    collectionsRegistriesConfig: (workspaceRoot: string) => string;
   };
   /** True for a preset-skill slug (host-owned naming convention). */
   isPresetSlug: (slug: string) => boolean;
@@ -117,6 +122,11 @@ export function skillsStagingDir(workspaceRoot: string): string {
 }
 export function archiveDir(): string {
   return requireHost().paths.archiveDir;
+}
+/** Absolute path to the configured workspace's `collections-registries.json`. */
+export function collectionsRegistriesConfigPath(): string {
+  const host = requireHost();
+  return host.paths.collectionsRegistriesConfig(host.workspaceRoot);
 }
 export function isPresetSlug(slug: string): boolean {
   return requireHost().isPresetSlug(slug);

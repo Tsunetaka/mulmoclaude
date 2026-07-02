@@ -23,7 +23,17 @@
             <span class="material-icons text-base">{{ pdfDownloading ? "hourglass_empty" : "download" }}</span>
             {{ t("pluginWiki.pdf") }}
           </button>
+          <button
+            class="h-8 px-2.5 flex items-center gap-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+            :disabled="zipDownloading"
+            data-testid="wiki-zip-button"
+            @click="downloadZipFile"
+          >
+            <span class="material-icons text-base">{{ zipDownloading ? "hourglass_empty" : "folder_zip" }}</span>
+            {{ t("common.downloadZip") }}
+          </button>
           <span v-if="pdfError" class="text-xs text-red-500" :title="pdfError">{{ t("pluginWiki.pdfFailed") }}</span>
+          <span v-if="zipFailed" class="text-xs text-red-500">{{ t("common.downloadFailed") }}</span>
         </template>
         <button
           v-if="action === 'index'"
@@ -398,6 +408,7 @@ import type { ToolResultComplete } from "gui-chat-protocol/vue";
 import type { WikiData, WikiPageEntry, WikiEndpoints } from "./index";
 import { useFreshPluginData } from "../../composables/useFreshPluginData";
 import { usePdfDownload } from "../../composables/usePdfDownload";
+import { useMarkdownZip } from "../../composables/useMarkdownZip";
 import { useAppApi } from "../../composables/useAppApi";
 import { buildPdfFilename } from "../../utils/files/filename";
 import PageChatComposer from "../../components/PageChatComposer.vue";
@@ -406,12 +417,21 @@ import { parseFrontmatter } from "../../utils/markdown/frontmatter";
 import { useMarkdownDoc } from "../../composables/useMarkdownDoc";
 import { findTaskLines, toggleTaskAt } from "../../utils/markdown/taskList";
 import { apiPost } from "../../utils/api";
-import { WIKI_ACTION, WIKI_ROUTE_SECTION, buildWikiRouteParams, isSafeWikiSlug, readWikiRouteTarget, wikiActionFor, type WikiTarget } from "./route";
+import {
+  WIKI_ACTION,
+  WIKI_ROUTE_SECTION,
+  buildWikiRouteParams,
+  isSafeWikiSlug,
+  readWikiRouteTarget,
+  wikiActionFor,
+  incomingLinks,
+  type WikiTarget,
+  type WikiGraph,
+} from "@mulmoclaude/core/wiki";
 import FilterChip from "../../components/FilterChip.vue";
 import HistoryTab from "./history/HistoryTab.vue";
 import WikiPageBody from "./components/WikiPageBody.vue";
 import WikiGraphView from "./components/WikiGraphView.vue";
-import { incomingLinks, type WikiGraph } from "../../lib/wiki-page/graph";
 import { loadPageEdit } from "./pageEditLoader";
 
 const wikiEndpoints = pluginEndpoints<WikiEndpoints>("wiki");
@@ -809,6 +829,7 @@ const displayTitle = computed(() => {
 });
 
 const { pdfDownloading, pdfError, downloadPdf: rawDownloadPdf } = usePdfDownload();
+const { zipDownloading, zipFailed, downloadZip: rawDownloadZip } = useMarkdownZip();
 
 async function downloadPdf() {
   const uuid = props.selectedResult?.uuid;
@@ -823,6 +844,12 @@ async function downloadPdf() {
   // a frontmatter envelope (#895), so opt in to stripping it from the
   // PDF output.
   await rawDownloadPdf(content.value, filename, { baseDir: "data/wiki/pages", stripFrontmatter: true });
+}
+
+async function downloadZipFile() {
+  const uuid = props.selectedResult?.uuid;
+  const filename = buildPdfFilename({ name: title.value, fallback: "wiki", timestampMs: uuid ? appApi.getResultTimestamp(uuid) : undefined });
+  await rawDownloadZip(content.value, filename, { baseDir: "data/wiki/pages", stripFrontmatter: true });
 }
 
 // Graph tab response carries the link graph directly. On a page view,

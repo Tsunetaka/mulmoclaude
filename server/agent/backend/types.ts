@@ -5,7 +5,7 @@
 // without the orchestrator in server/agent/index.ts knowing which one
 // is active.
 //
-// See plans/refactor-llm-backend-abstraction.md for the broader plan.
+// See plans/done/refactor-llm-backend-abstraction.md for the broader plan.
 
 import type { Attachment } from "@mulmobridge/protocol";
 import type { Role } from "../../../src/config/roles.js";

@@ -76,7 +76,7 @@ Two facts that make this far safer than its size suggests:
 - **Every non-chat `-p` call is already behind a small dependency-injected
   function type** (`Summarize` / `SummarizeFn` / `TranslateBatchFn`), each
   already swapped for fakes in tests. We replace **three implementations**, not
-  scattered spawns. (The earlier `plans/refactor-llm-backend-abstraction.md`
+  scattered spawns. (The earlier `plans/done/refactor-llm-backend-abstraction.md`
   already enumerated these "auxiliary CLI calls" as injectable.)
 - **The PTY-claude pattern already lives in this repo** — `renewTokenViaPty`,
   including the node-pty native-module dynamic-import guard. We extend a proven

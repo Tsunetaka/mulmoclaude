@@ -117,6 +117,7 @@ import type { Role } from "../config/roles";
 import type { SessionSummary, SessionOrigin } from "../types/session";
 import { SESSION_ORIGINS } from "../types/session";
 import { HISTORY_FILTERS, HISTORY_FILTER_ORDER, type HistoryFilter } from "../config/historyFilters";
+import { isLongRunningConversation } from "../utils/session/longRunning";
 import { formatDate } from "../utils/format/date";
 import SessionRoleIcon from "./SessionRoleIcon.vue";
 import FilterChip from "./FilterChip.vue";
@@ -162,6 +163,7 @@ function matchesFilter(session: SessionSummary, filter: HistoryFilter): boolean 
   if (filter === HISTORY_FILTERS.all) return true;
   if (filter === HISTORY_FILTERS.unread) return session.hasUnread === true;
   if (filter === HISTORY_FILTERS.bookmarked) return session.isBookmarked === true;
+  if (filter === HISTORY_FILTERS.longRunning) return isLongRunningConversation(session);
   return originOf(session) === filter;
 }
 

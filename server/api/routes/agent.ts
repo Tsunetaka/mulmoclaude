@@ -5,6 +5,7 @@ import {
   createSessionMeta,
   backfillFirstUserMessage as backfillMeta,
   backfillOrigin,
+  incrementUserQueryCount,
   readSessionMetaFull,
   readSessionMeta,
   setClaudeSessionId as setClaudeId,
@@ -280,6 +281,10 @@ export async function startChat(params: StartChatParams): Promise<StartChatResul
       await backfillOrigin(chatSessionId, validOrigin);
     }
   }
+  // Count this user turn (createSessionMeta seeds no count, so the first
+  // turn bumps undefined→1). Lets the sidebar tell a one-shot apart from
+  // a long conversation.
+  await incrementUserQueryCount(chatSessionId);
 
   // Append user message for this turn
   await appendSessionLine(

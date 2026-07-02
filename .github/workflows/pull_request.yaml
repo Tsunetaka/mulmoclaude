@@ -116,6 +116,12 @@ jobs:
     # standalone signal so the PR diff doesn't accidentally hide the
     # drift inside `node_modules` or the dist artifact.
     - run: yarn run plugins:codegen:check
+    # #1920 anti-regression: root ↔ launcher package.json + plugin peer
+    # dep sync gate. Yarn workspaces symlink the launcher into
+    # node_modules so local dev never touches its dependency field;
+    # this catches drift at PR time before it reaches an `npx
+    # mulmoclaude` user.
+    - run: yarn run check:launcher-sync
     - run: yarn run build
     # Bundle integrity: `yarn build` regenerates committed esbuild
     # artifacts (`server/workspace/wiki-history/hook/snapshot.mjs`

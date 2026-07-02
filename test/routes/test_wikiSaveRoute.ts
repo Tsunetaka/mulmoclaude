@@ -115,7 +115,7 @@ describe("POST /api/wiki — action: save", () => {
   // each time so the bug only surfaces on Windows CI runners.
   // (Pre-existing from #775 / PR #795; surfaced on PR #801.)
   beforeEach(async () => {
-    const { __resetPageIndexCache } = await import("../../server/api/routes/wiki/pageIndex.js");
+    const { __resetPageIndexCache } = await import("@mulmoclaude/core/wiki/server");
     __resetPageIndexCache();
   });
 

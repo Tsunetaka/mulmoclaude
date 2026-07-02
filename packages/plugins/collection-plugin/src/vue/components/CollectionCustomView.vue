@@ -107,12 +107,22 @@ async function load(): Promise<void> {
       error.value = `HTTP ${resp.status}`;
       return;
     }
-    // 3. Render it sandboxed with the token + CSP injected.
+    // 3. Pull the translation dict (already locale-picked server-side).
+    // Always queried — when the view has no `i18n` declared the server returns
+    // the empty contract `{ locale: "", dict: {} }`, so the iframe-side
+    // `__MC_VIEW.t(key)` falls back to the key. A network failure is also
+    // soft — the view renders without translations rather than 404'ing.
+    const i18n = await binding.fetchViewI18n(props.slug, props.view.id, binding.localeTag());
+    if (stale()) return;
+    const i18nBoot = i18n.ok ? i18n.data : { locale: "", dict: {} };
+    // 4. Render it sandboxed with the token + CSP + dict injected.
     srcdoc.value = binding.buildViewSrcdoc(resp.html, {
       slug: props.slug,
       token: mint.data.token,
       dataUrl: mint.data.dataUrl,
       origin: window.location.origin,
+      locale: i18nBoot.locale,
+      dict: i18nBoot.dict,
     });
   } catch (err) {
     if (!stale()) error.value = errorMessage(err);
@@ -121,8 +131,13 @@ async function load(): Promise<void> {
   }
 }
 
-// Reload (re-mint + re-fetch) whenever the selected view or collection changes.
-watch([() => props.slug, () => props.view.id], () => void load(), { immediate: true });
+// Reload (re-mint + re-fetch) whenever the selected view or collection changes
+// — and also whenever the active app locale flips, so a sandboxed view picks
+// up freshly-translated strings without the user having to switch view +
+// back. `localeTag()` is documented as reactive (the binding doc on
+// `CollectionUi.localeTag`); reading it inside the watch source array lets
+// Vue track that dep transparently.
+watch([() => props.slug, () => props.view.id, () => collectionUi().localeTag()], () => void load(), { immediate: true });
 
 // ── Live updates ──
 // The sandboxed iframe can't open its own authenticated pub/sub socket, so the

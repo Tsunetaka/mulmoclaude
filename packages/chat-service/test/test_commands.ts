@@ -114,6 +114,65 @@ describe("/switch command", () => {
     assert.ok(result.reply.includes("not found"));
   });
 
+  it("propagates the target session's roleId when switching by number (regression, issue #1888)", async () => {
+    // Bridge state currently uses "general"; the target session (mockSessions[1] = s2)
+    // is under "office". Before the fix, connectSession only received the sessionId
+    // so the persisted state kept roleId="general" and the next relay's startChat
+    // ran the resumed office session under the general role.
+    const capturedArgs: { sessionId?: string; roleId?: string } = {};
+    const handler = createCommandHandler({
+      loadAllRoles: () => roles,
+      getRole: (id) => roles.find((r) => r.id === id) ?? roles[0],
+      resetChatState: async (_t, _c, roleId) => makeState({ roleId }),
+      // Mock mirrors the real chat-state.ts behaviour: when roleId is passed,
+      // stamp it into the returned state; otherwise preserve the incoming role.
+      connectSession: async (_t, _c, sessionId, roleId) => {
+        capturedArgs.sessionId = sessionId;
+        capturedArgs.roleId = roleId;
+        return makeState({ sessionId, ...(roleId !== undefined ? { roleId } : {}) });
+      },
+      listSessions: async ({ limit, offset }) => ({
+        sessions: mockSessions.slice(offset, offset + limit),
+        total: mockSessions.length,
+      }),
+    });
+    await handler("/sessions", "telegram", makeState());
+    const result = await handler("/switch 2", "telegram", makeState({ roleId: "general" }));
+    assert.ok(result);
+    assert.equal(capturedArgs.sessionId, "s2");
+    assert.equal(capturedArgs.roleId, "office", "target session's roleId must reach connectSession");
+    assert.ok(result.nextState);
+    assert.equal(result.nextState?.roleId, "office", "returned nextState must reflect the target session's role");
+    assert.equal(result.nextState?.sessionId, "s2");
+  });
+
+  it("propagates the target session's roleId when switching by session ID (non-numeric branch)", async () => {
+    // Same bug shape as the numeric branch, on the `/switch <sessionId>` path
+    // (commands.ts line ~259). Covering both branches so a future refactor
+    // that only fixes one is caught.
+    const capturedArgs: { sessionId?: string; roleId?: string } = {};
+    const handler = createCommandHandler({
+      loadAllRoles: () => roles,
+      getRole: (id) => roles.find((r) => r.id === id) ?? roles[0],
+      resetChatState: async (_t, _c, roleId) => makeState({ roleId }),
+      connectSession: async (_t, _c, sessionId, roleId) => {
+        capturedArgs.sessionId = sessionId;
+        capturedArgs.roleId = roleId;
+        return makeState({ sessionId, ...(roleId !== undefined ? { roleId } : {}) });
+      },
+      listSessions: async ({ limit, offset }) => ({
+        sessions: mockSessions.slice(offset, offset + limit),
+        total: mockSessions.length,
+      }),
+    });
+    await handler("/sessions", "telegram", makeState());
+    const result = await handler("/switch s2", "telegram", makeState({ roleId: "general" }));
+    assert.ok(result);
+    assert.equal(capturedArgs.roleId, "office");
+    assert.equal(result.nextState?.roleId, "office");
+    assert.equal(result.nextState?.sessionId, "s2");
+  });
+
   it("per-chat cache isolation", async () => {
     const handler = createCommandHandler({
       loadAllRoles: () => roles,

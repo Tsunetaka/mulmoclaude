@@ -216,6 +216,27 @@ export interface CollectionCustomView {
   /** Skill-relative path to the HTML file under `views/` (e.g.
    *  `views/year.html`). Path-safe, must end in `.html`. */
   file: string;
+  /** Optional skill-relative path to a JSON translation dictionary co-located
+   *  with the view (e.g. `views/year.i18n.json`). Shape mirrors **vue-i18n
+   *  locale messages** so an author can lift their app's locale JSON
+   *  verbatim:
+   *
+   *  ```json
+   *  { "en": { "next": "Next", "hello": "Hello, {name}" },
+   *    "ja": { "next": "次へ", "hello": "{name} さん、こんにちは" } }
+   *  ```
+   *
+   *  The host picks the block matching the active app locale (fallback
+   *  `"en"`, else `{}`) and injects ONLY that flat string map into
+   *  `window.__MC_VIEW.dict`. The iframe-side helper
+   *  `__MC_VIEW.t(key, named?)` mirrors vue-i18n's `t('msg', { name: 'x' })`
+   *  signature — named-interpolation only (no pluralization / linked
+   *  messages in v1; shipping vue-i18n's full runtime into every sandboxed
+   *  iframe would dominate page weight). The view never sees other locales'
+   *  strings. Constrained to `views/*.i18n.json` so authors keep the
+   *  translation file next to the HTML it translates. Absent ⇒ host-side
+   *  no-op (an i18n-less view keeps working; `t(key)` echoes the key). */
+  i18n?: string;
   /** What the view may do with the data endpoint. Defaults to `["read"]`
    *  (least privilege); declare `["read","write"]` only for views that
    *  edit records. The mint endpoint clamps any requested caps to this. */
@@ -266,9 +287,20 @@ export interface CollectionFieldSpec {
    *  record to pull from the `to` collection (e.g. `me` for the
    *  singleton mc-profile). Nothing is stored on this record — the
    *  embed is a display-only directive resolved at render time, so
-   *  it never appears in the list table or the edit form. Required
-   *  when type is `embed`; ignored on every other type. */
+   *  it never appears in the list table or the edit form. Supply
+   *  either this (a fixed target, same for every record) or
+   *  `idField` (a per-record target) — exactly one. Ignored on every
+   *  other type. */
   id?: string;
+  /** When `type === "embed"`: the name of a sibling top-level field
+   *  whose value names the target record's primary key — letting the
+   *  embed point at a *different* record per row (e.g. an invoice's
+   *  `issuerId` ref selects which `profile` to embed as the
+   *  bill-from block). The renderer reads `record[idField]` at render
+   *  time; an absent/empty value resolves to "no record" (the same
+   *  fail-soft as a missing fixed `id`). Mutually exclusive with `id`
+   *  — an embed must declare exactly one. Ignored on every other type. */
+  idField?: string;
   /** When `type === "money"` (or `type === "derived"` with
    *  `display: "money"`): a literal ISO 4217 currency code passed to
    *  `Intl.NumberFormat` for display — fixed for every record. The
@@ -451,3 +483,14 @@ export interface CollectionDetail extends CollectionSummary {
 }
 
 export type CollectionItem = Record<string, unknown>;
+
+/** Resolve an `embed` field's target record id: the fixed `id`, or the value
+ *  of the sibling `idField` on this record (empty string when neither applies
+ *  — the caller renders that as "no record"). Pure + isomorphic so the server
+ *  projection (`derive.ts`) and the client preview (`useCollectionRendering`)
+ *  resolve embeds identically. */
+export function embedTargetId(field: CollectionFieldSpec, record: CollectionItem | null): string {
+  if (field.id) return field.id;
+  if (field.idField && record) return String(record[field.idField] ?? "");
+  return "";
+}

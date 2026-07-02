@@ -16,7 +16,7 @@
 // a workspace-relative POSIX string matching `TreeNode.path` for the
 // folder row that should expose the menu.
 
-import { isSafeSlug } from "../lib/wiki-page/slug";
+import { isSafeSlug } from "@mulmoclaude/core/wiki";
 
 export interface CreateFilePolicy {
   /** Workspace-relative POSIX folder path. Matched verbatim against

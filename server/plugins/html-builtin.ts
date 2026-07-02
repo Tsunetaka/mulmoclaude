@@ -7,17 +7,31 @@
 // Imported for side effect at boot (server/index.ts) so the dispatch resolves.
 
 import { executeHtmlDispatch } from "@mulmoclaude/html-plugin";
-import type { HtmlDispatchArgs } from "@mulmoclaude/html-plugin";
+import type { HtmlDispatchArgs, PackHtmlArgs, PackHtmlResult } from "@mulmoclaude/html-plugin";
 import { makeArtifactsFileOps } from "./runtime.js";
 import { publishFileChange } from "../events/file-change.js";
 import { registerBuiltinDispatch } from "./builtin-dispatch.js";
+import { packHtmlZip } from "../utils/share/packHtml.js";
+import { isHtmlPath } from "../utils/files/html-store.js";
 
 /** Scope name — matches `wrapWithScope("html", …)` in
  *  `src/plugins/presentHtml/index.ts`, which is what the View's
  *  `useRuntime().dispatch` uses as the `:pkg` path segment. */
 const HTML_SCOPE = "html";
 
+// `packHtml` bundles the page + its local assets into a self-contained
+// zip. It lives host-side (binary reads + zip via server/utils/share),
+// so it's intercepted here rather than in the package's pure router.
+async function packHtmlForDownload(args: PackHtmlArgs): Promise<PackHtmlResult> {
+  if (!isHtmlPath(args.path)) throw new Error("path must be a canonical artifacts/html/*.html file");
+  const { filename, zip } = await packHtmlZip(args.path);
+  return { filename, zipBase64: zip.toString("base64") };
+}
+
 registerBuiltinDispatch(HTML_SCOPE, async (args) => {
+  if ((args as { kind?: string }).kind === "packHtml") {
+    return packHtmlForDownload(args as unknown as PackHtmlArgs);
+  }
   const dispatchArgs = args as unknown as HtmlDispatchArgs;
   const result = await executeHtmlDispatch({ files: { artifacts: makeArtifactsFileOps() } }, dispatchArgs);
   // saveHtml changed bytes on disk → nudge subscribed View tabs (load is read-only).

@@ -22,6 +22,8 @@ const ko: Messages = {
   marpSplitEnter: "소스를 나란히 편집",
   marpSplitExit: "소스 편집기 닫기",
   marpSplitEditorLabel: "소스",
+  mermaidLoadFailed: "⚠ Mermaid 로드 실패: {error}",
+  mermaidRenderFailed: "⚠ Mermaid 렌더링 실패: {error}",
 };
 
 export default ko;

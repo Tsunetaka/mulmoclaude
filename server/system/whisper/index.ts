@@ -3,7 +3,7 @@
 // MulmoTerminal. This file owns only the host-specific glue: capability gating
 // (platform + optional-dep probe), settings/status shaping, and a single
 // process-wide service instance pointed at the workspace models dir.
-// See plans/feat-extract-whisper-package.md.
+// See plans/done/feat-extract-whisper-package.md.
 
 import { createWhisper, resolveModelName, type ModelStatus, type WhisperModelName, type WhisperLogger } from "@mulmoclaude/core/whisper";
 import { WORKSPACE_PATHS } from "../../workspace/paths.js";

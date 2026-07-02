@@ -115,7 +115,7 @@ Each plugin owns its subtree exclusively. No plugin reads or writes outside its 
 | Multi-currency invoice math | Single-currency-per-client is enough |
 | Revenue forecasting | Requires a model; ship reports first |
 | Multi-user / team support | "Solopreneur" is in the name |
-| Marketplace distribution | Coordinate with `plans/feat-plugin-sdk-rollout.md` |
+| Marketplace distribution | Coordinate with `plans/done/feat-plugin-sdk-rollout.md` |
 
 ## Plan documents
 

@@ -30,7 +30,7 @@
           <div class="border-t border-purple-200 p-4 bg-white rounded-b-lg">
             <div v-if="skillPath" class="text-[11px] font-mono text-gray-400 mb-3 break-all">{{ skillPath }}</div>
             <!-- eslint-disable-next-line vue/no-v-html -- DOMPurify-sanitized markdown of the SKILL.md body Claude CLI synthesised. The body comes from the user's local skill file, surfaced verbatim here. -->
-            <div class="markdown-content prose prose-slate max-w-none" @click="handleExternalLinkClick" v-html="renderedHtml"></div>
+            <div ref="markdownContainerRef" class="markdown-content prose prose-slate max-w-none" @click="handleExternalLinkClick" v-html="renderedHtml"></div>
           </div>
         </details>
       </div>
@@ -39,13 +39,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { marked } from "marked";
 import type { ToolResultComplete } from "gui-chat-protocol/vue";
 import type { SkillData } from "./types";
 import { handleExternalLinkClick } from "../../utils/dom/externalLink";
 import { sanitizeMarkdownHtml } from "../../utils/markdown/sanitize";
+import { useMermaidRenderer } from "../../utils/markdown/useMermaid";
 
 const { t } = useI18n();
 
@@ -60,6 +61,9 @@ const skillDescription = computed(() => props.selectedResult.data?.skillDescript
 const body = computed(() => props.selectedResult.data?.body ?? "");
 
 const renderedHtml = computed(() => sanitizeMarkdownHtml(marked(body.value, { breaks: true, gfm: true }) as string));
+
+const markdownContainerRef = ref<HTMLElement | null>(null);
+useMermaidRenderer(markdownContainerRef, renderedHtml);
 </script>
 
 <style scoped>

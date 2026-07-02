@@ -271,7 +271,12 @@ test.describe("accounting plugin — flow", () => {
 
     // Tab strip is rendered but disabled — clicking a tab does
     // nothing while the notice is up. Verify by clicking journal and
-    // confirming the notice stays.
+    // confirming the notice stays. `force: true` is required because
+    // the whole point of this assertion is to drive a click at the
+    // DOM regardless of Playwright's actionability check — the
+    // expected behaviour is that the disabled tab swallows the click
+    // and the notice stays.
+    // eslint-disable-next-line sonarjs/no-forced-browser-interaction -- intentional: probing a disabled-state guard
     await page.getByTestId("accounting-tab-journal").click({ force: true });
     await expect(page.getByTestId("accounting-deleted-notice")).toBeVisible();
 

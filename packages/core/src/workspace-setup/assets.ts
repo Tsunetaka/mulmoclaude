@@ -7,7 +7,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyFileSync, mkdirSync, readdirSync } from "node:fs";
 
-const ASSETS_DIR = fileURLToPath(new URL("../../assets", import.meta.url));
+// The asset dir is shipped separately (package.json `files`), NOT bundled, so
+// this URL must resolve at runtime. `@vite-ignore` silences Vite's build-time
+// "doesn't exist at build time" warning — runtime resolution is intended.
+const ASSETS_DIR = fileURLToPath(new URL(/* @vite-ignore */ "../../assets", import.meta.url));
 
 /** The bundled help-docs source dir (`assets/helps/`). */
 export function helpsAssetDir(): string {

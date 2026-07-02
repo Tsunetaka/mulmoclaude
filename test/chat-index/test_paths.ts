@@ -21,52 +21,58 @@ import {
 // matches on Windows (backslashes) as well as POSIX.
 const workspace = path.join(path.sep, "tmp", "ws");
 
+// The chat dir is sourced from WORKSPACE_DIRS.chat so the layout
+// move in #284 (`chat/` → `conversations/chat/`) can't silently
+// drift again. `CHAT_REL` reflects the current on-disk relative
+// path used by every joined-path expectation below.
+const CHAT_REL = path.join("conversations", "chat");
+
 describe("constants", () => {
   it("exports expected directory and file name constants", () => {
-    assert.equal(CHAT_DIR, "chat");
+    assert.equal(CHAT_DIR, CHAT_REL);
     assert.equal(INDEX_DIR, "index");
     assert.equal(MANIFEST_FILE, "manifest.json");
   });
 });
 
 describe("chatDirFor", () => {
-  it("returns workspace/chat", () => {
-    assert.equal(chatDirFor(workspace), path.join(workspace, "chat"));
+  it("returns workspace/conversations/chat", () => {
+    assert.equal(chatDirFor(workspace), path.join(workspace, CHAT_REL));
   });
 });
 
 describe("indexDirFor", () => {
-  it("returns workspace/chat/index", () => {
-    assert.equal(indexDirFor(workspace), path.join(workspace, "chat", "index"));
+  it("returns workspace/conversations/chat/index", () => {
+    assert.equal(indexDirFor(workspace), path.join(workspace, CHAT_REL, "index"));
   });
 });
 
 describe("sessionJsonlPathFor", () => {
-  it("returns workspace/chat/<sessionId>.jsonl", () => {
-    assert.equal(sessionJsonlPathFor(workspace, "sess-abc"), path.join(workspace, "chat", "sess-abc.jsonl"));
+  it("returns workspace/conversations/chat/<sessionId>.jsonl", () => {
+    assert.equal(sessionJsonlPathFor(workspace, "sess-abc"), path.join(workspace, CHAT_REL, "sess-abc.jsonl"));
   });
 
   it("handles UUID-style session IDs", () => {
     const sessionId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
-    assert.equal(sessionJsonlPathFor(workspace, sessionId), path.join(workspace, "chat", `${sessionId}.jsonl`));
+    assert.equal(sessionJsonlPathFor(workspace, sessionId), path.join(workspace, CHAT_REL, `${sessionId}.jsonl`));
   });
 });
 
 describe("sessionMetaPathFor", () => {
-  it("returns workspace/chat/<sessionId>.json", () => {
-    assert.equal(sessionMetaPathFor(workspace, "sess-abc"), path.join(workspace, "chat", "sess-abc.json"));
+  it("returns workspace/conversations/chat/<sessionId>.json", () => {
+    assert.equal(sessionMetaPathFor(workspace, "sess-abc"), path.join(workspace, CHAT_REL, "sess-abc.json"));
   });
 });
 
 describe("indexEntryPathFor", () => {
-  it("returns workspace/chat/index/<sessionId>.json", () => {
-    assert.equal(indexEntryPathFor(workspace, "sess-abc"), path.join(workspace, "chat", "index", "sess-abc.json"));
+  it("returns workspace/conversations/chat/index/<sessionId>.json", () => {
+    assert.equal(indexEntryPathFor(workspace, "sess-abc"), path.join(workspace, CHAT_REL, "index", "sess-abc.json"));
   });
 });
 
 describe("manifestPathFor", () => {
-  it("returns workspace/chat/index/manifest.json", () => {
-    assert.equal(manifestPathFor(workspace), path.join(workspace, "chat", "index", "manifest.json"));
+  it("returns workspace/conversations/chat/index/manifest.json", () => {
+    assert.equal(manifestPathFor(workspace), path.join(workspace, CHAT_REL, "index", "manifest.json"));
   });
 });
 

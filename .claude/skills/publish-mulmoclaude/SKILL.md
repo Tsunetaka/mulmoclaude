@@ -64,9 +64,13 @@ For each drifted package:
 # Bump in that package's package.json, then:
 yarn install
 yarn build:packages
-cd packages/<name> && npm publish --access public
+cd packages/<name> && npm publish --access public --registry https://registry.npmjs.org/
 # Tag + GitHub release: see §7.
 ```
+
+> MUST pass `--registry https://registry.npmjs.org/` on every `npm publish`
+> below. The environment's default registry is a private mirror, so
+> without it the package publishes to the wrong registry (or fails auth).
 
 Update mulmoclaude's refs to the new versions. If `chat-service` depends on `protocol`, bump its dep there too.
 
@@ -75,6 +79,28 @@ Update mulmoclaude's refs to the new versions. If `chat-service` depends on `pro
 ```bash
 yarn install         # picks up any new deps from §1
 yarn build           # builds workspace packages AND dist/client (Vite)
+```
+
+### 3.5. README content check (catches "npm-shown README is stale")
+
+`packages/mulmoclaude/README.md` is the file npm displays on the package page. It is hand-curated, NOT auto-copied from the repo root README — so every release should re-read it against what's actually shipping. Run BEFORE §4 / §6.
+
+Open `packages/mulmoclaude/README.md` and verify each of:
+
+- **Features added since the last release** are reflected (collections / Discover / Contribute, Marp slides, sandbox credential flags, new bridges, voice input, plugin authoring, etc.) — at least a one-line mention each.
+- **Removed / renamed features** no longer appear (don't ship `npx mulmoclaude --old-flag` examples after the flag was renamed).
+- **CLI flags** in the "Options" table match `bin/mulmoclaude.js` exactly. Diff: `grep -E "^  --" packages/mulmoclaude/bin/mulmoclaude.js | head -20`.
+- **Env vars** (`MULMOCLAUDE_AUTH_TOKEN`, `SANDBOX_FORWARD_SSH_AGENT`, `SANDBOX_MOUNT_CONFIGS`, `GEMINI_API_KEY`, `DISABLE_SANDBOX`) match the launcher's behaviour.
+- **Bridge npm names** (`@mulmobridge/<x>`) match what's currently published. New bridges added since last release? Add them. Drop any deprecated.
+- **Length** is in the right zone — the file is a focused npm landing page, not a full developer guide. Don't paste in the full repo README (~700 lines today). Target: ~150-200 lines; defer the rest to `docs/` in the repo via links.
+
+When in doubt about a feature's npm-user relevance, default to including a short mention with a "see docs/<file>.md" link rather than a full how-to.
+
+The README is shipped via `package.json`'s standard inclusion — no explicit `files: [...]` entry needed for it. Confirm it's in the tarball:
+
+```bash
+cd packages/mulmoclaude && npm pack --dry-run 2>&1 | grep -E "README" | head -3
+# expect: npm notice <kB> README.md
 ```
 
 ### 4. Local tarball test — verified by CI on every PR, rerun locally when needed
@@ -115,7 +141,7 @@ When iterating (known-broken 0.1.0 → fixed 0.1.1), keep the published version 
 ### 6. Publish
 
 ```bash
-cd packages/mulmoclaude && npm publish --access public
+cd packages/mulmoclaude && npm publish --access public --registry https://registry.npmjs.org/
 ```
 
 Verify:

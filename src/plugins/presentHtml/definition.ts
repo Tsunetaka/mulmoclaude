@@ -7,7 +7,7 @@ import { TOOL_DEFINITION } from "@mulmoclaude/html-plugin";
 // consumable by MulmoTerminal). This built-in is a thin host adapter: it keeps
 // MulmoClaude's host-specific routing META and scoped-runtime wrapping while
 // sourcing the schema/logic from the package. The Vue View stays host-side until
-// phase 2 (see plans/feat-presenthtml-mulmoterminal.md).
+// phase 2 (see plans/done/feat-presenthtml-mulmoterminal.md).
 export const TOOL_NAME = META.toolName;
 
 /** Resolved-URL view of the html plugin's routes (create / update). Plugin code

@@ -8,6 +8,7 @@
 // confirm, …) as components migrate.
 
 import type { Component } from "vue";
+import type { TranslateTransport } from "@mulmoclaude/core/translation/client";
 import type {
   CollectionDetailResponse,
   ItemMutationResponse,
@@ -72,6 +73,26 @@ export interface CollectionViewSrcdocBoot {
   token: string;
   dataUrl: string;
   origin: string;
+  /** Active app locale the dict was picked for (e.g. `"en"`, `"ja"`); empty
+   *  when the view has no `i18n` declared or no locale block matched. The
+   *  bootstrap surfaces this as `__MC_VIEW.locale`. */
+  locale?: string;
+  /** Host-picked, locale-filtered flat string map (vue-i18n locale-message
+   *  shape). The iframe sees ONLY this locale's strings via `__MC_VIEW.dict`
+   *  and the `__MC_VIEW.t(key, named?)` helper (vue-i18n-style named
+   *  interpolation). Optional — when omitted, the helper falls back to the
+   *  key. */
+  dict?: Record<string, string>;
+}
+
+/** Server response shape for `fetchViewI18n` — already locale-picked + flat.
+ *  `locale === ""` means no translations were available (view has no `i18n`
+ *  declared, file missing, or neither the requested locale nor `"en"` had a
+ *  block). The `dict` matches the `CollectionViewSrcdocBoot.dict` shape so
+ *  the host can pass it through `buildViewSrcdoc` unchanged. */
+export interface CollectionViewI18nResult {
+  locale: string;
+  dict: Record<string, string>;
 }
 
 /** Options for the host's confirm dialog — structurally matches the host's own
@@ -83,8 +104,8 @@ export interface CollectionConfirmOptions {
   variant?: "primary" | "success" | "danger";
 }
 
-/** One collection in the curated registry's published index (the host fetches the
- *  registry's index.json and proxies it to the Discover tab). */
+/** One collection in a curated registry's published index (the host fetches
+ *  each registry's index.json and proxies them all to the Discover tab). */
 export interface RegistryEntry {
   id: string;
   author: string;
@@ -102,12 +123,30 @@ export interface RegistryEntry {
   screenshot?: string;
   path: string;
   contentSha: string;
+  /** Label of the source registry — `"official"` for the canonical
+   *  receptron/mulmoclaude-collections, otherwise the `name` of an entry in
+   *  the user's `config/collections-registries.json`. The Discover card shows
+   *  this as a small badge so users can tell apart same-title collections from
+   *  different sources. */
+  registryName: string;
 }
 
-/** `GET …collectionsRegistry.list` — the Discover catalog. */
+/** Per-registry summary in the merged Discover response. */
+export interface RegistrySummary {
+  name: string;
+  /** `ok` = fresh, `stale` = served from cache because the upstream failed,
+   *  `failed` = no cache to fall back to (the entries contribution is 0). */
+  status: "ok" | "stale" | "failed";
+  generatedAt: string | null;
+  error: string | null;
+  entryCount: number;
+}
+
+/** `GET …collectionsRegistry.list` — the Discover catalog merged across every
+ *  configured registry. */
 export interface RegistryListResponse {
-  registry: string;
-  generatedAt: string;
+  registries: RegistrySummary[];
+  /** Convenience flag: true iff any single registry's contribution was stale. */
   stale: boolean;
   collections: RegistryEntry[];
 }
@@ -148,6 +187,12 @@ export interface CollectionUi {
   /** Fetch a custom view's raw HTML (host: `apiFetchRaw` over
    *  `API_ROUTES.collections.viewFile`, global bearer attached). */
   fetchViewHtml: (slug: string, viewId: string) => Promise<CollectionViewHtmlResult>;
+  /** Fetch the translation dict for one custom view, already locale-picked
+   *  server-side (host: `apiGet` over `API_ROUTES.collections.viewI18n`,
+   *  global bearer attached). Returns `{ locale: "", dict: {} }` when the
+   *  view has no `i18n` declared or the file is missing / malformed — the
+   *  iframe-side `__MC_VIEW.t(key)` then echoes the key. */
+  fetchViewI18n: (slug: string, viewId: string, locale: string) => Promise<CollectionApiResult<CollectionViewI18nResult>>;
   /** Wrap a custom view's HTML in a sandboxed `<iframe srcdoc>` with the token +
    *  data URL injected and the host's CSP applied. Replaces the host's
    *  `buildCustomViewSrcdoc`. */
@@ -207,9 +252,11 @@ export interface CollectionUi {
   /** List the curated registry's collections for the Discover tab (`apiGet` over
    *  `…collectionsRegistry.list`). */
   listRegistry: () => Promise<CollectionApiResult<RegistryListResponse>>;
-  /** Import a registry collection by author+slug (`apiPost` over
-   *  `…collectionsRegistry.import`). */
-  importRegistry: (author: string, slug: string) => Promise<CollectionApiResult<RegistryImportResponse>>;
+  /** Import a registry collection by author+slug. `registry` (the source
+   *  registry's name from the entry the user clicked) disambiguates when more
+   *  than one registry publishes the same author/slug; pass null for
+   *  best-match. (`apiPost` over `…collectionsRegistry.import`). */
+  importRegistry: (author: string, slug: string, registry: string | null) => Promise<CollectionApiResult<RegistryImportResponse>>;
   /** Bulk-reconcile pinned launcher shortcuts of one kind against the
    *  authoritative list — prune dead slugs, refresh stale labels
    *  (`useShortcuts().reconcile`). */
@@ -255,6 +302,13 @@ export interface CollectionUi {
    *  (e.g. MulmoTerminal) points it at an in-shadow node so the injected styles
    *  still apply to the teleported modal. */
   modalTeleportTarget?: () => string | HTMLElement;
+  /** Translate a batch of UI strings into the active locale via the host's
+   *  `/api/translation` route (host: `apiPost`, global bearer attached). The
+   *  contract is host-agnostic (`@mulmoclaude/core/translation/client`); the LLM
+   *  step + transport are the host's own. Optional: a host that hasn't wired the
+   *  endpoint omits it and translated surfaces (e.g. the new-collection starter
+   *  modal) fall back to their English source. */
+  translate?: TranslateTransport;
 }
 
 let current: CollectionUi | null = null;

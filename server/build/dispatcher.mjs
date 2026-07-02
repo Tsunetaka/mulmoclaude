@@ -266,10 +266,7 @@ async function handleSkillBridge(payload) {
 // server/workspace/hooks/handlers/wikiSnapshot.ts
 import path5 from "node:path";
 
-// src/lib/wiki-page/paths.ts
-import path4 from "node:path";
-
-// src/lib/wiki-page/slug.ts
+// packages/core/dist/slug-CdN-pQX1.js
 function isSafeSlug(slug) {
   if (slug.length === 0) return false;
   if (slug === "." || slug === "..") return false;
@@ -278,14 +275,15 @@ function isSafeSlug(slug) {
   return true;
 }
 
-// src/lib/wiki-page/paths.ts
+// packages/core/dist/wiki/paths.js
+import path4 from "node:path";
 function wikiSlugFromAbsPath(absPath, pagesDir) {
   const rel = path4.relative(pagesDir, absPath);
   if (rel.length === 0) return null;
   if (path4.isAbsolute(rel)) return null;
   if (rel.includes(path4.sep)) return null;
   if (!rel.endsWith(".md")) return null;
-  const slug = rel.slice(0, -".md".length);
+  const slug = rel.slice(0, -3);
   if (!isSafeSlug(slug)) return null;
   return slug;
 }

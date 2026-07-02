@@ -158,9 +158,9 @@ describe("getTimeSeriesReport — happy paths", () => {
     );
   });
 
-  it("buckets quarters under a Q1 (March-close) book and labels by FY end year", async () => {
+  it("buckets quarters under a March-close (month 3) book and labels by FY end year", async () => {
     const root = makeTmp();
-    const book = await createBook({ name: "JP", fiscalYearEnd: "Q1" }, root);
+    const book = await createBook({ name: "JP", fiscalYearEnd: 3 }, root);
     const bookId = book.book.id;
     await addEntries(
       {

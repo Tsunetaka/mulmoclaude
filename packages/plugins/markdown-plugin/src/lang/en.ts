@@ -22,6 +22,8 @@ const en: Messages = {
   marpSplitEnter: "Edit source side-by-side with preview",
   marpSplitExit: "Hide source editor",
   marpSplitEditorLabel: "Source",
+  mermaidLoadFailed: "⚠ Mermaid failed to load: {error}",
+  mermaidRenderFailed: "⚠ Mermaid render failed: {error}",
 };
 
 export default en;

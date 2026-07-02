@@ -25,4 +25,6 @@ export interface Messages {
   marpSplitEnter: string;
   marpSplitExit: string;
   marpSplitEditorLabel: string;
+  mermaidLoadFailed: string;
+  mermaidRenderFailed: string;
 }

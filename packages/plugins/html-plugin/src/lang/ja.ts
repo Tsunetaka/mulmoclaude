@@ -3,6 +3,9 @@ import type { Messages } from "./messages";
 const ja: Messages = {
   saveAsPdf: "PDF として保存（印刷ダイアログを開きます）",
   pdf: "PDF",
+  download: "ZIP",
+  downloadZip: "自己完結zipでダウンロード（アセット同梱）",
+  downloadError: (error) => `⚠ ダウンロード失敗: ${error}`,
   untitled: "HTML ページ",
   editSource: "HTML ソースを編集",
   cancel: "キャンセル",

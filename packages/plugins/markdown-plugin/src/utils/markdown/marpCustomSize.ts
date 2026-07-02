@@ -14,7 +14,7 @@
 // (preview iframe sizing, PDF page dimensions) reads the new viewBox
 // and Just Works.
 
-import yaml from "js-yaml";
+import { dump as yamlDump } from "js-yaml";
 import { parseFrontmatter } from "./frontmatter";
 
 interface MarpThemeSet {
@@ -82,7 +82,7 @@ function parseCustomSize(value: string): CustomDimensions | null {
 }
 
 function serializeMarkdown(meta: Record<string, unknown>, body: string): string {
-  const yamlText = yaml.dump(meta, { lineWidth: -1, sortKeys: false }).trimEnd();
+  const yamlText = yamlDump(meta, { lineWidth: -1, sortKeys: false }).trimEnd();
   return `---\n${yamlText}\n---\n${body}`;
 }
 

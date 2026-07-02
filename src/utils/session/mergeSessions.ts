@@ -18,7 +18,7 @@ import type { SessionSummary, ActiveSession } from "../../types/session";
 // local fallback — copy them only when the server has actually set
 // them, otherwise they'd surface as explicit `undefined` in shallow
 // copies downstream.
-const SERVER_OVERRIDE_KEYS = ["summary", "keywords", "origin", "isBookmarked", "hasUnread", "statusMessage"] as const;
+const SERVER_OVERRIDE_KEYS = ["summary", "keywords", "origin", "isBookmarked", "hasUnread", "statusMessage", "userQueryCount"] as const;
 
 export function pickServerOverrides(serverEntry: SessionSummary | undefined): Partial<SessionSummary> {
   if (!serverEntry) return {};

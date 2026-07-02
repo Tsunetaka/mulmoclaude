@@ -10,11 +10,14 @@ import { ClaudeCliNotFoundError } from "../../server/workspace/journal/archivist
 import type { SummaryResult } from "../../server/workspace/chat-index/types.js";
 
 let workspace: string;
+// Mirrors WORKSPACE_DIRS.chat (`conversations/chat`) — the value
+// the indexer resolves through `chatDirFor` at runtime.
+const CHAT_REL = join("conversations", "chat");
 
 beforeEach(() => {
   __resetForTests();
   workspace = mkdtempSync(join(tmpdir(), "chat-index-maybe-"));
-  mkdirSync(join(workspace, "chat"), { recursive: true });
+  mkdirSync(join(workspace, CHAT_REL), { recursive: true });
 });
 
 afterEach(() => {
@@ -22,7 +25,7 @@ afterEach(() => {
 });
 
 function seedSession(sessionId: string): void {
-  const chatDir = join(workspace, "chat");
+  const chatDir = join(workspace, CHAT_REL);
   writeFileSync(
     join(chatDir, `${sessionId}.json`),
     JSON.stringify({

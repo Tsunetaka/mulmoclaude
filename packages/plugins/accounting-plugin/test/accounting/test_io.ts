@@ -62,6 +62,23 @@ describe("config.json", () => {
     await writeConfig(cfg, root);
     assert.deepEqual(await readConfig(root), cfg);
   });
+  it("normalises a legacy Q1..Q4 fiscalYearEnd token to its closing month on read", async () => {
+    const root = makeTmp();
+    // Simulate a book written before fiscalYearEnd became a month
+    // number — the on-disk value is a calendar-quarter token.
+    const legacy = {
+      books: [
+        { id: "legacy", name: "Legacy", currency: "JPY", fiscalYearEnd: "Q1", createdAt: "2026-04-30T00:00:00Z" },
+        { id: "modern", name: "Modern", currency: "USD", fiscalYearEnd: 8, createdAt: "2026-04-30T00:00:00Z" },
+        { id: "unset", name: "Unset", currency: "EUR", createdAt: "2026-04-30T00:00:00Z" },
+      ],
+    };
+    await writeConfig(legacy as never, root);
+    const read = await readConfig(root);
+    assert.equal(read?.books[0].fiscalYearEnd, 3); // "Q1" → March close
+    assert.equal(read?.books[1].fiscalYearEnd, 8); // already a month — untouched
+    assert.equal(read?.books[2].fiscalYearEnd, undefined); // absent stays absent
+  });
 });
 
 describe("accounts.json", () => {

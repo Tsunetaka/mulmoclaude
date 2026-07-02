@@ -521,7 +521,7 @@ test.describe("manageSkills plugin — external catalog (#1383 PR-C2)", () => {
     await page.getByTestId("skill-add-repo-suggestion-https://github.com/anthropics/skills").click();
     await expect(page.getByTestId("skill-add-repo-url")).toHaveValue("https://github.com/anthropics/skills");
     await expect(page.getByTestId("skill-add-repo-subpath")).toHaveValue("skills");
-    expect(calls.install.length).toBe(0);
+    expect(calls.install).toHaveLength(0);
 
     // Explicit Install is what actually installs.
     await page.getByTestId("skill-add-repo-submit").click();

@@ -80,9 +80,10 @@ const BASE_MS = Math.floor((Date.now() - 10 * 86_400_000) / 1000) * 1000;
 
 let tmpRoot: string;
 let chatDir: string;
-// The manifest lives under a DIFFERENT tree from the session files —
-// `chatDirFor(workspaceRoot)` = `<workspace>/chat/index/manifest.json`
-// while WORKSPACE_PATHS.chat may be `<workspace>/conversations/chat/`.
+// Resolved at runtime from the same modules the handler uses, so
+// tests keep working if the on-disk layout moves again (issue
+// #1902 fixed the drift where the two used to point at different
+// trees).
 let manifestDir: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
@@ -153,9 +154,8 @@ before(async () => {
   // mirrors the setup in test_configRoute.ts.
   process.env.HOME = tmpRoot;
   process.env.USERPROFILE = tmpRoot;
-  // Use the real dir names from the workspace/paths and chat-index
-  // modules — they may differ (e.g. `conversations/chat` for session
-  // files, `chat/index` for the manifest after #284).
+  // Resolve both roots from the real modules so the test still
+  // agrees with production paths no matter how the layout evolves.
   const { WORKSPACE_PATHS } = await import("../../server/workspace/paths.js");
   const { indexDirFor } = await import("../../server/workspace/chat-index/paths.js");
   const { workspacePath: workspacePth } = await import("../../server/workspace/workspace.js");

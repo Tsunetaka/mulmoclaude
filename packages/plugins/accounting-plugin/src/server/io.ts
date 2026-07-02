@@ -13,9 +13,9 @@ import { promises as fsPromises } from "node:fs";
 import path from "node:path";
 
 import { defaultWorkspaceRoot } from "./context.js";
-import { ACCOUNTING_DIRS as WORKSPACE_DIRS } from "../shared";
+import { ACCOUNTING_DIRS as WORKSPACE_DIRS, resolveFiscalYearEnd } from "../shared";
 import { writeJsonAtomic, isEnoent } from "./atomic.js";
-import type { AccountingConfig, Account, JournalEntry, MonthSnapshot } from "./types.js";
+import type { AccountingConfig, Account, BookSummary, JournalEntry, MonthSnapshot } from "./types.js";
 
 const root = (workspaceRoot?: string): string => workspaceRoot ?? defaultWorkspaceRoot();
 
@@ -99,8 +99,22 @@ async function readJsonStrict<T>(filePath: string): Promise<T | null> {
 
 // ── config.json ────────────────────────────────────────────────────
 
+/** Migrate a legacy calendar-quarter `fiscalYearEnd` token ("Q1".."Q4")
+ *  to its closing-month number in memory so every downstream consumer
+ *  (reports, time-series, the UI selects) sees one shape. Absent stays
+ *  absent — the field is optional and resolves to the default on read;
+ *  we don't stamp an explicit December onto a book that never chose one.
+ *  Nothing is written back here (no auto-migrate on disk). */
+function normalizeBookFiscalYearEnd(book: BookSummary): BookSummary {
+  if (book.fiscalYearEnd === undefined) return book;
+  const resolved = resolveFiscalYearEnd(book.fiscalYearEnd);
+  return book.fiscalYearEnd === resolved ? book : { ...book, fiscalYearEnd: resolved };
+}
+
 export async function readConfig(workspaceRoot?: string): Promise<AccountingConfig | null> {
-  return readJsonStrict<AccountingConfig>(configPath(workspaceRoot));
+  const config = await readJsonStrict<AccountingConfig>(configPath(workspaceRoot));
+  if (!config) return null;
+  return { ...config, books: config.books.map(normalizeBookFiscalYearEnd) };
 }
 
 export async function writeConfig(config: AccountingConfig, workspaceRoot?: string): Promise<void> {

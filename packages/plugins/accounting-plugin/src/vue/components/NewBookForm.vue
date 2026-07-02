@@ -62,7 +62,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
-import { useI18n } from "vue-i18n";
+import { useAccountingI18n } from "../lang";
 import { createBook, type BookSummary } from "../api";
 import {
   SUPPORTED_CURRENCY_CODES,
@@ -71,11 +71,12 @@ import {
   localizedCountryName,
   type SupportedCountryCode,
   DEFAULT_FISCAL_YEAR_END,
-  FISCAL_YEAR_ENDS,
+  FISCAL_YEAR_END_MONTHS,
+  fiscalYearEndMonthLabel,
   type FiscalYearEnd,
 } from "../../shared";
 
-const { t, locale } = useI18n();
+const { t, locale } = useAccountingI18n();
 
 function regionFromLocaleTag(tag: string): SupportedCountryCode | "" {
   try {
@@ -164,9 +165,9 @@ interface FiscalYearEndOption {
 }
 
 const fiscalYearEndOptions = computed<FiscalYearEndOption[]>(() =>
-  FISCAL_YEAR_ENDS.map((value) => ({
+  FISCAL_YEAR_END_MONTHS.map((value) => ({
     value,
-    label: t(`pluginAccounting.bookSwitcher.fiscalYearEnd${value}`),
+    label: fiscalYearEndMonthLabel(value, locale.value),
   })),
 );
 

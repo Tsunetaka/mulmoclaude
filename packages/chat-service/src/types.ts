@@ -133,6 +133,17 @@ export interface ChatServiceDeps {
     total: number;
   }>;
   /**
+   * Resolve the roleId a given session was started with. Used by the HTTP
+   * `/connect` route so the persisted bridge state's role tracks the target
+   * session's role after a repoint — same drift-fix as bridge `/switch`
+   * (issue #1888 / #1894), but for API callers that only supply a session ID.
+   * Returns null when the session isn't found OR when its role isn't known;
+   * on null the route falls back to the previous "preserve current role"
+   * behaviour (safe default). Omit this dep entirely to keep the old
+   * session-id-only semantics.
+   */
+  getSessionRole?: (sessionId: string) => Promise<string | null>;
+  /**
    * Return the skills the bridge command handler should expose. The
    * handler uses the result for two things:
    *   (1) Decide whether an unknown bridge slash command (e.g. `/foo`

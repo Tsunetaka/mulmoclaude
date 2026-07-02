@@ -22,6 +22,8 @@ const es: Messages = {
   marpSplitEnter: "Editar la fuente junto a la vista previa",
   marpSplitExit: "Cerrar el editor de la fuente",
   marpSplitEditorLabel: "Fuente",
+  mermaidLoadFailed: "⚠ Error al cargar Mermaid: {error}",
+  mermaidRenderFailed: "⚠ Error al renderizar Mermaid: {error}",
 };
 
 export default es;

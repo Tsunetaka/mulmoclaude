@@ -1,6 +1,9 @@
 export interface Messages {
   saveAsPdf: string;
   pdf: string;
+  download: string;
+  downloadZip: string;
+  downloadError(error: string): string;
   untitled: string;
   editSource: string;
   cancel: string;

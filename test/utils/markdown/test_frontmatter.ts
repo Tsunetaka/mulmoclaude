@@ -88,6 +88,18 @@ describe("parseFrontmatter — degenerate cases", () => {
     assert.equal(out.body, "body\n");
   });
 
+  it("accepts a whitespace-only envelope as hasHeader: true with empty meta (js-yaml 5.x compatibility)", () => {
+    // js-yaml 5.x throws on `yaml.load("")` / whitespace-only input
+    // where 4.x returned `undefined`. The safeYamlLoad guard treats
+    // a whitespace-only frontmatter block as "no metadata, fine".
+    for (const raw of ["---\n\n---\n\nbody\n", "---\n   \n---\n\nbody\n", "---\n\n\n\n---\n\nbody\n"]) {
+      const out = parseFrontmatter(raw);
+      assert.equal(out.hasHeader, true, `hasHeader for: ${JSON.stringify(raw)}`);
+      assert.deepEqual(out.meta, {}, `meta for: ${JSON.stringify(raw)}`);
+      assert.equal(out.body, "body\n", `body for: ${JSON.stringify(raw)}`);
+    }
+  });
+
   it("returns empty body when the document is header-only (no body following)", () => {
     const raw = "---\ntitle: Hello\n---\n";
     const out = parseFrontmatter(raw);

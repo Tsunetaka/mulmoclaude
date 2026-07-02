@@ -30,9 +30,10 @@ export const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 // ── Wiki bullet-link parsers ──────────────────────────────────────
 //
-// Moved to `src/lib/wiki-page/index-parse.ts` as part of the pure-
-// lib extraction (#1297). The patterns are still bounded with hard
-// delimiters; the ReDoS-safety rationale travelled with them.
+// Moved to `@mulmoclaude/core/wiki` (`index-parse.ts`) as part of the
+// pure-lib extraction (#1297, then promoted to shared core). The
+// patterns are still bounded with hard delimiters; the ReDoS-safety
+// rationale travelled with them.
 
 // ── Skills body blank-line stripper ───────────────────────────────
 //

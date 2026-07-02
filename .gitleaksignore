@@ -30,3 +30,13 @@
 # prefix match. Not a real key.
 877b5911b33153ac3794a8d824ec49d2230006ae:test/plugins/test_map_integration.ts:generic-api-key:93
 877b5911b33153ac3794a8d824ec49d2230006ae:test/plugins/test_map_integration.ts:generic-api-key:109
+
+# src/config/firebaseConfig.ts holds the shared mulmoserver project's
+# Firebase Web SDK config. The apiKey is a public project *identifier*,
+# not a secret — Google documents that Firebase-related APIs do not use
+# API keys for authorization
+# (https://firebase.google.com/docs/projects/api-keys#apikey-restrictions).
+# It ships to every browser; access is gated by Firestore Security Rules
+# + Firebase Auth, not by hiding the value. Its `AIza…`-prefixed literal
+# trips gitleaks' generic gcp-api-key rule. Not a real secret. See #1911.
+7332183f0e0e6f982fc151350e5a612bc0ed9303:src/config/firebaseConfig.ts:gcp-api-key:11

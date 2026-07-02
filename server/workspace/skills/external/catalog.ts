@@ -159,9 +159,7 @@ export interface ExternalCatalogDetail {
 }
 
 export type ExternalCatalogDetailResult =
-  | { kind: "ok"; detail: ExternalCatalogDetail }
-  | { kind: "invalid-id" }
-  | { kind: "not-found"; repoId: string; skillFolder: string };
+  { kind: "ok"; detail: ExternalCatalogDetail } | { kind: "invalid-id" } | { kind: "not-found"; repoId: string; skillFolder: string };
 
 interface ResolvedSource {
   repoId: string;

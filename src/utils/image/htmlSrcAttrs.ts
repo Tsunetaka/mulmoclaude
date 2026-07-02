@@ -161,7 +161,7 @@ const TAG_NAME_RE = /^<([a-z]+)/i;
 //      quote as the value
 //
 // All quantifiers bounded — verified ReDoS-safe in test_htmlSrcAttrs.ts.
-// eslint-disable-next-line sonarjs/slow-regex, sonarjs/regex-complexity, security/detect-unsafe-regex -- bounded quantifiers, ReDoS-safe (test in test_htmlSrcAttrs.ts)
+// eslint-disable-next-line sonarjs/super-linear-regex, sonarjs/regex-complexity, security/detect-unsafe-regex -- bounded quantifiers, ReDoS-safe (test in test_htmlSrcAttrs.ts)
 const ATTR_ITER_RE = /(\s+)([A-Za-z][\w:-]*)(?:(\s*=\s*)("([^"]*)"|'([^']*)'|([^\s>"'][^\s>]*)))?/g;
 
 /** Transform every URL-bearing attribute on a recognised tag.

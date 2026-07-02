@@ -20,8 +20,10 @@ export {
   resolveCreateItemId,
   readSkillTemplate,
   readCustomViewHtml,
+  readCustomViewI18n,
   buildActionSeedPrompt,
   buildCollectionActionSeedPrompt,
+  promptPathsFor,
   type WriteItemResult,
   type DeleteItemResult,
 } from "@mulmoclaude/core/collection/server";

@@ -114,8 +114,7 @@
                 <pre
                   class="px-2 py-1.5 rounded bg-gray-50 border border-gray-200 text-gray-700 whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed"
                   :data-testid="`scheduler-task-prompt-${task.id}`"
-                  >{{ task.prompt }}</pre
-                >
+                  >{{ task.prompt }}</pre>
               </div>
             </div>
           </details>

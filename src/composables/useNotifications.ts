@@ -40,10 +40,7 @@ export interface NotifierHistoryEntry extends NotifierEntry {
 }
 
 type NotifierEvent =
-  | { type: "published"; entry: NotifierEntry }
-  | { type: "cleared"; id: string }
-  | { type: "cancelled"; id: string }
-  | { type: "updated"; entry: NotifierEntry };
+  { type: "published"; entry: NotifierEntry } | { type: "cleared"; id: string } | { type: "cancelled"; id: string } | { type: "updated"; entry: NotifierEntry };
 
 const HISTORY_CAP = 50;
 

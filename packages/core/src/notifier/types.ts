@@ -117,7 +117,4 @@ export const HISTORY_CAP = 50;
  *  place edits via `updateForPlugin`; no history record is written
  *  because the entry is still active, just with refreshed content. */
 export type NotifierEvent =
-  | { type: "published"; entry: NotifierEntry }
-  | { type: "cleared"; id: string }
-  | { type: "cancelled"; id: string }
-  | { type: "updated"; entry: NotifierEntry };
+  { type: "published"; entry: NotifierEntry } | { type: "cleared"; id: string } | { type: "cancelled"; id: string } | { type: "updated"; entry: NotifierEntry };

@@ -18,7 +18,7 @@
     <div v-else class="grid gap-4 sm:grid-cols-2">
       <div
         v-for="entry in entries"
-        :key="entry.id"
+        :key="entryKey(entry)"
         class="relative rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col gap-3"
         :data-testid="`discover-card-${entry.slug}`"
       >
@@ -32,6 +32,13 @@
             <span class="block text-[11px] text-slate-400 mt-0.5 truncate">
               {{ t("collectionsView.discover.by", { author: entry.author }) }} ·
               <code class="bg-slate-100 px-1 rounded text-slate-500 font-mono">{{ entry.slug }}</code>
+              ·
+              <span
+                class="inline-block text-[10px] uppercase tracking-wider font-semibold text-teal-700 bg-teal-50 border border-teal-100 rounded px-1.5"
+                :data-testid="`discover-registry-${entry.slug}`"
+                :title="t('collectionsView.discover.registryBadge', { registry: entry.registryName })"
+                >{{ entry.registryName }}</span
+              >
             </span>
           </div>
         </div>
@@ -102,12 +109,20 @@ const loading = ref(true);
 const loadError = ref<string | null>(null);
 const importStates = ref<Record<string, ImportState>>({});
 
+// With multi-registry support `entry.id` (author/slug) is no longer unique
+// across the merged catalog — two registries can ship the same author/slug.
+// Pair with registryName so Vue's :key and the import-state record both stay
+// collision-free.
+function entryKey(entry: RegistryEntry): string {
+  return `${entry.registryName}/${entry.id}`;
+}
+
 function stateOf(entry: RegistryEntry): ImportState {
-  return importStates.value[entry.id] ?? { status: "idle" };
+  return importStates.value[entryKey(entry)] ?? { status: "idle" };
 }
 
 function setState(entry: RegistryEntry, state: ImportState): void {
-  importStates.value = { ...importStates.value, [entry.id]: state };
+  importStates.value = { ...importStates.value, [entryKey(entry)]: state };
 }
 
 // "Imported as movies-2" when the install was renamed to avoid clobbering an
@@ -132,7 +147,7 @@ async function load(): Promise<void> {
 
 async function doImport(entry: RegistryEntry): Promise<void> {
   setState(entry, { status: "importing" });
-  const result = await cui.importRegistry(entry.author, entry.slug);
+  const result = await cui.importRegistry(entry.author, entry.slug, entry.registryName);
   if (!result.ok) {
     setState(entry, { status: "error", error: result.error });
     return;

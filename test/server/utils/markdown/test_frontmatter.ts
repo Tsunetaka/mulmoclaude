@@ -78,6 +78,15 @@ describe("server parseFrontmatter — degenerate cases", () => {
     assert.equal(out.body, "body\n");
   });
 
+  it("accepts a whitespace-only envelope (js-yaml 5.x throws on empty input; 4.x returned undefined)", () => {
+    for (const raw of ["---\n\n---\n\nbody\n", "---\n   \n---\n\nbody\n", "---\n\n\n\n---\n\nbody\n"]) {
+      const out = parseFrontmatter(raw);
+      assert.equal(out.hasHeader, true, `hasHeader for: ${JSON.stringify(raw)}`);
+      assert.deepEqual(out.meta, {}, `meta for: ${JSON.stringify(raw)}`);
+      assert.equal(out.body, "body\n", `body for: ${JSON.stringify(raw)}`);
+    }
+  });
+
   it("returns empty body when the document is header-only", () => {
     const out = parseFrontmatter("---\ntitle: Hello\n---\n");
     assert.equal(out.hasHeader, true);

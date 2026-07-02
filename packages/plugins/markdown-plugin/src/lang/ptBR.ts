@@ -22,6 +22,8 @@ const ptBR: Messages = {
   marpSplitEnter: "Editar o código fonte ao lado da visualização",
   marpSplitExit: "Fechar o editor de código",
   marpSplitEditorLabel: "Código",
+  mermaidLoadFailed: "⚠ Falha ao carregar o Mermaid: {error}",
+  mermaidRenderFailed: "⚠ Falha ao renderizar o Mermaid: {error}",
 };
 
 export default ptBR;

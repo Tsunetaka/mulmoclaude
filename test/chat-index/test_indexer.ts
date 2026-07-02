@@ -9,10 +9,13 @@ import { indexEntryPathFor, manifestPathFor } from "../../server/workspace/chat-
 import type { SummaryResult } from "../../server/workspace/chat-index/types.js";
 
 let workspace: string;
+// Mirrors WORKSPACE_DIRS.chat (`conversations/chat`) — the value
+// the indexer resolves through `chatDirFor` at runtime.
+const CHAT_REL = join("conversations", "chat");
 
 beforeEach(() => {
   workspace = mkdtempSync(join(tmpdir(), "chat-index-test-"));
-  mkdirSync(join(workspace, "chat"), { recursive: true });
+  mkdirSync(join(workspace, CHAT_REL), { recursive: true });
 });
 
 afterEach(() => {
@@ -36,7 +39,7 @@ function seedSession(
     userMessages = ["Can you help me plan a project?"],
     assistantMessages = ["Sure — tell me what it's about."],
   } = opts;
-  const chatDir = join(workspace, "chat");
+  const chatDir = join(workspace, CHAT_REL);
   writeFileSync(join(chatDir, `${sessionId}.json`), JSON.stringify({ roleId, startedAt }));
   const lines: string[] = [];
   for (let i = 0; i < Math.max(userMessages.length, assistantMessages.length); i++) {
@@ -228,7 +231,7 @@ describe("indexSession — skip conditions", () => {
   });
 
   it("returns null when the jsonl only has tool_result entries", async () => {
-    const chatDir = join(workspace, "chat");
+    const chatDir = join(workspace, CHAT_REL);
     writeFileSync(
       join(chatDir, "sess-F.json"),
       JSON.stringify({
@@ -333,14 +336,14 @@ describe("readManifest", () => {
   });
 
   it("returns an empty manifest when the file is corrupted", async () => {
-    mkdirSync(join(workspace, "chat", "index"), { recursive: true });
+    mkdirSync(join(workspace, CHAT_REL, "index"), { recursive: true });
     writeFileSync(manifestPathFor(workspace), "{ not json");
     const manifest = await readManifest(workspace);
     assert.deepEqual(manifest, { version: 1, entries: [] });
   });
 
   it("returns an empty manifest for a version mismatch", async () => {
-    mkdirSync(join(workspace, "chat", "index"), { recursive: true });
+    mkdirSync(join(workspace, CHAT_REL, "index"), { recursive: true });
     writeFileSync(manifestPathFor(workspace), JSON.stringify({ version: 99, entries: [] }));
     const manifest = await readManifest(workspace);
     assert.deepEqual(manifest, { version: 1, entries: [] });
@@ -354,14 +357,14 @@ describe("isFresh", () => {
   });
 
   it("returns true when the entry is within the window", async () => {
-    mkdirSync(join(workspace, "chat", "index"), { recursive: true });
+    mkdirSync(join(workspace, CHAT_REL, "index"), { recursive: true });
     writeFileSync(indexEntryPathFor(workspace, "x"), JSON.stringify({ indexedAt: new Date(0).toISOString() }));
     const out = await isFresh(workspace, "x", 5000, MIN_INDEX_INTERVAL_MS);
     assert.equal(out, true);
   });
 
   it("returns false when the entry is outside the window", async () => {
-    mkdirSync(join(workspace, "chat", "index"), { recursive: true });
+    mkdirSync(join(workspace, CHAT_REL, "index"), { recursive: true });
     writeFileSync(indexEntryPathFor(workspace, "x"), JSON.stringify({ indexedAt: new Date(0).toISOString() }));
     const out = await isFresh(workspace, "x", MIN_INDEX_INTERVAL_MS + 1, MIN_INDEX_INTERVAL_MS);
     assert.equal(out, false);

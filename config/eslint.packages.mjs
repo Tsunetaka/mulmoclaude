@@ -15,6 +15,11 @@ export default [
     plugins: { prettier: prettierPlugin },
     rules: {
       "prettier/prettier": "error",
+      // Mirror the root config: many node:test cases drive an observed
+      // side-effect (no throw / no log) and intentionally have no
+      // inline assert. Demoted to warn so reviewers still see it
+      // without blocking CI.
+      "sonarjs/assertions-in-tests": "warn",
       "@typescript-eslint/no-unused-vars": [
         "error",
         { argsIgnorePattern: "^__", varsIgnorePattern: "^__" },

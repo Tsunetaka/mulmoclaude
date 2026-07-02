@@ -20,8 +20,27 @@ export interface SaveHtmlArgs {
   html: string;
 }
 
-/** Discriminated union of every action the View can `dispatch`. */
+/** Discriminated union of every action the View's *package* router
+ *  (`executeHtmlDispatch`) serves. `packHtml` is deliberately NOT here:
+ *  bundling needs binary asset reads + zip, which live host-side, so the
+ *  host intercepts it before delegating (see `PackHtmlArgs`). */
 export type HtmlDispatchArgs = LoadHtmlArgs | SaveHtmlArgs;
+
+/** Bundle an HTML artifact + its referenced local assets into a
+ *  self-contained zip. Dispatched by the View, handled host-side (not by
+ *  the pure package router). */
+export interface PackHtmlArgs {
+  kind: "packHtml";
+  /** Workspace-relative path under `artifacts/html/…`. */
+  path: string;
+}
+
+/** Result of `packHtml`: base64 keeps the zip bytes JSON-safe over the
+ *  dispatch transport; the View decodes it to a Blob download. */
+export interface PackHtmlResult {
+  filename: string;
+  zipBase64: string;
+}
 
 /** Maps a dispatch `kind` to its result shape so the View can call
  *  `dispatch<HtmlDispatchResult["loadHtml"]>(…)` without a cast. */

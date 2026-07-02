@@ -39,23 +39,31 @@ const SUMMARY_SCHEMA = {
   required: ["title", "summary", "keywords"],
 };
 
-// Prompt-building constants.
-const MAX_INPUT_CHARS = 8000;
-const HEAD_CHARS = 3000;
-const TAIL_CHARS = 5000;
-const PER_MESSAGE_MAX = 500;
+// Model used for summarization. Sonnet, not haiku: the title is the
+// primary way a user finds a past chat, so a weak title makes the
+// history list unusable. One cheap structured call per session is
+// negligible next to the agent turns it summarizes.
+const SUMMARY_MODEL = "sonnet";
+
+// Prompt-building constants. Sized for Sonnet's large context: the
+// window is wide enough to carry a long, topic-shifting session's
+// middle (not just head + tail), and per-message clipping keeps the
+// substance of long turns. Exported so the summarizer tests derive
+// their fixtures from them rather than hard-coding sizes that rot.
+export const MAX_INPUT_CHARS = 30000;
+export const HEAD_CHARS = 12000;
+export const TAIL_CHARS = 16000;
+export const PER_MESSAGE_MAX = 1500;
 
 // Spawn / budget constants.
 const DEFAULT_TIMEOUT_MS = 2 * ONE_MINUTE_MS;
 // Budget cap per summarization call, forwarded to `claude
-// --max-budget-usd`. Previously 0.05 but that was tight enough
-// that a first-burst call — which pays a one-time cache creation
-// cost on haiku (~28k cache-creation tokens) — would trip the cap
-// and fail with `error_max_budget_usd` even for tiny 600-char
-// transcripts. 0.15 leaves comfortable headroom for cache
-// creation + a generous output allowance while still capping a
-// full 100-session backfill to well under $20.
-const MAX_BUDGET_USD = 0.15;
+// --max-budget-usd`. A first-burst call pays a one-time cache-creation
+// cost (~28k tokens) that on Sonnet's pricing would trip a tighter cap
+// and fail with `error_max_budget_usd` — yielding NO title at all.
+// 0.40 leaves headroom for cache creation plus the wider input window
+// while still bounding a full backfill.
+const MAX_BUDGET_USD = 0.4;
 
 // Any module that wants to drive the summarizer — including the
 // indexer — takes a SummarizeFn so tests can supply a deterministic
@@ -95,7 +103,7 @@ export function extractText(jsonlContent: string): string {
   return parts.join("\n\n");
 }
 
-// Long sessions are clipped to first ~3000 + last ~5000 chars so
+// Long sessions are clipped to first ~12000 + last ~16000 chars so
 // claude sees both the original topic and the most recent state.
 // Distinct from the simple-tail `truncate()` in `server/utils/text.ts`
 // — the summarizer needs context from both ends, not just the head.
@@ -184,7 +192,7 @@ function spawnClaudeSummarize(input: string, timeoutMs: number): Promise<string>
       "--output-format",
       "json",
       "--model",
-      "haiku",
+      SUMMARY_MODEL,
       "--max-budget-usd",
       String(MAX_BUDGET_USD),
       "--json-schema",

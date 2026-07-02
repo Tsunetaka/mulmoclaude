@@ -37,7 +37,22 @@ on:
     # then edit it to point at main. That arrives as `edited`, not
     # `opened` / `reopened`, so triage would otherwise never fire on
     # the retargeted PR. CodeRabbit + Codex review on PR #1708.
-    types: [opened, reopened, synchronize, edited]
+    #
+    # `synchronize` removed (#1869 follow-up): a `synchronize` event
+    # arrives a few seconds after we call `gh pr close` on a large
+    # PR, and the post-close `edited` event from CodeRabbit's title /
+    # body edits arrives a beat later. Both re-ran this workflow and
+    # each posted another copy of the closing comment (PR #1869
+    # received three identical close comments inside 90 s). The
+    # `if: state == 'open'` guard below catches the residual `edited`
+    # case; dropping `synchronize` removes the primary duplicate
+    # source. Net behaviour: a contributor who opens a small PR and
+    # later pushes a large commit is no longer auto-closed, but the
+    # PR is still in the human review queue (and the doc-link in the
+    # opening comment still points at the policy) — that's an
+    # acceptable trade for not spamming three copies of the same
+    # close comment every time.
+    types: [opened, reopened, edited]
     branches: [main]
 
 permissions:
@@ -51,6 +66,14 @@ concurrency:
 
 jobs:
   triage:
+    # Skip everything once the PR is closed. Without this, a residual
+    # `edited` event (e.g. CodeRabbit re-summarising the title/body
+    # after we already closed) re-runs the whole script — `gh pr close`
+    # on a closed PR is a no-op, but the `gh pr comment` above it is
+    # NOT idempotent and posts another copy of the closing template.
+    # This guard is the second half of the #1869 fix (the first half
+    # is dropping `synchronize` from `types` above).
+    if: github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:

@@ -168,10 +168,17 @@ Every field spec needs a `type` and a `label`. Extra keys by type:
   A `derived` field on the same record can also **dereference** a `ref` to read
   a numeric column off the record it points at — see the cross-collection
   formula syntax below.
-- **`embed`** — `to: "<target-slug>"`, `id: "<record-id>"`. Pulls a _fixed_
+- **`embed`** — `to: "<target-slug>"`, plus **exactly one** of `id` (a _fixed_
+  record id, same for every row) or `idField` (a _per-record_ target). Pulls a
   record from another collection into the read-only detail view (display-only,
-  **nothing is stored** on this record). Example: an invoice embedding the
-  user's own profile: `{ "type": "embed", "to": "profile", "id": "me" }`.
+  **nothing is stored** on this record). Fixed — every row embeds the same
+  singleton record (e.g. a one-record `settings` collection):
+  `{ "type": "embed", "to": "settings", "id": "app" }`.
+  Per-record — `idField` names a sibling field (typically a `ref`) holding the
+  target id, so each row embeds a different record; the host renders that
+  sibling as a dropdown picker in the editor and hides its own cell (the embed
+  owns it). E.g. a multi-issuer invoice: a `ref` field `issuerId → profile`
+  plus `{ "type": "embed", "to": "profile", "idField": "issuerId" }`.
 - **`table`** — `of: { <col>: <sub-field-spec>, ... }`. An array of rows. Each
   sub-field is a flat spec; sub-fields **cannot** be `table` or `derived`
   (no nested tables, no computed columns).
@@ -851,8 +858,9 @@ recipe when the user wants any of them, and copy the schema verbatim:
   - **`worklog`** — adds a `ref` (`clientId → clients`), a `date`, a `number`, a
     `boolean`. A companion data source.
 - **`config/helps/billing-invoice.md`** (Bundle B):
-  - **`profile`** — a `singleton` (one record, id `me`): the issuer identity.
-  - **`invoice`** — the full toolkit in one schema: an `embed` issuer
-    (`profile/me`), a `ref` client (`clients`), a `table` of line items, three
-    `derived` money fields, an `enum` status, and four `actions` (PDF always-on;
-    sale / payment / void gated by `status` via `when`).
+  - **`profile`** — one record per issuer identity (primary id `me`); each invoice
+    picks one.
+  - **`invoice`** — the full toolkit in one schema: a `ref` issuer (`issuerId →
+    profile`) embedded via an `idField` `embed`, a `ref` client (`clients`), a
+    `table` of line items, three `derived` money fields, an `enum` status, and four
+    `actions` (PDF always-on; sale / payment / void gated by `status` via `when`).

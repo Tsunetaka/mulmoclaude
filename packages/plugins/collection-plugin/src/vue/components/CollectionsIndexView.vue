@@ -32,12 +32,14 @@
           type="button"
           class="h-8 px-2.5 flex items-center gap-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition-colors shadow-sm"
           data-testid="collections-add-collection"
-          @click="startCreateCollectionChat"
+          @click="showNewCollectionModal = true"
         >
           <span class="material-icons text-sm">add</span>
           <span>{{ t("collectionsView.addCollectionLabel") }}</span>
         </button>
       </div>
+
+      <NewCollectionModal v-if="showNewCollectionModal" @close="showNewCollectionModal = false" />
 
       <DiscoverPanel v-if="tab === 'discover'" @imported="loadCollections" />
       <template v-else>
@@ -128,6 +130,7 @@ import { onMounted, ref } from "vue";
 import { useCollectionI18n } from "../lang";
 import { collectionUi } from "../uiContext";
 import DiscoverPanel from "./DiscoverPanel.vue";
+import NewCollectionModal from "./NewCollectionModal.vue";
 import type { CollectionSummary } from "@mulmoclaude/core/collection";
 
 const { t } = useCollectionI18n();
@@ -136,6 +139,7 @@ const cui = collectionUi();
 const { pinToggle, reconcileShortcuts } = cui;
 
 const tab = ref<"installed" | "discover">("installed");
+const showNewCollectionModal = ref(false);
 const collections = ref<CollectionSummary[]>([]);
 const loading = ref(true);
 const loadError = ref<string | null>(null);
@@ -165,9 +169,37 @@ function openCollection(slug: string): void {
   cui.gotoDetail("collection", slug);
 }
 
-function startCreateCollectionChat(): void {
-  cui.startChat(t("collectionsView.addCollectionPrompt"), cui.generalRoleId);
+// Defence against prompt injection via collection metadata. CodeRabbit
+// flagged title + slug as untrusted data interpolated straight into an
+// agent instruction that can drive git / gh. The slug is already
+// constrained to [a-z0-9-]+ at the schema layer, but title is free-
+// form and a crafted value (newlines, angle brackets, Unicode line
+// separators) could plausibly steer the agent off the contribute path
+// into something unintended. Strip the structural attack surface
+// before the values reach the prompt template; plain text still
+// travels through, but without markers it can use to fabricate the
+// appearance of a new instruction line or escape the surrounding
+// context. Applied to the AGENT prompt only — the confirm dialog
+// below renders the untouched title so the user sees what they're
+// about to share.
+/* eslint-disable no-control-regex -- intentional: we strip ASCII control chars from untrusted user input */
+function sanitizeForPrompt(value: string): string {
+  return (
+    value
+      // ASCII control chars (incl. CR / LF / tab) → space.
+      .replace(/[\x00-\x1f\x7f]/g, " ")
+      // Unicode line / paragraph separators (U+2028 / U+2029). Some
+      // string-rendering paths and LLM tokenizers treat these as real
+      // line breaks, so a crafted title containing one could visually
+      // smuggle a new "line" of instruction past a reader scanning the
+      // prompt (Codex follow-up on the ASCII-only first pass).
+      .replace(/[\u2028\u2029]/g, " ")
+      // Angle brackets — can't open or close a wrapper tag.
+      .replace(/[<>]/g, "")
+      .trim()
+  );
 }
+/* eslint-enable no-control-regex */
 
 // Contributing runs an agent that exports the collection and opens a GitHub PR —
 // confirm before launching so a stray click doesn't start a share unprompted.
@@ -178,7 +210,9 @@ async function startContributeChat(collection: CollectionSummary): Promise<void>
     variant: "primary",
   });
   if (!confirmed) return;
-  cui.startChat(t("collectionsView.contributePrompt", { title: collection.title, slug: collection.slug }), cui.generalRoleId);
+  const title = sanitizeForPrompt(collection.title);
+  const slug = sanitizeForPrompt(collection.slug);
+  cui.startChat(t("collectionsView.contributePrompt", { title, slug }), cui.generalRoleId);
 }
 
 onMounted(loadCollections);

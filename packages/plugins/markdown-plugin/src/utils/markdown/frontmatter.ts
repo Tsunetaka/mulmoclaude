@@ -10,7 +10,7 @@
 // lists, multi-line strings, escaping) instead of the regex
 // approximation in the legacy `src/utils/format/frontmatter.ts`.
 
-import yaml from "js-yaml";
+import { FAILSAFE_SCHEMA, dump as yamlDump, load as yamlLoad } from "js-yaml";
 
 export interface ParsedMarkdown {
   /** Parsed YAML object. Empty `{}` when the document has no
@@ -76,7 +76,7 @@ export function serializeWithFrontmatter(meta: Record<string, unknown>, body: st
   // one line. `noRefs: true` avoids YAML anchor syntax (`&id001`)
   // which is technically valid but visually noisy in plain-text
   // markdown. js-yaml's default already trims a trailing newline.
-  const yamlText = yaml.dump(meta, { lineWidth: -1, noRefs: true }).trimEnd();
+  const yamlText = yamlDump(meta, { lineWidth: -1, noRefs: true }).trimEnd();
   return `---\n${yamlText}\n---\n\n${body}`;
 }
 
@@ -98,12 +98,17 @@ export function mergeFrontmatter(existing: Record<string, unknown>, patch: Recor
 }
 
 function safeYamlLoad(text: string): Record<string, unknown> | null {
+  // js-yaml 5.x THROWS on empty / whitespace-only input where 4.x
+  // returned `undefined`. An empty frontmatter block (`---\n---\n`)
+  // means "no metadata, fine" to our callers, not "malformed", so
+  // pre-check the string and return `{}` before reaching the loader.
+  if (text.trim() === "") return {};
   try {
     // `FAILSAFE_SCHEMA` keeps every scalar as a string and skips
     // type coercion. Two motivating cases:
     //
     //   - YAML 1.1 dates: `created: 2026-04-27` would become a
-    //     `Date` object under DEFAULT_SCHEMA, breaking round-trip.
+    //     `Date` object under CORE_SCHEMA, breaking round-trip.
     //   - Numeric-looking strings: `version: 1.20` → number 1.2
     //     under JSON_SCHEMA, dropping the trailing zero on save
     //     (codex review iter-1 #902).
@@ -112,10 +117,10 @@ function safeYamlLoad(text: string): Record<string, unknown> | null {
     // everything that should be a string IS one, and the rare
     // caller that wants a number can coerce explicitly. Mappings
     // and sequences still parse normally (FAILSAFE keeps those).
-    const loaded = yaml.load(text, { schema: yaml.FAILSAFE_SCHEMA });
-    // `yaml.load` returns `undefined` for empty input, a primitive
-    // for scalar-only YAML, or an object for the normal case. Only
-    // accept plain objects — anything else is a malformed header.
+    const loaded = yamlLoad(text, { schema: FAILSAFE_SCHEMA });
+    // `yaml.load` may still return a primitive for scalar-only YAML
+    // (e.g. `"hello"` parses to the string `"hello"`). Only accept
+    // plain objects — anything else is a malformed header.
     if (loaded === null || loaded === undefined) return {};
     if (typeof loaded !== "object" || Array.isArray(loaded)) return null;
     return loaded as Record<string, unknown>;

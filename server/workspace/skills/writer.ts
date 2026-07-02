@@ -121,10 +121,7 @@ export interface DeleteSkillInput {
 }
 
 export type DeleteResult =
-  | { kind: "deleted"; name: string }
-  | { kind: "invalid-slug"; slug: string }
-  | { kind: "not-found"; name: string }
-  | { kind: "user-scope"; name: string };
+  { kind: "deleted"; name: string } | { kind: "invalid-slug"; slug: string } | { kind: "not-found"; name: string } | { kind: "user-scope"; name: string };
 
 /**
  * Remove a project-scope skill (SKILL.md + its containing folder).

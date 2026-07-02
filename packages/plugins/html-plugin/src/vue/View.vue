@@ -1,12 +1,25 @@
 <template>
   <div class="html-container">
-    <div class="px-4 py-2 border-b border-gray-100 shrink-0 flex items-center justify-between">
+    <div class="px-4 py-2 border-b border-gray-100 shrink-0 flex items-center justify-between gap-2">
       <span class="text-sm font-medium text-gray-700 truncate">{{ title ?? t.untitled }}</span>
-      <button class="px-2 py-1 text-xs rounded border border-gray-300 text-gray-500 hover:bg-gray-50 shrink-0" :title="t.saveAsPdf" @click="printToPdf">
-        <span class="material-icons text-sm align-middle">picture_as_pdf</span>
-        {{ t.pdf }}
-      </button>
+      <div class="flex items-center gap-2 shrink-0">
+        <button
+          class="px-2 py-1 text-xs rounded border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+          :title="t.downloadZip"
+          :disabled="downloading || !filePath"
+          data-testid="present-html-download"
+          @click="downloadZip"
+        >
+          <span class="material-icons text-sm align-middle">download</span>
+          {{ t.download }}
+        </button>
+        <button class="px-2 py-1 text-xs rounded border border-gray-300 text-gray-500 hover:bg-gray-50" :title="t.saveAsPdf" @click="printToPdf">
+          <span class="material-icons text-sm align-middle">picture_as_pdf</span>
+          {{ t.pdf }}
+        </button>
+      </div>
     </div>
+    <div v-if="downloadError" class="download-error" role="alert">{{ t.downloadError(downloadError) }}</div>
     <div class="iframe-wrapper">
       <iframe v-if="frameSrc" data-testid="present-html-iframe" :src="frameSrc" sandbox="allow-scripts" class="w-full h-full border-0" />
       <div v-else class="h-full flex items-center justify-center text-sm text-gray-500">
@@ -43,7 +56,7 @@
 import { computed, ref, watch } from "vue";
 import { useRuntime, type ToolResultComplete } from "gui-chat-protocol/vue";
 import type { PresentHtmlData } from "../core/types";
-import type { HtmlDispatchResult } from "../core/contract";
+import type { HtmlDispatchResult, PackHtmlResult } from "../core/contract";
 import { htmlArtifactPreviewUrl } from "../core/paths";
 import { useT } from "../lang";
 import { buildPrintCspContent } from "./previewCsp";
@@ -106,6 +119,35 @@ const sourceError = ref<string | null>(null);
 const editableHtml = ref("");
 const saving = ref(false);
 const saveError = ref<string | null>(null);
+const downloading = ref(false);
+const downloadError = ref<string | null>(null);
+
+// Decode the base64 zip returned by the host into a Blob and trigger a
+// browser download — keeps the transport JSON-safe over `dispatch`.
+function triggerBlobDownload(zipBase64: string, filename: string) {
+  const bytes = Uint8Array.from(atob(zipBase64), (char) => char.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadZip() {
+  const path = filePath.value;
+  if (!path || downloading.value) return;
+  downloading.value = true;
+  downloadError.value = null;
+  try {
+    const { zipBase64, filename } = await runtime.dispatch<PackHtmlResult>({ kind: "packHtml", path });
+    triggerBlobDownload(zipBase64, filename);
+  } catch (err) {
+    downloadError.value = errorMessage(err);
+  } finally {
+    downloading.value = false;
+  }
+}
 
 const cachedSource = computed(() => (filePath.value ? (sourceCache.value[filePath.value] ?? null) : null));
 const hasChanges = computed(() => cachedSource.value !== null && editableHtml.value !== cachedSource.value);
@@ -389,6 +431,15 @@ async function printToPdf() {
   border: 1px solid #f5c2c7;
   border-radius: 4px;
   font-size: 0.875rem;
+}
+
+.download-error {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: #fdecea;
+  color: #b71c1c;
+  border-bottom: 1px solid #f5c2c7;
+  font-size: 0.85rem;
 }
 
 .cancel-btn {

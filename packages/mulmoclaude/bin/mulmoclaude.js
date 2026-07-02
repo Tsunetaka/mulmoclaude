@@ -115,7 +115,8 @@ ${cliFlagHelpLines()}
 }
 
 if (args.includes("--version")) {
-  console.log("mulmoclaude 0.9.0");
+  const { version } = require(join(PKG_DIR, "package.json"));
+  console.log(`mulmoclaude ${version}`);
   process.exit(0);
 }
 
@@ -248,7 +249,6 @@ waitUntilReady(port, () => {
   const openCmd = pickOpenCommand();
   try {
     // openCmd is a hard-coded literal; url is http://localhost:<numeric-port>.
-    // eslint-disable-next-line sonarjs/os-command
     execSync(`${openCmd} ${url}`, { stdio: "pipe" });
   } catch {
     log(`Open your browser: ${url}`);

@@ -1,44 +1,80 @@
 // Fiscal-year arithmetic for the accounting plugin.
 //
-// Each book stores a `fiscalYearEnd` token (Q1..Q4) that says which
-// calendar-quarter end is the book's fiscal year end:
+// Each book stores a `fiscalYearEnd` = the calendar month (1-12) on
+// whose LAST DAY the book's fiscal year closes:
 //
-//   Q1 → fiscal year ends March 31     (FY runs Apr 1 → Mar 31)
-//   Q2 → fiscal year ends June 30      (FY runs Jul 1 → Jun 30)
-//   Q3 → fiscal year ends September 30 (FY runs Oct 1 → Sep 30)
-//   Q4 → fiscal year ends December 31  (FY runs Jan 1 → Dec 31; default)
+//   3  → fiscal year ends March 31     (FY runs Apr 1 → Mar 31)
+//   6  → fiscal year ends June 30      (FY runs Jul 1 → Jun 30)
+//   8  → fiscal year ends August 31    (FY runs Sep 1 → Aug 31)
+//   12 → fiscal year ends December 31  (FY runs Jan 1 → Dec 31; default)
+//
+// Any month is allowed — a corporation whose statutory closing date
+// is August 31 stores 8. The quarter / year arithmetic below is fully
+// parametric on the closing month, so a non-calendar-quarter close
+// (e.g. 8) just shifts the fiscal quarters accordingly.
 //
 // "Current quarter" / "current year" everywhere in the UI refer to
 // the *fiscal* quarter / *fiscal* year that contains today, under the
-// active book's `fiscalYearEnd`. For Q4 books fiscal quarters and
-// fiscal years coincide with calendar quarters / calendar years; for
-// the other three a shift applies.
+// active book's `fiscalYearEnd`. For a December (12) book fiscal
+// quarters and fiscal years coincide with calendar quarters / calendar
+// years; for any other close a shift applies.
+//
+// Legacy books (written when the field was a calendar-quarter token
+// "Q1".."Q4") are absorbed by `resolveFiscalYearEnd`, which maps the
+// old tokens to their closing month (Q1→3, Q2→6, Q3→9, Q4→12). The
+// on-disk value is only rewritten the next time the user saves the
+// book — same no-auto-migrate policy the field has always had.
 //
 // All helpers return `YYYY-MM-DD` strings in the user's local
 // timezone — same convention as `dates.ts`.
 
-export const FISCAL_YEAR_ENDS = ["Q1", "Q2", "Q3", "Q4"] as const;
-export type FiscalYearEnd = (typeof FISCAL_YEAR_ENDS)[number];
+export const FISCAL_YEAR_END_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
+export type FiscalYearEnd = (typeof FISCAL_YEAR_END_MONTHS)[number];
 
-export const DEFAULT_FISCAL_YEAR_END: FiscalYearEnd = "Q4";
+export const DEFAULT_FISCAL_YEAR_END: FiscalYearEnd = 12;
+
+/** Legacy calendar-quarter tokens → closing month, for books written
+ *  before the field became a month number. */
+const LEGACY_QUARTER_MONTHS: Record<string, FiscalYearEnd> = { Q1: 3, Q2: 6, Q3: 9, Q4: 12 };
 
 export function isFiscalYearEnd(value: unknown): value is FiscalYearEnd {
-  return typeof value === "string" && (FISCAL_YEAR_ENDS as readonly string[]).includes(value);
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 12;
 }
 
-/** Books written before the field existed are treated as Q4 in code
- *  but never auto-rewritten on disk. The settings UI persists through
- *  the field the next time the user saves anything on the book. */
-export function resolveFiscalYearEnd(value: FiscalYearEnd | undefined): FiscalYearEnd {
-  return value ?? DEFAULT_FISCAL_YEAR_END;
+/** Normalise any stored / inbound value to a concrete closing month.
+ *  Absent or unrecognised → the default (December); a legacy "Q1".."Q4"
+ *  token → its closing month; a valid 1-12 number → itself. Kept
+ *  tolerant (unknown input) so a legacy book read from disk — or shared
+ *  with an older MulmoTerminal — never breaks the UI or a report. */
+export function resolveFiscalYearEnd(value: unknown): FiscalYearEnd {
+  if (isFiscalYearEnd(value)) return value;
+  if (typeof value === "string" && Object.hasOwn(LEGACY_QUARTER_MONTHS, value)) return LEGACY_QUARTER_MONTHS[value];
+  return DEFAULT_FISCAL_YEAR_END;
 }
 
-/** Last calendar month (1-12) of the fiscal year for the given Q. */
-export function fiscalYearEndMonth(end: FiscalYearEnd): 3 | 6 | 9 | 12 {
-  if (end === "Q1") return 3;
-  if (end === "Q2") return 6;
-  if (end === "Q3") return 9;
-  return 12;
+/** Last calendar month (1-12) of the fiscal year. The stored token IS
+ *  the closing month now, so this reads as `resolveFiscalYearEnd` under
+ *  a name that states intent at the call sites (and still absorbs a
+ *  stray legacy token defensively). */
+export function fiscalYearEndMonth(end: FiscalYearEnd): number {
+  return resolveFiscalYearEnd(end);
+}
+
+/** Localised label for a fiscal-year-end month, showing that month's
+ *  last day — e.g. 8 → "August 31" / "8月31日" / "31 de agosto". Uses a
+ *  fixed non-leap reference year, so February reads as the 28th; this
+ *  is display only — the engine still computes the real last day
+ *  (Feb 29 in a leap year) at runtime. */
+export function fiscalYearEndMonthLabel(month: FiscalYearEnd, locale: string): string {
+  // UTC day 0 of the *next* month = last day of `month`, in a fixed
+  // non-leap reference year (2001) so the label is stable and
+  // timezone-independent.
+  const lastDay = new Date(Date.UTC(2001, month, 0));
+  try {
+    return new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", timeZone: "UTC" }).format(lastDay);
+  } catch {
+    return String(month);
+  }
 }
 
 export interface DateRange {

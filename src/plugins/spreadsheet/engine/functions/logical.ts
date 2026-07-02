@@ -139,7 +139,14 @@ const ifsHandler: FunctionHandler = (args, context) => {
       }
     }
 
-    // Evaluate the condition
+    // Evaluate the condition. Direct `eval()` is required here so the
+    // expression runs in strict-mode caller scope — switching to
+    // indirect eval (`globalThis.eval`) widens semantics to sloppy
+    // global script context (an expression like `x=1` would silently
+    // create a global, `this` flips from `undefined` to `globalThis`).
+    // The rolldown `[EVAL]` build warning is suppressed via the
+    // `onwarn` filter in `vite.config.ts` rather than by changing call
+    // semantics. (Codex review on PR #1855.)
     let conditionResult = false;
 
     if (/>=|<=|>|<|==|!=/.test(condExpr)) {

@@ -589,6 +589,75 @@ describe("discoverCollections — field-type support", () => {
     const collections = await listCollections();
     assert.equal(collections.length, 0);
   });
+
+  // ─── embed per-record target via `idField` ───
+
+  it("accepts `embed` with a valid `to` and an `idField` naming a real field", async () => {
+    writeSkill("test-embed-idfield", {
+      title: "Multi-issuer Invoice",
+      icon: "receipt",
+      dataPath: "data/embedidfield/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        issuerId: { type: "ref", to: "mc-profile", label: "Issuer", required: true },
+        issuer: { type: "embed", to: "mc-profile", idField: "issuerId", label: "From (issuer)" },
+      },
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 1);
+    assert.equal(collections[0]?.schema.fields.issuer?.idField, "issuerId");
+  });
+
+  it("rejects `embed` that declares both `id` and `idField`", async () => {
+    writeSkill("test-embed-both", {
+      title: "Bad Embed",
+      icon: "warning",
+      dataPath: "data/embedboth/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        issuerId: { type: "ref", to: "mc-profile", label: "Issuer" },
+        issuer: { type: "embed", to: "mc-profile", id: "me", idField: "issuerId", label: "Issuer" },
+      },
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 0, "embed with both `id` and `idField` must be skipped");
+  });
+
+  it("rejects `embed` whose `idField` names a non-existent field", async () => {
+    writeSkill("test-embed-idfield-missing", {
+      title: "Bad Embed",
+      icon: "warning",
+      dataPath: "data/embedidfieldmissing/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        issuer: { type: "embed", to: "mc-profile", idField: "nope", label: "Issuer" },
+      },
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 0, "embed whose `idField` names no field must be skipped");
+  });
+
+  it("rejects `embed` whose `idField` names a non-`ref`/`string` field", async () => {
+    // The editor writes the picked id into `idField`, so it must be a field
+    // that holds a plain id — a `number` (or table/derived/embed) can't
+    // round-trip, so the schema is rejected at load.
+    writeSkill("test-embed-idfield-badtype", {
+      title: "Bad Embed",
+      icon: "warning",
+      dataPath: "data/embedidfieldbadtype/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        issuerNum: { type: "number", label: "Issuer #" },
+        issuer: { type: "embed", to: "mc-profile", idField: "issuerNum", label: "Issuer" },
+      },
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 0, "embed whose `idField` is not a ref/string must be skipped");
+  });
 });
 
 describe("discoverCollections — structural validation", () => {

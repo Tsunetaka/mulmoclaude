@@ -10,6 +10,7 @@
 import { EVENT_TYPES } from "@mulmobridge/protocol";
 import type { ChatStateStore } from "./chat-state.js";
 import type { CommandHandler } from "./commands.js";
+import { createKeyedSerializer } from "./keyed-serializer.js";
 import type { Attachment, Logger, OnSessionEventFn, Role, StartChatFn } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────
@@ -52,105 +53,115 @@ const REPLY_TIMEOUT_MS = 5 * 60 * 1000;
 // ── Factory ──────────────────────────────────────────────────
 
 export function createRelay(deps: RelayDeps): RelayFn {
+  const serialize = createKeyedSerializer();
+
+  return function relayMessage(params: RelayParams): Promise<RelayResult> {
+    // Serialize every turn for one external chat. Without this, two
+    // concurrent first messages each read "no state", create separate
+    // sessions, and split the conversation across them (#1878). The
+    // JSON pair is an unambiguous composite key for the two ids.
+    const key = JSON.stringify([params.transportId, params.externalChatId]);
+    return serialize.run(key, () => processRelayMessage(deps, params));
+  };
+}
+
+async function processRelayMessage(deps: RelayDeps, params: RelayParams): Promise<RelayResult> {
   const { store, handleCommand, startChat, onSessionEvent, getRole, defaultRoleId, logger } = deps;
+  const { transportId, externalChatId, attachments, bridgeOptions } = params;
+  let { text } = params;
 
-  return async function relayMessage(params: RelayParams): Promise<RelayResult> {
-    const { transportId, externalChatId, attachments, bridgeOptions } = params;
-    let { text } = params;
+  // Log attachment summary (count + mimeTypes) — NEVER log raw
+  // base64 data (performance, log size, information leak risk).
+  const attachmentSummary = attachments
+    ? {
+        count: attachments.length,
+        mimeTypes: attachments.map((a) => a.mimeType),
+      }
+    : undefined;
+  logger.info("chat-service", "message received", {
+    transportId,
+    externalChatId,
+    textLength: text.length,
+    ...(attachmentSummary ? { attachments: attachmentSummary } : {}),
+  });
 
-    // Log attachment summary (count + mimeTypes) — NEVER log raw
-    // base64 data (performance, log size, information leak risk).
-    const attachmentSummary = attachments
-      ? {
-          count: attachments.length,
-          mimeTypes: attachments.map((a) => a.mimeType),
-        }
-      : undefined;
-    logger.info("chat-service", "message received", {
+  let chatState = await store.getChatState(transportId, externalChatId);
+  if (!chatState) {
+    // Only on FIRST contact do we honour `bridgeOptions.defaultRole`
+    // — once the session exists, whatever role the user / command
+    // handler settled on is the source of truth. An unknown role
+    // id silently falls back to the host-app default (we log it so
+    // a typo in the bridge's env var is discoverable).
+    const resolved = resolveDefaultRole(bridgeOptions, getRole, defaultRoleId, logger, transportId);
+    chatState = await store.resetChatState(transportId, externalChatId, resolved);
+  }
+
+  const commandResult = await handleCommand(text, transportId, chatState);
+  if (commandResult) {
+    // `forwardAs` means "reset/mutate state AND continue into the
+    // agent with rewritten text" (see //{skill} shortcut). Without
+    // it, short-circuit with the canned reply.
+    if (!commandResult.forwardAs) {
+      return { kind: "ok", reply: commandResult.reply };
+    }
+    if (commandResult.nextState) chatState = commandResult.nextState;
+    text = commandResult.forwardAs;
+  }
+
+  const result = await startChat({
+    message: text,
+    roleId: chatState.roleId,
+    chatSessionId: chatState.sessionId,
+    attachments,
+    origin: "bridge",
+    // Host app may use other keys (e.g. a future `defaultModel`);
+    // we forward the whole bag untouched.
+    bridgeOptions,
+  });
+
+  if (result.kind === "error") {
+    const status = result.status ?? 500;
+    if (status === 409) {
+      // Session busy — tell the bridge to retry. Keep the HTTP
+      // response shape the old handler returned (status 409 on
+      // the HTTP side, "ok" reply text on the socket side — both
+      // layers decide how to serialise).
+      return {
+        kind: "ok",
+        reply: "A previous message is still being processed. Please wait.",
+      };
+    }
+    logger.error("chat-service", "startChat failed", {
       transportId,
       externalChatId,
-      textLength: text.length,
-      ...(attachmentSummary ? { attachments: attachmentSummary } : {}),
+      error: result.error,
     });
+    return {
+      kind: "error",
+      status,
+      message: `Error: ${result.error}`,
+    };
+  }
 
-    let chatState = await store.getChatState(transportId, externalChatId);
-    if (!chatState) {
-      // Only on FIRST contact do we honour `bridgeOptions.defaultRole`
-      // — once the session exists, whatever role the user / command
-      // handler settled on is the source of truth. An unknown role
-      // id silently falls back to the host-app default (we log it so
-      // a typo in the bridge's env var is discoverable).
-      const resolved = resolveDefaultRole(bridgeOptions, getRole, defaultRoleId, logger, transportId);
-      chatState = await store.resetChatState(transportId, externalChatId, resolved);
-    }
-
-    const commandResult = await handleCommand(text, transportId, chatState);
-    if (commandResult) {
-      // `forwardAs` means "reset/mutate state AND continue into the
-      // agent with rewritten text" (see //{skill} shortcut). Without
-      // it, short-circuit with the canned reply.
-      if (!commandResult.forwardAs) {
-        return { kind: "ok", reply: commandResult.reply };
-      }
-      if (commandResult.nextState) chatState = commandResult.nextState;
-      text = commandResult.forwardAs;
-    }
-
-    const result = await startChat({
-      message: text,
-      roleId: chatState.roleId,
-      chatSessionId: chatState.sessionId,
-      attachments,
-      origin: "bridge",
-      // Host app may use other keys (e.g. a future `defaultModel`);
-      // we forward the whole bag untouched.
-      bridgeOptions,
+  try {
+    const reply = await collectAgentReply(onSessionEvent, chatState.sessionId, params.onChunk);
+    await store.setChatState(transportId, {
+      ...chatState,
+      updatedAt: new Date().toISOString(),
     });
-
-    if (result.kind === "error") {
-      const status = result.status ?? 500;
-      if (status === 409) {
-        // Session busy — tell the bridge to retry. Keep the HTTP
-        // response shape the old handler returned (status 409 on
-        // the HTTP side, "ok" reply text on the socket side — both
-        // layers decide how to serialise).
-        return {
-          kind: "ok",
-          reply: "A previous message is still being processed. Please wait.",
-        };
-      }
-      logger.error("chat-service", "startChat failed", {
-        transportId,
-        externalChatId,
-        error: result.error,
-      });
-      return {
-        kind: "error",
-        status,
-        message: `Error: ${result.error}`,
-      };
-    }
-
-    try {
-      const reply = await collectAgentReply(onSessionEvent, chatState.sessionId, params.onChunk);
-      await store.setChatState(transportId, {
-        ...chatState,
-        updatedAt: new Date().toISOString(),
-      });
-      return { kind: "ok", reply };
-    } catch (err) {
-      logger.error("chat-service", "reply collection failed", {
-        transportId,
-        externalChatId,
-        error: String(err),
-      });
-      return {
-        kind: "error",
-        status: 500,
-        message: "Error: failed to collect agent reply",
-      };
-    }
-  };
+    return { kind: "ok", reply };
+  } catch (err) {
+    logger.error("chat-service", "reply collection failed", {
+      transportId,
+      externalChatId,
+      error: String(err),
+    });
+    return {
+      kind: "error",
+      status: 500,
+      message: "Error: failed to collect agent reply",
+    };
+  }
 }
 
 // ── Internals ────────────────────────────────────────────────

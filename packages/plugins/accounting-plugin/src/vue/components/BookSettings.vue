@@ -106,20 +106,20 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useI18n } from "vue-i18n";
+import { useAccountingI18n } from "../lang";
 import { deleteBook, rebuildSnapshots, updateBook } from "../api";
 import {
   SUPPORTED_COUNTRY_CODES,
   isSupportedCountryCode,
   localizedCountryName,
   type SupportedCountryCode,
-  DEFAULT_FISCAL_YEAR_END,
-  FISCAL_YEAR_ENDS,
+  FISCAL_YEAR_END_MONTHS,
+  fiscalYearEndMonthLabel,
   resolveFiscalYearEnd,
   type FiscalYearEnd,
 } from "../../shared";
 
-const { t, locale } = useI18n();
+const { t, locale } = useAccountingI18n();
 
 const props = defineProps<{
   bookId: string;
@@ -143,9 +143,10 @@ const showAdvanced = ref(false);
 const selectedName = ref<string>(props.bookName);
 const selectedCountry = ref<string>(props.country ?? "");
 // Resolved at the boundary so the dropdown always shows a concrete
-// value — books without a `fiscalYearEnd` field on disk land here as
-// the default Q4 (matches the back-compat read policy).
-const selectedFiscalYearEnd = ref<FiscalYearEnd>(props.fiscalYearEnd ?? DEFAULT_FISCAL_YEAR_END);
+// month — books without a `fiscalYearEnd` field on disk (and legacy
+// "Q1".."Q4" tokens) land here as their closing month, defaulting to
+// December (matches the back-compat read policy).
+const selectedFiscalYearEnd = ref<FiscalYearEnd>(resolveFiscalYearEnd(props.fiscalYearEnd));
 
 interface CountryOption {
   code: string;
@@ -165,9 +166,9 @@ interface FiscalYearEndOption {
 }
 
 const fiscalYearEndOptions = computed<FiscalYearEndOption[]>(() =>
-  FISCAL_YEAR_ENDS.map((value) => ({
+  FISCAL_YEAR_END_MONTHS.map((value) => ({
     value,
-    label: t(`pluginAccounting.bookSwitcher.fiscalYearEnd${value}`),
+    label: fiscalYearEndMonthLabel(value, locale.value),
   })),
 );
 
@@ -261,7 +262,7 @@ watch(
     updateError.value = null;
     selectedName.value = props.bookName;
     selectedCountry.value = props.country ?? "";
-    selectedFiscalYearEnd.value = props.fiscalYearEnd ?? DEFAULT_FISCAL_YEAR_END;
+    selectedFiscalYearEnd.value = resolveFiscalYearEnd(props.fiscalYearEnd);
     showAdvanced.value = false;
   },
 );
@@ -286,7 +287,7 @@ watch(
 watch(
   () => props.fiscalYearEnd,
   (next) => {
-    selectedFiscalYearEnd.value = next ?? DEFAULT_FISCAL_YEAR_END;
+    selectedFiscalYearEnd.value = resolveFiscalYearEnd(next);
   },
 );
 </script>

@@ -187,9 +187,7 @@ export interface CatalogEntryDetail {
 }
 
 export type CatalogDetailResult =
-  | { kind: "ok"; detail: CatalogEntryDetail }
-  | { kind: "not-found"; source: CatalogSource; slug: string }
-  | { kind: "invalid-slug"; slug: string };
+  { kind: "ok"; detail: CatalogEntryDetail } | { kind: "not-found"; source: CatalogSource; slug: string } | { kind: "invalid-slug"; slug: string };
 
 /** Read one catalog entry's SKILL.md and return the description +
  *  body. The same `safeSlugName` taint-launder used by the star

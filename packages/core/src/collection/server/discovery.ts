@@ -12,7 +12,7 @@ import { log, getWorkspaceRoot, userSkillsDir, projectSkillsDir, feedsRoot } fro
 import { INGEST_KINDS, AGENT_INGEST_KIND, FEED_SCHEDULES, isFieldDrivenEvery } from "../core/schema";
 import { SCHEMA_FILE, resolveDataDir, safeRecordId, safeSlugName } from "./paths";
 import type { LoadedCollection } from "./discoveredCollection";
-import { isSafeActionTemplatePath, isSafeCustomViewPath } from "./templatePath";
+import { isSafeActionTemplatePath, isSafeCustomViewI18nPath, isSafeCustomViewPath } from "./templatePath";
 import type { CollectionDetail, CollectionEveryFieldDriven, CollectionSchema, CollectionSource, CollectionSpawnEvery, CollectionSummary } from "../core/schema";
 
 // Cross-field refines, factored out so they can apply at both the
@@ -36,10 +36,11 @@ const refMessage = {
   path: ["to"],
 };
 
-// `embed` pulls a fixed record from another collection into the
-// read-only detail view. It must declare a valid `to` slug (same
-// path-traversal guard as `ref`) AND a non-empty `id` naming the
-// fixed record's primary key (e.g. `me` for the singleton profile).
+// `embed` pulls a record from another collection into the read-only
+// detail view. It must declare a valid `to` slug (same path-traversal
+// guard as `ref`) AND exactly one of `id` (a fixed target record, e.g.
+// `me` for the singleton profile) or `idField` (a sibling field naming
+// the per-record target, e.g. an invoice's `issuerId`).
 // The calendar anchor/end fields accept either a date-only or a datetime
 // field (the latter carries the clock for the day view).
 const isDateLike = (type: string | undefined): boolean => type === "date" || type === "datetime";
@@ -48,13 +49,17 @@ const isDateLike = (type: string | undefined): boolean => type === "date" || typ
 // string-backed field — a number/enum/date column has no time-range text.
 const isTimeStringField = (type: string | undefined): boolean => type === "string" || type === "text";
 
-const embedRefine = (spec: { type: string; to?: string; id?: string }): boolean => {
+const embedRefine = (spec: { type: string; to?: string; id?: string; idField?: string }): boolean => {
   if (spec.type !== "embed") return true;
   if (typeof spec.to !== "string" || safeSlugName(spec.to) === null) return false;
-  return typeof spec.id === "string" && spec.id.trim().length > 0;
+  const hasId = typeof spec.id === "string" && spec.id.trim().length > 0;
+  const hasIdField = typeof spec.idField === "string" && spec.idField.trim().length > 0;
+  // Exactly one: a fixed target or a per-record one, never both / neither.
+  return hasId !== hasIdField;
 };
 const embedMessage = {
-  message: "fields with type 'embed' must declare a `to` (valid collection slug) and a non-empty `id` (the fixed record's primary key)",
+  message:
+    "fields with type 'embed' must declare a `to` (valid collection slug) and exactly one of `id` (a fixed record's primary key) or `idField` (a sibling field naming the per-record target)",
   path: ["id"],
 };
 
@@ -145,6 +150,10 @@ const FieldSpecSchema = z
     required: z.boolean().optional(),
     to: z.string().min(1).optional(),
     id: z.string().trim().min(1).optional(),
+    // `embed` per-record target: a sibling field naming the record id
+    // to pull (validated to be a real top-level field by a schema-level
+    // refine below — a field can't see its siblings here).
+    idField: z.string().trim().min(1).optional(),
     currency: z.string().trim().min(1).optional(),
     currencyField: z.string().trim().min(1).optional(),
     values: z.array(z.string().trim().min(1)).min(1).optional(),
@@ -220,6 +229,15 @@ const CustomViewSchema = z.object({
     .trim()
     .min(1)
     .refine(isSafeCustomViewPath, "must be a safe path under `views/` ending in `.html` (e.g. `views/year.html`; no `..`, no leading `/`, no backslash)"),
+  i18n: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(
+      isSafeCustomViewI18nPath,
+      "must be a safe path under `views/` ending in `.i18n.json` (e.g. `views/year.i18n.json`; no `..`, no leading `/`, no backslash)",
+    )
+    .optional(),
   capabilities: z.array(z.enum(["read", "write"])).optional(),
 });
 
@@ -568,6 +586,27 @@ export const CollectionSchemaZ = z
     message: "a field's `when.field` must name a top-level field declared in `fields`",
     path: ["fields"],
   })
+  // An `embed`'s `idField` resolves the target record id from a sibling's
+  // value, so it must name a real top-level field — and one whose stored
+  // value is a plain id string. Only `ref` / `string` qualify: the editor
+  // writes the picked id into that field, so a non-persisted or composite
+  // type (`embed` / `derived` / `toggle` / `table` / `number` / …) would
+  // either not round-trip on save or hold no usable id. Restricting it
+  // makes the misconfiguration fail at schema load, not silently at
+  // render. `idField` is ignored on non-`embed` fields, so only check
+  // there. Schema-level because a field can't see its siblings.
+  .refine(
+    (schema) =>
+      Object.values(schema.fields).every((field) => {
+        if (field.type !== "embed" || field.idField === undefined) return true;
+        const target = schema.fields[field.idField];
+        return target !== undefined && (target.type === "ref" || target.type === "string");
+      }),
+    {
+      message: "an embed field's `idField` must name a top-level `ref` or `string` field declared in `fields`",
+      path: ["fields"],
+    },
+  )
   // `triggerField` requires the completion pair: the time gate only
   // suppresses the *completion* bell until the date, and the bell still
   // clears via `completionDoneValues`. Without completion there is no

@@ -22,6 +22,8 @@ const fr: Messages = {
   marpSplitEnter: "Modifier la source en parallèle de l'aperçu",
   marpSplitExit: "Fermer l'éditeur de source",
   marpSplitEditorLabel: "Source",
+  mermaidLoadFailed: "⚠ Échec du chargement de Mermaid : {error}",
+  mermaidRenderFailed: "⚠ Échec du rendu Mermaid : {error}",
 };
 
 export default fr;

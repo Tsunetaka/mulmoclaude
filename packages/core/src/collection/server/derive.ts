@@ -10,6 +10,7 @@ import { deriveAll, type DeriveRefRecords } from "../core/deriveAll";
 import { loadCollection, type DiscoveryOptions } from "./discovery";
 import type { LoadedCollection } from "./discoveredCollection";
 import { listItems } from "./io";
+import { embedTargetId } from "../core/schema";
 import type { CollectionFieldSpec, CollectionItem, CollectionSchema } from "../core/schema";
 
 /** Slugs of every collection referenced by a `ref` field — top-level
@@ -75,15 +76,16 @@ function toRefRecords(linked: Record<string, LinkedTarget>): DeriveRefRecords {
 }
 
 /** Project the computed (never-stored) field kinds onto one derived
- *  record: `toggle` → boolean off its enum, `embed` → the fixed target
- *  record (or null when missing). */
+ *  record: `toggle` → boolean off its enum, `embed` → the target record
+ *  (fixed `id` or per-record `idField`), or null when missing. */
 function projectComputed(schema: CollectionSchema, enriched: CollectionItem, linked: Record<string, LinkedTarget>): CollectionItem {
   for (const [key, field] of Object.entries(schema.fields)) {
     if (field.type === "toggle" && field.field) {
       enriched[key] = String(enriched[field.field] ?? "") === field.onValue;
     }
-    if (field.type === "embed" && field.to && field.id) {
-      enriched[key] = linked[field.to]?.byId[field.id] ?? null;
+    if (field.type === "embed" && field.to) {
+      const targetId = embedTargetId(field, enriched);
+      enriched[key] = (targetId && linked[field.to]?.byId[targetId]) || null;
     }
   }
   return enriched;

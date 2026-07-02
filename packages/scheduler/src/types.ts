@@ -53,9 +53,7 @@ export type MissedRunPolicy = (typeof MISSED_RUN_POLICIES)[keyof typeof MISSED_R
 // ── Task origin ──────────────────────────────────────────────────
 
 export type TaskOrigin =
-  | { kind: typeof TASK_ORIGINS.system; module: string }
-  | { kind: typeof TASK_ORIGINS.skill; skillPath: string }
-  | { kind: typeof TASK_ORIGINS.user };
+  { kind: typeof TASK_ORIGINS.system; module: string } | { kind: typeof TASK_ORIGINS.skill; skillPath: string } | { kind: typeof TASK_ORIGINS.user };
 
 // ── Execution context ────────────────────────────────────────────
 

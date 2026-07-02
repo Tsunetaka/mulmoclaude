@@ -3,6 +3,9 @@ import type { Messages } from "./messages";
 const en: Messages = {
   saveAsPdf: "Save as PDF (opens print dialog)",
   pdf: "PDF",
+  download: "ZIP",
+  downloadZip: "Download as a self-contained zip (assets bundled)",
+  downloadError: (error) => `⚠ Download failed: ${error}`,
   untitled: "HTML Page",
   editSource: "Edit HTML Source",
   cancel: "Cancel",

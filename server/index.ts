@@ -17,6 +17,8 @@ import imageRoutes from "./api/routes/image.js";
 import attachmentRoutes from "./api/routes/attachment.js";
 import transcribeRoutes from "./api/routes/transcribe.js";
 import presentHtmlRoutes from "./api/routes/presentHtml.js";
+import shareRoutes from "./api/routes/share.js";
+import remoteHostRoutes from "./api/routes/remoteHost.js";
 import presentSvgRoutes from "./api/routes/presentSvg.js";
 import chartRoutes from "./api/routes/chart.js";
 import rolesRoutes from "./api/routes/roles.js";
@@ -67,7 +69,8 @@ import { announceOptionalDeps } from "./system/announceOptionalDeps.js";
 import { migrateLegacyBillingPresets } from "./workspace/billing-migration.js";
 import { APP_VERSION } from "./system/appVersion.js";
 import { createChatService } from "@mulmobridge/chat-service";
-import { readSessionJsonl } from "./utils/files/session-io.js";
+import { readSessionJsonl, readSessionMeta } from "./utils/files/session-io.js";
+import { resolveBridgeSessionRole } from "./api/bridge/sessionRole.js";
 import { onSessionEvent, initSessionStore } from "./events/session-store/index.js";
 import { initFileChangePublisher } from "./events/file-change.js";
 import { initCollectionChangePublisher } from "./events/collection-change.js";
@@ -94,7 +97,8 @@ import { cpus, loadavg } from "os";
 import { isDockerAvailable, ensureSandboxImage } from "./system/docker.js";
 import { maybeRunJournal } from "./workspace/journal/index.js";
 import { backfillAllSessions } from "./workspace/chat-index/index.js";
-import { refreshDue as refreshDueFeeds, setAgentWorkerRunner } from "./workspace/feeds/index.js";
+import { feedRefreshTaskDef } from "@mulmoclaude/core/feeds/server";
+import { configureFeeds } from "./workspace/feeds/configure.js";
 import { createPubSub } from "./events/pub-sub/index.js";
 import { PUBSUB_CHANNELS } from "../src/config/pubsubChannels.js";
 import { createTaskManager } from "./events/task-manager/index.js";
@@ -648,6 +652,13 @@ app.use(agentRoutes);
 // fire-and-forget event in the boot window is the same accepted
 // tradeoff as the file-change / collection publishers.)
 configureAccountingServer({ workspaceRoot: workspacePath, logger: log });
+// Wire @mulmoclaude/core/feeds/server (workspace, logger, atomic writer, and the
+// agent-ingest worker launcher) at module load — BEFORE app.listen — for the same
+// reason as the accounting config above: a `POST /api/collections/:slug/refresh`
+// landing in the gap before startRuntimeServices runs must not hit an unconfigured
+// feeds host. `spawnSystemWorker` is injected here because workspace code must not
+// import the routes layer.
+configureFeeds(spawnSystemWorker);
 app.use(createAccountingRouter());
 app.use(photoLocationsRoutes);
 app.use(schedulerRoutes);
@@ -659,6 +670,8 @@ app.use(imageRoutes);
 app.use(attachmentRoutes);
 app.use(transcribeRoutes);
 app.use(presentHtmlRoutes);
+app.use(shareRoutes);
+app.use(remoteHostRoutes);
 app.use(presentSvgRoutes);
 app.use(chartRoutes);
 app.use(rolesRoutes);
@@ -692,6 +705,12 @@ async function listSessionsForBridge(opts: { limit: number; offset: number }) {
     updatedAt: row.summary.updatedAt,
   }));
   return { sessions, total };
+}
+// See `resolveBridgeSessionRole` for the safe-id shape check + IO-error
+// degradation contract (extracted for direct unit testing under
+// test/server/api/bridge/test_sessionRole.ts; codex review on #1895).
+async function getSessionRoleForBridge(sessionId: string): Promise<string | null> {
+  return resolveBridgeSessionRole(sessionId, readSessionMeta);
 }
 async function getSessionHistoryForBridge(sessionId: string, opts: { limit: number; offset: number }) {
   const content = await readSessionJsonl(sessionId);
@@ -744,6 +763,7 @@ const chatService = createChatService({
   tokenProvider: getCurrentToken,
   listSessions: listSessionsForBridge,
   getSessionHistory: getSessionHistoryForBridge,
+  getSessionRole: getSessionRoleForBridge,
   listRegisteredSkills,
 });
 app.use(chatService.router);
@@ -1135,18 +1155,12 @@ async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, p
       missedRunPolicy: MISSED_RUN_POLICIES.runOnce,
       run: () => backfillAllSessions().then(() => {}),
     },
-    {
-      id: "system:feed-refresh",
-      name: "Scheduled collection refresh",
-      // Drives ALL scheduled ingest now: declarative feeds (RSS / JSON) AND
-      // skill-backed collections with `ingest.kind: "agent"` (which dispatch a
-      // hidden worker rather than fetching). Id kept as `system:feed-refresh`
-      // so its scheduler-state row isn't orphaned by a rename.
-      description: "Refresh due collections — fetch declarative feeds + dispatch agent-ingest workers",
-      schedule: { type: SCHEDULE_TYPES.interval, intervalMs: ONE_HOUR_MS },
-      missedRunPolicy: MISSED_RUN_POLICIES.runOnce,
-      run: () => refreshDueFeeds().then(() => {}),
-    },
+    // Drives ALL scheduled ingest: declarative feeds (RSS / JSON) AND
+    // skill-backed `ingest.kind: "agent"` collections (dispatch a hidden
+    // worker). Shared with standalone MulmoTerminal/MulmoBooks via the core
+    // factory so the id/schedule/run can't drift across hosts. The override
+    // loop below still mutates `task.schedule` host-side.
+    feedRefreshTaskDef(),
   ];
 
   // Apply user-configurable schedule overrides from
@@ -1175,13 +1189,9 @@ async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, p
     }
   }
 
-  // Wire the agent-ingest dispatcher's hidden-worker launcher (DI seam — keeps
-  // the feeds engine from importing the routes layer) BEFORE scheduler init:
-  // `initScheduler` runs catch-up, which can fire `system:feed-refresh` and
-  // dispatch agent ingest immediately. Wiring after would make those first
-  // refreshes fail with "worker runner not configured".
-  setAgentWorkerRunner(spawnSystemWorker);
-
+  // Feeds host is configured at module load (before app.listen) — see the
+  // `configureFeeds(spawnSystemWorker)` call beside the accounting config — so it
+  // is already wired by the time `initScheduler` catch-up can fire a feed refresh.
   initScheduler(taskManager, systemTasks).catch((err) => {
     log.error("scheduler", "init failed (non-fatal)", {
       error: String(err),

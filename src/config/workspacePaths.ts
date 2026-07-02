@@ -46,4 +46,9 @@ export const WORKSPACE_FILES = {
   /** Terminated notifier entries (cleared / cancelled), newest-first,
    *  FIFO-capped. Source for the bell popup's History section. */
   notifierHistory: "data/notifier/history.json",
+  /** Optional user-supplied list of extra collection registries to surface in
+   *  the Discover tab alongside the official one. Shape:
+   *  `[{ name, indexUrl, rawBaseUrl }]`. Absent file ⇒ only the official
+   *  registry is shown. */
+  collectionsRegistries: "config/collections-registries.json",
 } as const;

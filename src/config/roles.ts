@@ -101,10 +101,9 @@ export const ROLES: Role[] = [
       TOOL_NAMES.manageSpotify,
     ],
     queries: [
-      "Set up a todo list. First read `config/helps/todo-collection.md` and follow it exactly to author the todos collection — do not redesign the schema or ask me design questions.",
-      "Create a contacts collection with name, company, title, email, phone, notes, and a business-card image. When I attach a photo of a business card, read the details off it and add a new contact.",
-      "Create a reading-list collection with a title, a URL field, and a Read checkbox. While Read is unchecked, keep each item in the bell notifications, labeled with its title.",
-      "Create a restaurants collection with name, cuisine, neighborhood, a website URL, a phone number, a Visited checkbox, a 1-to-5 rating, and notes. Hide the rating until I've marked a place as visited — there's nothing to rate before I've been.",
+      // Collection-creation starters moved to the Collections "New collection"
+      // modal (collection-plugin `starters.ts`) so they surface independent of
+      // the active role. See plans/done/feat-collection-starters-modal.md.
       "Register this feed. https://feeds.captivate.fm/guy-kawasakis-remarkable/",
     ],
   },
@@ -140,9 +139,9 @@ export const ROLES: Role[] = [
       "Write a one-page business report on the pros and cons of remote work.",
       "Create a 5-slide presentation on the current state of AI in business.",
       "Perform relevant search on X about OpenAI and Anthropic, pick top ten interesting topics from them and show the list to me. Then, create a presentation about each article, one by one.",
-      "Create a bills collection to track recurring payments — payee, amount, due date, and status. Remind me 10 days before each bill is due, and when I mark one paid, automatically set up next month's bill.",
-      "Set up client and time tracking for my consulting work. First read `config/helps/billing-clients-worklog.md` and follow it exactly to author the clients and worklog collections — do not redesign the schemas or ask me design questions.",
-      "Set up invoicing for my business. First read `config/helps/billing-invoice.md` and follow it exactly to author the invoice and profile collections — do not redesign the schemas or ask me design questions.",
+      // Collection-creation starters (bills / clients+worklog / invoice) moved to
+      // the Collections "New collection" modal (collection-plugin `starters.ts`).
+      // See plans/done/feat-collection-starters-modal.md.
     ],
   },
   {
@@ -215,8 +214,9 @@ export const ROLES: Role[] = [
       "Explain how sorting algorithms compare visually",
       "Help me understand fractions and decimals",
       "Teach me about the water cycle",
-      "I want to build my vocabulary in a new language — ask me which language I'm learning and my current level, then read config/helps/vocabulary.md, set up a vocabulary collection, and fill it with fifty words and sample sentences appropriate for my level to track my progress",
-      "I want to learn a topic as a tracked course — ask me the topic, my goal, and my current level, then read config/helps/lessons-collection.md, set up a lessons collection, and plan the curriculum before teaching the first lesson",
+      // Collection-creation starters (vocabulary / lessons) moved to the
+      // Collections "New collection" modal (collection-plugin `starters.ts`).
+      // See plans/done/feat-collection-starters-modal.md.
     ],
   },
   {
@@ -341,7 +341,9 @@ export const ROLES: Role[] = [
       "Chart MSFT's stock price over the last 5 years",
       "What did TSLA say about FSD revenue in their latest 10-Q?",
       "Show insider transactions filed by META officers in the last 90 days",
-      "Set up a stock portfolio tracker — a stock-quotes watchlist plus a portfolio that values my holdings against it. First read `config/helps/portfolio-tracker.md` and follow it exactly to author both collections — do not redesign the schemas or ask me design questions.",
+      // Collection-creation starter (stock portfolio tracker) moved to the
+      // Collections "New collection" modal (collection-plugin `starters.ts`).
+      // See plans/done/feat-collection-starters-modal.md.
       "Fetch AAPL's revenue and net profit for the last several quarters and visualize the trends using D3.js.",
       "Fetch NVDA's latest financial data and present it as a modern financial infographic with a left-to-right Sankey diagram using D3.js.",
       "Get the weekly closing prices of the Magnificent 7 stocks for the last five years, and multiply each by the number of shares outstanding to compute the market cap. Then plot them on a single graph so we can compare their market caps over time.",

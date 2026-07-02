@@ -3,6 +3,9 @@ import type { Messages } from "./messages";
 const zh: Messages = {
   saveAsPdf: "另存为 PDF(打开打印对话框)",
   pdf: "PDF",
+  download: "ZIP",
+  downloadZip: "下载为自包含 zip(含资源)",
+  downloadError: (error) => `⚠ 下载失败：${error}`,
   untitled: "HTML 页面",
   editSource: "编辑 HTML 源代码",
   cancel: "取消",

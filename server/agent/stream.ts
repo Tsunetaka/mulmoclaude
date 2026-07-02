@@ -43,9 +43,7 @@ export interface ClaudeMessage {
 }
 
 export type ClaudeStreamEvent =
-  | { type: "assistant"; message: ClaudeMessage }
-  | { type: "user"; message: ClaudeMessage }
-  | { type: "result"; result: string; session_id?: string };
+  { type: "assistant"; message: ClaudeMessage } | { type: "user"; message: ClaudeMessage } | { type: "result"; result: string; session_id?: string };
 
 // stream_event sub-types emitted when --include-partial-messages is on.
 export interface StreamEventDelta {

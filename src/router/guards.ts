@@ -8,7 +8,7 @@
 
 import type { Router } from "vue-router";
 import { readPathMatch } from "../composables/useFileSelection";
-import { readWikiRouteTarget } from "../plugins/wiki/route";
+import { readWikiRouteTarget } from "@mulmoclaude/core/wiki";
 import { isNonEmptyString } from "../utils/types";
 
 // Basic sanity check for a session ID. Real existence verification

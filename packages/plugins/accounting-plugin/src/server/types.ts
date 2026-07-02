@@ -54,14 +54,15 @@ export interface BookSummary {
    *  before the field was introduced; the UI prompts existing books
    *  to set it. */
   country?: SupportedCountryCode;
-  /** Which calendar-quarter end is the book's fiscal year end:
-   *    Q1 → March 31, Q2 → June 30, Q3 → September 30, Q4 → December 31.
+  /** Calendar month (1-12) on whose LAST DAY the book's fiscal year
+   *  closes — e.g. 8 = August 31, 12 = December 31 (calendar year).
    *  Drives the UI's "current quarter / current year" date-range
    *  shortcuts. Optional in the persisted shape for backward
-   *  compatibility with books written before this field existed —
-   *  read-side code treats the absent value as Q4 via
-   *  `resolveFiscalYearEnd`. New books require it at the create
-   *  boundary; the default is Q4. */
+   *  compatibility with books written before this field existed (and
+   *  with the earlier "Q1".."Q4" token form) — read-side code
+   *  normalises both via `resolveFiscalYearEnd`, treating an absent
+   *  value as December. New books require it at the create boundary;
+   *  the default is 12 (December). */
   fiscalYearEnd?: FiscalYearEnd;
   createdAt: string;
 }

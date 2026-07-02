@@ -122,8 +122,10 @@ describe("pushToMacosReminderWithDeps — failure handling", () => {
     const throwingSpawner: Spawner = () => {
       throw new Error("synchronous spawn failure");
     };
-    await pushToMacosReminderWithDeps({ spawner: throwingSpawner, platform: "darwin", disabled: false }, "Hello");
-    // Reaching this line means no rejection — that's the assertion.
-    assert.ok(true);
+    // The assertion is that the await resolves at all — a synchronous
+    // throw inside the spawner must not reject the promise. Phrase it
+    // as `doesNotReject` so the failure mode is explicit rather than
+    // relying on "reached the next line".
+    await assert.doesNotReject(() => pushToMacosReminderWithDeps({ spawner: throwingSpawner, platform: "darwin", disabled: false }, "Hello"));
   });
 });

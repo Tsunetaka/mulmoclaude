@@ -2,7 +2,7 @@
 // Records one utterance at a time with MediaRecorder, segments on pauses via a
 // Web Audio VAD, and sends each segment through an injected transport. State is
 // pushed via `onState`; the host wraps this into its own reactivity (Vue refs,
-// React state, …). No framework dependency. See plans/feat-extract-whisper-package.md.
+// React state, …). No framework dependency. See plans/done/feat-extract-whisper-package.md.
 
 // Map a UI locale to a Whisper language code. UI language is a strong prior for
 // the spoken language; "auto" lets Whisper detect it from the audio.

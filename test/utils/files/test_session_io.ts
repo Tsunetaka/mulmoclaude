@@ -8,6 +8,7 @@ import {
   readSessionMeta,
   writeSessionMeta,
   updateHasUnread,
+  incrementUserQueryCount,
   backfillFirstUserMessage,
   setClaudeSessionId,
   clearClaudeSessionId,
@@ -76,6 +77,30 @@ describe("updateHasUnread", () => {
   it("no-ops when session meta does not exist", async () => {
     // Should not throw
     await updateHasUnread("ghost", false, root);
+  });
+});
+
+describe("incrementUserQueryCount", () => {
+  it("bumps undefined → 1 on the first turn, then 1 → 2", async () => {
+    await writeSessionMeta("count-test", { roleId: "general" }, root);
+    await incrementUserQueryCount("count-test", root);
+    assert.equal((await readSessionMeta("count-test", root))?.userQueryCount, 1);
+    await incrementUserQueryCount("count-test", root);
+    assert.equal((await readSessionMeta("count-test", root))?.userQueryCount, 2);
+  });
+
+  it("no-ops when session meta does not exist", async () => {
+    await incrementUserQueryCount("count-ghost", root);
+    assert.equal(await readSessionMeta("count-ghost", root), null);
+  });
+
+  it("preserves other meta fields", async () => {
+    await writeSessionMeta("count-preserve", { roleId: "office", isBookmarked: true }, root);
+    await incrementUserQueryCount("count-preserve", root);
+    const meta = await readSessionMeta("count-preserve", root);
+    assert.equal(meta?.roleId, "office");
+    assert.equal(meta?.isBookmarked, true);
+    assert.equal(meta?.userQueryCount, 1);
   });
 });
 

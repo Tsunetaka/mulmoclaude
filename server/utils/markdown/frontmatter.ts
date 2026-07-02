@@ -10,7 +10,7 @@
 // that's not worth it for so little glue. js-yaml does the heavy
 // lifting in both places, identically.
 
-import yaml from "js-yaml";
+import { FAILSAFE_SCHEMA, dump as yamlDump, load as yamlLoad } from "js-yaml";
 
 export interface ParsedMarkdown {
   /** Parsed YAML object. Empty `{}` when the document has no
@@ -71,7 +71,7 @@ export function serializeWithFrontmatter(meta: Record<string, unknown>, body: st
   // one line. `noRefs: true` avoids YAML anchor syntax (`&id001`)
   // which is technically valid but visually noisy in plain-text
   // markdown.
-  const yamlText = yaml.dump(meta, { lineWidth: -1, noRefs: true }).trimEnd();
+  const yamlText = yamlDump(meta, { lineWidth: -1, noRefs: true }).trimEnd();
   return `---\n${yamlText}\n---\n\n${body}`;
 }
 
@@ -93,16 +93,20 @@ export function mergeFrontmatter(existing: Record<string, unknown>, patch: Recor
 }
 
 function safeYamlLoad(text: string): Record<string, unknown> | null {
+  // js-yaml 5.x throws on empty / whitespace-only input where 4.x
+  // returned `undefined`. An empty frontmatter block is "no metadata",
+  // not "malformed", so handle it before the loader.
+  if (text.trim() === "") return {};
   try {
     // `FAILSAFE_SCHEMA` keeps every scalar as a string and skips
     // type coercion. Two motivating cases:
     //   - YAML 1.1 dates (`created: 2026-04-27`) would become a
-    //     `Date` object under DEFAULT_SCHEMA, breaking round-trip.
+    //     `Date` object under CORE_SCHEMA, breaking round-trip.
     //   - Numeric-looking strings (`version: 1.20` → 1.2 under
     //     JSON_SCHEMA) drop trailing zeros on save.
     // For the wiki-history use case — title / created / updated /
     // tags / editor — every value that should be a string IS one.
-    const loaded = yaml.load(text, { schema: yaml.FAILSAFE_SCHEMA });
+    const loaded = yamlLoad(text, { schema: FAILSAFE_SCHEMA });
     if (loaded === null || loaded === undefined) return {};
     if (typeof loaded !== "object" || Array.isArray(loaded)) return null;
     return loaded as Record<string, unknown>;

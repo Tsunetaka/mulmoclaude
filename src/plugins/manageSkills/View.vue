@@ -289,7 +289,7 @@
           <div v-if="catalogDetailLoading" class="text-sm text-gray-400 italic">{{ t("pluginManageSkills.loading") }}</div>
           <div v-else-if="catalogError" class="text-sm text-red-600">{{ catalogError }}</div>
           <!-- eslint-disable vue/no-v-html -- markdown sanitized via sanitizeMarkdownHtml; same trust chain as the active-skill body below -->
-          <div v-else-if="catalogDetail" class="markdown-content text-gray-700" v-html="catalogRenderedBody"></div>
+          <div v-else-if="catalogDetail" ref="catalogMarkdownRef" class="markdown-content text-gray-700" v-html="catalogRenderedBody"></div>
           <!-- eslint-enable vue/no-v-html -->
         </div>
 
@@ -378,6 +378,7 @@
           <!-- eslint-disable vue/no-v-html -- sanitized via DOMPurify; multi-line element so disable/enable pair (CLAUDE.md UI rule) instead of -next-line -->
           <div
             v-else-if="detail && renderedBody"
+            ref="skillMarkdownRef"
             class="markdown-content text-gray-700"
             data-testid="skill-body-rendered"
             @click="handleExternalLinkClick"
@@ -488,6 +489,7 @@ import type { ManageSkillsData, SkillSummary } from "./index";
 import { apiGet, apiPost, apiPut, apiDelete } from "../../utils/api";
 import { handleExternalLinkClick } from "../../utils/dom/externalLink";
 import { sanitizeMarkdownHtml } from "../../utils/markdown/sanitize";
+import { useMermaidRenderer } from "../../utils/markdown/useMermaid";
 import { pluginEndpoints } from "../api";
 import { buildRouteUrl } from "../meta-types";
 import type { SkillsEndpoints } from "./definition";
@@ -564,6 +566,9 @@ const renderedBody = computed(() => {
   if (!body) return "";
   return sanitizeMarkdownHtml(marked(body) as string);
 });
+
+const skillMarkdownRef = ref<HTMLElement | null>(null);
+useMermaidRenderer(skillMarkdownRef, renderedBody);
 
 // Edit/Delete follows the backend writer contract (writer.ts rejects
 // only source === "user"), NOT the mc- name heuristic. Under #1335
@@ -666,6 +671,9 @@ const catalogRenderedBody = computed(() => {
   if (!body) return "";
   return sanitizeMarkdownHtml(marked(body) as string);
 });
+
+const catalogMarkdownRef = ref<HTMLElement | null>(null);
+useMermaidRenderer(catalogMarkdownRef, catalogRenderedBody);
 
 // External catalog entries grouped under their repo, in the repo
 // order returned by `/external/repos`. Repos with zero discoverable

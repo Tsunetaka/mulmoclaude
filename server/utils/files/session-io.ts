@@ -27,6 +27,10 @@ export interface SessionMeta {
   hasUnread?: boolean;
   isBookmarked?: boolean;
   origin?: SessionOrigin;
+  /** Number of user turns (queries) sent to this session. Bumped once
+   *  per user message so a one-shot session (1) can be told apart from
+   *  a long-running conversation. */
+  userQueryCount?: number;
   [key: string]: unknown;
 }
 
@@ -97,6 +101,13 @@ export async function updateIsBookmarked(sessionId: string, isBookmarked: boolea
   const meta = await readSessionMeta(sessionId, rootOverride);
   if (!meta) return;
   await writeSessionMeta(sessionId, { ...meta, isBookmarked }, rootOverride);
+}
+
+export async function incrementUserQueryCount(sessionId: string, rootOverride?: string): Promise<void> {
+  const meta = await readSessionMeta(sessionId, rootOverride);
+  if (!meta) return;
+  const current = typeof meta.userQueryCount === "number" ? meta.userQueryCount : 0;
+  await writeSessionMeta(sessionId, { ...meta, userQueryCount: current + 1 }, rootOverride);
 }
 
 // Hard-deletes the session's .jsonl event log and .json meta sidecar.

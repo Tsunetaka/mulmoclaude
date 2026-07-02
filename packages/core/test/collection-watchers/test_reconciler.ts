@@ -32,6 +32,7 @@ configureCollectionHost({
     feedsRoot: (wsRoot) => path.join(wsRoot, "data", "feeds"),
     skillsStagingDir: (wsRoot) => path.join(wsRoot, "data", "skills"),
     archiveDir: "data/archive",
+    collectionsRegistriesConfig: (wsRoot) => path.join(wsRoot, "config", "collections-registries.json"),
   },
   isPresetSlug: () => false,
 });
