@@ -13,8 +13,7 @@ const router = Router();
 const PPTX_PATTERN = /\.pptx$/i;
 const PPTX_VERSION_DATE_PATTERN = /_(\d{8})_v(\d+)\.pptx$/i;
 const PPTX_VERSION_PATTERN = /_v(\d+)\.pptx$/i;
-// eslint-disable-next-line sonarjs/slow-regex
-const WD_NAME_PATTERN = /^([A-Z]+-\d+)\s+(.+)$/;
+const WD_NAME_PATTERN = /^([A-Z]+-\d+)\s+(\S.*)$/;
 const WD_ROOT_PATTERN = /^[A-Z]+-\d{5}\s+/;
 
 // WD-ID（例 GIT-00003）／バージョン名（例 v001・枝番 v001-002）の厳格パターン。
