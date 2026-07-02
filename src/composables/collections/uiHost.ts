@@ -12,6 +12,7 @@
 // `notifiedSeverities` returns an empty map.
 import {
   configureCollectionUi,
+  type CollectionRemoteViewResult,
   type CollectionViewI18nResult,
   type CollectionViewToken,
   type RegistryListResponse,
@@ -98,6 +99,7 @@ configureCollectionUi({
     }
   },
   fetchViewI18n: (slug, viewId, locale) => apiGet<CollectionViewI18nResult>(withSlug(API_ROUTES.collections.viewI18n, slug), { id: viewId, locale }),
+  fetchRemoteView: (slug, viewId, locale) => apiGet<CollectionRemoteViewResult>(withSlug(API_ROUTES.collections.remoteView, slug), { id: viewId, locale }),
   buildViewSrcdoc: (html, boot) => buildCustomViewSrcdoc(html, boot),
 
   // record CRUD + actions

@@ -10,7 +10,7 @@ import { listFeeds as listFeedsRegistry } from "@mulmoclaude/core/feeds/server";
 import { listItems, toDetail } from "../../workspace/collections/index.js";
 import { workspacePath } from "../../workspace/workspace.js";
 import type { CommandHandler, JsonObject } from "../commandChannel.js";
-import { clampLimit, clampOffset, pageResult } from "./collectionPage.js";
+import { clampLimit, clampOffset, deriveItems, pageResult } from "./collectionPage.js";
 
 export interface GetFeedDeps {
   listFeeds: typeof listFeedsRegistry;
@@ -28,7 +28,7 @@ export const createGetFeed =
     const feeds = await deps.listFeeds(deps.workspaceRoot);
     const feed = feeds.find((entry) => entry.slug === slug);
     if (!feed) throw new Error(`feed '${slug}' not found`);
-    const all = await deps.listItems(feed.dataDir);
+    const all = deriveItems(feed.schema, await deps.listItems(feed.dataDir));
     return pageResult(deps.toDetail(feed), all, offset, limit);
   };
 

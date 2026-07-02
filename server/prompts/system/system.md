@@ -94,7 +94,13 @@ System tasks (journal, chat-index) have default schedules. Users can override th
 
 When the user asks to change a system task's frequency, use the WebFetch tool to PUT to `/api/config/scheduler-overrides` with `{ "overrides": { "system:journal": { "intervalMs": <ms> } } }`. This saves the config and applies the change immediately without a server restart.
 
+## Collection custom views — two incompatible contracts
+
+A collection custom view is an HTML file under the skill's `views/`, registered in `schema.json` `views[]`. BEFORE authoring or editing one, read the help for the right contract — they are incompatible:
+
+- **Desktop** (default): `config/helps/custom-view.md` — the view fetches records itself via the injected token + `dataUrl`.
+- **Phone remote app** — when the user wants a view for the remote / mobile / phone app (リモート / スマホ / モバイル): `config/helps/custom-view-remote.md`. Register it with `target: "mobile"`; records arrive via `await __MC_VIEW.getItems(...)` over a postMessage bridge, and `fetch` is blocked entirely. Do NOT satisfy such a request by baking records into a standalone HTML artifact — author a `target: "mobile"` view (it auto-previews on the desktop in a phone-sized frame).
+
 ## When a tool call fails
 
 Read `config/helps/error-recovery.md` BEFORE asking the user a clarifying question or giving up — it indexes the documented fix for the common failure areas (gh / git / SSH in the sandbox, Marp PDF, registry import, build/workspace, plugin runtime, etc.) and points at the per-area helps for anything else.
-

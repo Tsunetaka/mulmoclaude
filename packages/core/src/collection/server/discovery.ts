@@ -224,6 +224,12 @@ const CustomViewSchema = z.object({
   id: z.string().trim().min(1),
   label: z.string().trim().min(1),
   icon: z.string().trim().min(1).optional(),
+  // Where the view runs. Absent ⇒ "desktop" (the sandboxed iframe over the
+  // token/dataUrl contract), so every pre-existing view keeps its behavior.
+  // "mobile" ⇒ served to the phone remote via getRemoteView (postMessage
+  // contract, @mulmoclaude/core/remote-view) and phone-frame-previewed on
+  // desktop. See plans/feat-remote-custom-view.md.
+  target: z.enum(["desktop", "mobile"]).optional(),
   file: z
     .string()
     .trim()

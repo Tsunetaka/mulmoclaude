@@ -7,7 +7,10 @@ collection's data. The user asks for it in plain language ("give me a view that
 shows my whole year"); you author the HTML and register it.
 
 Read `config/helps/collection-skills.md` first for the collection/schema DSL.
-This file is only about the **view** layer.
+This file is only about the **desktop view** layer. For a view that runs on the
+**phone remote app** (`target: "mobile"` in the `views[]` entry), read
+`config/helps/custom-view-remote.md` instead — its runtime contract is
+different and incompatible (no token, no dataUrl, no fetch).
 
 ## Where the files go
 
@@ -32,9 +35,7 @@ the collection's `schema.json`:
   "icon": "calendar_month",
   "dataPath": "data/annual-plan/items",
   "primaryKey": "id",
-  "fields": {
-    /* … */
-  },
+  "fields": {/* … */},
   "views": [
     { "id": "year", "label": "Year", "icon": "grid_view", "file": "views/year.html", "capabilities": ["read"] },
     { "id": "planner", "label": "Planner", "icon": "edit_calendar", "file": "views/planner.html", "capabilities": ["read", "write"] },

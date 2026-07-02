@@ -1,7 +1,7 @@
 {
   "name": "@mulmoclaude/core",
-  "version": "0.5.1",
-  "description": "Shared server-side core for MulmoClaude and MulmoTerminal — the always-shipped-together subsystems consolidated behind subpath exports so the two hosts can't drift. Server-only except the browser-safe ./whisper/client, ./workspace-setup/slug and ./translation/client entries. All host specifics are injected.",
+  "version": "0.6.0",
+  "description": "Shared server-side core for MulmoClaude and MulmoTerminal — the always-shipped-together subsystems consolidated behind subpath exports so the two hosts can't drift. Server-only except the browser-safe ./whisper/client, ./workspace-setup/slug, ./translation/client and ./remote-view entries. All host specifics are injected.",
   "type": "module",
   "exports": {
     "./collection": {
@@ -111,6 +111,12 @@
       "import": "./dist/whisper/client.js",
       "require": "./dist/whisper/client.cjs",
       "default": "./dist/whisper/client.js"
+    },
+    "./remote-view": {
+      "types": "./dist/remote-view/index.d.ts",
+      "import": "./dist/remote-view/index.js",
+      "require": "./dist/remote-view/index.cjs",
+      "default": "./dist/remote-view/index.js"
     },
     "./translation/client": {
       "types": "./dist/translation/client.d.ts",

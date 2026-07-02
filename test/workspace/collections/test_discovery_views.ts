@@ -59,4 +59,10 @@ describe("collection schema — custom views validation", () => {
   it("rejects an unknown capability value", () => {
     assert.equal(withViews([{ id: "a", label: "A", file: "views/a.html", capabilities: ["delete"] }]).success, false);
   });
+
+  it("accepts target: mobile / desktop, rejects anything else", () => {
+    assert.equal(withViews([{ id: "phone", label: "Phone", file: "views/phone.html", target: "mobile" }]).success, true);
+    assert.equal(withViews([{ id: "year", label: "Year", file: "views/year.html", target: "desktop" }]).success, true);
+    assert.equal(withViews([{ id: "tv", label: "TV", file: "views/tv.html", target: "tv" }]).success, false);
+  });
 });

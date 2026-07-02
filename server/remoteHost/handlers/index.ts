@@ -4,6 +4,7 @@
 import type { CommandHandlers } from "../commandChannel.js";
 import { getCollection } from "./getCollection.js";
 import { getFeed } from "./getFeed.js";
+import { getRemoteView } from "./getRemoteView.js";
 import { listCollections } from "./listCollections.js";
 import { listFeeds } from "./listFeeds.js";
 import { listShortcuts } from "./listShortcuts.js";
@@ -15,5 +16,6 @@ export const handlers: CommandHandlers = {
   listShortcuts,
   listFeeds,
   getFeed,
+  getRemoteView,
   startChat,
 };

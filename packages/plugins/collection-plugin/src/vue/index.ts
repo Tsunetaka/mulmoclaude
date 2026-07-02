@@ -30,6 +30,7 @@ export {
   type CollectionViewToken,
   type CollectionViewHtmlResult,
   type CollectionViewI18nResult,
+  type CollectionRemoteViewResult,
   type CollectionViewSrcdocBoot,
   type CollectionActionResult,
   type CollectionRefreshResult,

@@ -40,6 +40,9 @@ export default defineConfig({
         "whisper/index": "src/whisper/index.ts",
         "whisper/client": "src/whisper/client.ts",
         "translation/client": "src/translation/client.ts",
+        // Browser-safe remote custom-view contract (phase 3) — consumed by the
+        // host server, the desktop phone-frame preview, and mulmoserver.
+        "remote-view/index": "src/remote-view/index.ts",
       },
       formats: ["es", "cjs"],
       fileName: (format, entryName) => `${entryName}.${format === "es" ? "js" : "cjs"}`,

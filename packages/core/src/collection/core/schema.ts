@@ -241,6 +241,12 @@ export interface CollectionCustomView {
    *  (least privilege); declare `["read","write"]` only for views that
    *  edit records. The mint endpoint clamps any requested caps to this. */
   capabilities?: CollectionViewCapability[];
+  /** Where the view runs. Absent ⇒ `"desktop"` (this token/dataUrl contract).
+   *  `"mobile"` ⇒ a remote view for the phone client: served through the
+   *  command channel's `getRemoteView` over the postMessage contract
+   *  (`@mulmoclaude/core/remote-view` — no token, `connect-src 'none'`) and
+   *  previewed on desktop inside a phone-sized frame. */
+  target?: "desktop" | "mobile";
 }
 
 /** A schema-declared, per-record action rendered as a button in the

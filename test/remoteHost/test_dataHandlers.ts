@@ -13,7 +13,13 @@ const records = (count: number) => Array.from({ length: count }, (_unused, index
 
 const collectionDeps = (all: { id: string }[]): GetCollectionDeps => ({
   loadCollection: (async (slug: string) =>
-    slug === "missing" ? null : { slug, dataDir: `/d/${slug}`, schema: { primaryKey: "id" } }) as unknown as GetCollectionDeps["loadCollection"],
+    slug === "missing"
+      ? null
+      : {
+          slug,
+          dataDir: `/d/${slug}`,
+          schema: { primaryKey: "id", fields: { id: { type: "string" }, won: { type: "number" }, points: { type: "derived", formula: "won * 3" } } },
+        }) as unknown as GetCollectionDeps["loadCollection"],
   listItems: (async () => all) as unknown as GetCollectionDeps["listItems"],
   toDetail: ((collection: { slug: string; schema: unknown }) => ({
     slug: collection.slug,
@@ -39,6 +45,12 @@ describe("createGetCollection", () => {
     assert.equal(result.offset, 1);
     assert.equal(result.limit, 2);
     assert.equal(result.collection.slug, "clients");
+  });
+
+  it("resolves record-local derived formulas before paging", async () => {
+    const handler = createGetCollection(collectionDeps([{ id: "r0", won: 2 } as unknown as { id: string }]));
+    const result = (await handler({ slug: "clients" })) as { items: { id: string; points?: number }[] };
+    assert.equal(result.items[0].points, 6);
   });
 
   it("throws when the collection is not found", async () => {

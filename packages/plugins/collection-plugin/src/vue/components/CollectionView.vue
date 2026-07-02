@@ -208,7 +208,7 @@
             :data-testid="`collection-view-custom-${cv.id}`"
             @click="setCustomView(cv.id)"
           >
-            <span class="material-icons text-sm">{{ cv.icon || "dashboard_customize" }}</span>
+            <span class="material-icons text-sm">{{ cv.icon || (cv.target === "mobile" ? "smartphone" : "dashboard_customize") }}</span>
             <span>{{ cv.label }}</span>
           </button>
           <!-- "+" — ask Claude to author a new custom view for this collection. -->
@@ -407,9 +407,20 @@
 
       <!-- Custom (LLM-authored) HTML view, rendered in a sandboxed iframe over
            the collection's records. Placed before the empty states so it shows
-           even for an empty collection (e.g. a still-empty year grid). -->
+           even for an empty collection (e.g. a still-empty year grid). A
+           mobile-target view renders in the phone-frame preview instead — the
+           host-wrapped srcdoc + postMessage bridge, exactly what the phone
+           remote receives. -->
       <div v-else-if="activeCustomView" class="h-full" data-testid="collection-custom-view-body">
-        <CollectionCustomView :slug="collection.slug" :view="activeCustomView" @open-item="onCustomViewOpenItem" @start-chat="onCustomViewStartChat" />
+        <CollectionRemoteViewPreview
+          v-if="activeCustomView.target === 'mobile'"
+          :slug="collection.slug"
+          :view="activeCustomView"
+          :schema="collection.schema"
+          :items="items"
+          @start-chat="onCustomViewStartChat"
+        />
+        <CollectionCustomView v-else :slug="collection.slug" :view="activeCustomView" @open-item="onCustomViewOpenItem" @start-chat="onCustomViewStartChat" />
       </div>
 
       <div v-else-if="items.length === 0 && editing?.mode !== 'create'" class="flex flex-col items-center justify-center py-20 text-sm text-slate-400 gap-2">
@@ -743,6 +754,7 @@ import CollectionKanbanView from "./CollectionKanbanView.vue";
 import CollectionRecordPanel from "./CollectionRecordPanel.vue";
 import CollectionViewConfigModal from "./CollectionViewConfigModal.vue";
 import CollectionCustomView from "./CollectionCustomView.vue";
+import CollectionRemoteViewPreview from "./CollectionRemoteViewPreview.vue";
 import { useCollectionRendering } from "../useCollectionRendering";
 import {
   readCollectionViewMode,
@@ -1522,8 +1534,13 @@ const hasKanban = computed<boolean>(() => enumFields.value.length > 0);
  *  vanished (e.g. `view = "kanban"` after switching to an enum-less
  *  collection) back to "table". Single source of truth for the toggle and
  *  the body branches. */
-/** Custom (LLM-authored) HTML views declared on the schema. */
-const customViews = computed<CustomViewSpec[]>(() => collection.value?.schema.views ?? []);
+/** Custom (LLM-authored) HTML views declared on the schema. Mobile-target
+ *  views need the host's `fetchRemoteView` binding (the phone-frame preview's
+ *  data source) — on a host without it they're hidden from the selector. */
+const customViews = computed<CustomViewSpec[]>(() => {
+  const views = collection.value?.schema.views ?? [];
+  return cui.fetchRemoteView ? views : views.filter((entry) => entry.target !== "mobile");
+});
 const hasCustomViews = computed<boolean>(() => customViews.value.length > 0);
 
 const activeView = computed<CollectionViewMode>(() => {

@@ -5,23 +5,14 @@
 // random `https://` origins, phone-home `fetch()` calls, etc. —
 // is rejected.
 //
-// Widen by editing `HTML_PREVIEW_CSP_ALLOWED_CDNS` below. Keep the
-// list audited — every entry is a potential supply-chain surface.
+// The list itself lives in `@mulmoclaude/core/remote-view`
+// (SANDBOXED_VIEW_CDN_ALLOWLIST) so the remote-view CSP and these
+// desktop policies can't drift — widen it THERE, and keep it
+// audited: every entry is a potential supply-chain surface.
 
-export const HTML_PREVIEW_CSP_ALLOWED_CDNS: readonly string[] = [
-  "https://cdn.jsdelivr.net",
-  "https://unpkg.com",
-  "https://cdnjs.cloudflare.com",
-  "https://fonts.googleapis.com",
-  "https://fonts.gstatic.com",
-  // Plotly's official CDN. The LLM defaults to this URL when it
-  // includes a Sankey or other Plotly chart in presentHtml output —
-  // Plotly's docs recommend it, so unconditioned LLM output ends up
-  // pointing here. Also reachable through jsdelivr, but adding the
-  // first-party CDN keeps historical artifacts (where the URL is
-  // already baked into the file on disk) rendering correctly.
-  "https://cdn.plot.ly",
-];
+import { SANDBOXED_VIEW_CDN_ALLOWLIST } from "@mulmoclaude/core/remote-view";
+
+export const HTML_PREVIEW_CSP_ALLOWED_CDNS: readonly string[] = SANDBOXED_VIEW_CDN_ALLOWLIST;
 
 /**
  * Build the CSP string. Split from the wrapper so tests can exercise

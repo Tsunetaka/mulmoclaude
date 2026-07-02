@@ -43,7 +43,11 @@ See [Collection skills](config/helps/collection-skills.md) for the full schema D
 
 When the built-in table / calendar / kanban / dashboard views don't fit what you want to _see_ — a year-at-a-glance planner, a Gantt bar, a heat-map, a printable report — Claude authors a **custom view**: a single HTML file rendered in a sandboxed iframe over the collection's records. It reads (and optionally writes) records through a scoped token, stays live as the data changes, and can hand work back to a chat — all without any view-specific host code. The view is data, just like the rest of the collection, so you can ask for an entirely new way to look at your data in plain language and get it.
 
-See [Custom views](config/helps/custom-view.md) for the authoring contract.
+See [Custom views](config/helps/custom-view.md) for the authoring contract. A
+view can also target the **mobile remote app** (`target: "mobile"`) — rendered
+on the user's phone and previewed on the desktop in a phone-sized frame; that
+variant has a different, incompatible runtime contract described in
+[Remote custom views](config/helps/custom-view-remote.md).
 
 ## Wiki — Long-Term Memory
 
@@ -69,6 +73,7 @@ See [Wiki](config/helps/wiki.md) for details on how it works.
 - [GitHub repositories in the workspace](config/helps/github.md) — clone-destination rules under `github/<name>/` and how to handle existing directories with matching or different remotes
 - [Collection skills](config/helps/collection-skills.md) — build a data app (model + UI + relations + computed fields + action buttons) by authoring a `schema.json` collection skill: the DSL, field types, derived formulas, actions, records
 - [Custom views](config/helps/custom-view.md) — give a collection a view the built-ins don't cover (year/quarter overview, Gantt): an HTML file under `views/`, registered in `schema.json`, rendered in a sandboxed iframe over the records
+- [Remote custom views](config/helps/custom-view-remote.md) — author a collection view for the **phone remote app** (`target: "mobile"` in `views[]`): records via the `getItems` bridge (no token, no fetch), mobile-first layout rules, phone-frame preview
 - [Todo list collection](config/helps/todo-collection.md) — the canonical recipe for building or migrating a todo / task list: full schema (status enum + `done` toggle + priority bells), `SKILL.md`, and legacy `todo-plugin` migration steps
 - [Vocabulary collection](config/helps/vocabulary.md) — recipe for a language-learning word deck (any language): `proficiency` enum + `mastered` toggle + `meaning`/`example` fields, a kanban for drag-to-promote review, and bulk-add / quiz workflows
 - [Lessons collection](config/helps/lessons-collection.md) — recipe for a multi-session **curriculum** (any topic): one lesson per record, a `status` kanban, a `file` link to each lesson's HTML, and per-lesson + course-level **Learn** actions run by the Tutor

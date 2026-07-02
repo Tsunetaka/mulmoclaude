@@ -85,6 +85,18 @@ export interface CollectionViewSrcdocBoot {
   dict?: Record<string, string>;
 }
 
+/** Server response for `fetchRemoteView` — a mobile (`target: "mobile"`)
+ *  custom view already wrapped HOST-side into its sandboxed srcdoc (CSP +
+ *  postMessage bootstrap; `@mulmoclaude/core/remote-view`), exactly what the
+ *  phone client receives over the command channel. `bytes` is the srcdoc's
+ *  UTF-8 size, surfaced against the 1 MiB command-document budget while the
+ *  user iterates on the view. */
+export interface CollectionRemoteViewResult {
+  view: { id: string; label: string; icon?: string; target: "mobile" };
+  srcdoc: string;
+  bytes: number;
+}
+
 /** Server response shape for `fetchViewI18n` — already locale-picked + flat.
  *  `locale === ""` means no translations were available (view has no `i18n`
  *  declared, file missing, or neither the requested locale nor `"en"` had a
@@ -193,6 +205,12 @@ export interface CollectionUi {
    *  view has no `i18n` declared or the file is missing / malformed — the
    *  iframe-side `__MC_VIEW.t(key)` then echoes the key. */
   fetchViewI18n: (slug: string, viewId: string, locale: string) => Promise<CollectionApiResult<CollectionViewI18nResult>>;
+  /** Fetch a mobile custom view wrapped into its sandboxed srcdoc (host:
+   *  `apiGet` over `API_ROUTES.collections.remoteView`, global bearer
+   *  attached) — the phone-frame preview's data source. Optional: a host
+   *  without the remote-view route omits it and mobile views are hidden from
+   *  the view selector (purely additive, like `subscribeChanges`). */
+  fetchRemoteView?: (slug: string, viewId: string, locale: string) => Promise<CollectionApiResult<CollectionRemoteViewResult>>;
   /** Wrap a custom view's HTML in a sandboxed `<iframe srcdoc>` with the token +
    *  data URL injected and the host's CSP applied. Replaces the host's
    *  `buildCustomViewSrcdoc`. */

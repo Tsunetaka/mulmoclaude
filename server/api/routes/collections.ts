@@ -42,6 +42,7 @@ import type {
   LoadedCollection,
   RecordIssue,
 } from "../../workspace/collections/index.js";
+import { buildRemoteView, remoteViewFailureMessage, type RemoteViewBuildResult } from "../../workspace/collections/remoteView.js";
 import { badRequest, notFound, conflict, forbidden, serverError } from "../../utils/httpError.js";
 import { errorMessage } from "../../utils/errors.js";
 import { log } from "../../system/logger/index.js";
@@ -479,6 +480,41 @@ router.get(API_ROUTES.collections.viewFile, async (req: Request<{ slug: string }
     res.type("text/html").send(html);
   } catch (err) {
     log.warn("collections", "view-file read failed", { slug: req.params.slug, error: errorMessage(err) });
+    serverError(res, errorMessage(err));
+  }
+});
+
+/** Map a non-ok remote-view build to its HTTP error (message shared with the
+ *  channel handler via `remoteViewFailureMessage`). */
+function sendRemoteViewFailure(res: Response, result: Exclude<RemoteViewBuildResult, { kind: "ok" }>, slug: string): void {
+  const message = remoteViewFailureMessage(result, slug);
+  if (result.kind === "view-not-found" || result.kind === "file-missing") notFound(res, message);
+  else badRequest(res, message);
+}
+
+// Serve a mobile (`target: "mobile"`) custom view wrapped into its sandboxed
+// srcdoc — the desktop phone-frame preview's data source. Behind the global
+// bearer. Same builder as the command channel's `getRemoteView`, so the
+// preview renders the exact artifact the phone receives
+// (plans/feat-remote-custom-view.md).
+router.get(API_ROUTES.collections.remoteView, async (req: Request<{ slug: string }>, res: Response) => {
+  try {
+    const { slug } = req.params;
+    const viewId = typeof req.query.id === "string" ? req.query.id : "";
+    const locale = typeof req.query.locale === "string" ? req.query.locale : "";
+    const collection = await loadCollection(slug);
+    if (!collection) {
+      notFound(res, `collection '${slug}' not found`);
+      return;
+    }
+    const result = await buildRemoteView(collection, viewId, locale);
+    if (result.kind !== "ok") {
+      sendRemoteViewFailure(res, result, slug);
+      return;
+    }
+    res.json({ view: result.view, srcdoc: result.srcdoc, bytes: result.bytes });
+  } catch (err) {
+    log.warn("collections", "remote-view build failed", { slug: req.params.slug, error: errorMessage(err) });
     serverError(res, errorMessage(err));
   }
 });

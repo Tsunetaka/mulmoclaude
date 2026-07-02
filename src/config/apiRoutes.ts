@@ -293,6 +293,12 @@ const HOST_API_ROUTES = {
     /** GET ?id=<viewId> → the custom view's HTML file (global-bearer auth),
      *  read from data/skills/:slug/views/. The parent renders it sandboxed. */
     viewFile: "/api/collections/:slug/view-file",
+    /** GET ?id=<viewId>&locale=<tag> → a mobile (`target: "mobile"`) custom
+     *  view wrapped into its sandboxed srcdoc (global-bearer auth) →
+     *  { view, srcdoc, bytes }. Same builder as the command channel's
+     *  `getRemoteView`, so the desktop phone-frame preview renders the exact
+     *  artifact the phone receives (plans/feat-remote-custom-view.md). */
+    remoteView: "/api/collections/:slug/remote-view",
     /** GET ?id=<viewId>&locale=<tag> → translation dict for one custom view
      *  (global-bearer auth) → { locale, dict }. `dict` is the host-picked
      *  flat map for the requested locale (fallback `"en"`, else `{}`); the
