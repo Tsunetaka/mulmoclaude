@@ -31,6 +31,9 @@ export interface SlideStructure {
   wd: string;
   version: string;
   source?: { kind: string; from: string };
+  /** geoplan-step-guide のテーマ ID（表紙グラデ＋内部帯色）。リボンのテーマ
+   *  プルダウンの初期選択に使う。旧 structure（theme 欄なし）は cool 扱い。 */
+  theme?: string;
   sections: StructureSection[];
   pages: Record<string, StructurePage>;
 }

@@ -1016,6 +1016,7 @@ const deMessages = {
     selectDoc: "Dokument auswählen",
     canvasRefresh: "Canvas aktualisieren",
     toggleChat: "Claude-Chat",
+    theme: "Thema",
   },
   mulmoPoint: {
     title: "Über MulmoPoint",

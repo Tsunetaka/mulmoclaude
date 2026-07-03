@@ -1014,6 +1014,7 @@ const esMessages = {
     selectDoc: "Seleccionar documento",
     canvasRefresh: "Actualizar lienzo",
     toggleChat: "Chat de Claude",
+    theme: "Tema",
   },
   mulmoPoint: {
     title: "Acerca de MulmoPoint",

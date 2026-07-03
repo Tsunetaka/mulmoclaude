@@ -991,6 +991,7 @@ const zhMessages = {
     selectDoc: "选择文档",
     canvasRefresh: "更新画布",
     toggleChat: "Claude 聊天",
+    theme: "主题",
   },
   mulmoPoint: {
     title: "关于 MulmoPoint",

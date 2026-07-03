@@ -999,6 +999,7 @@ const jaMessages = {
     selectDoc: "文書選択",
     canvasRefresh: "canvas 更新",
     toggleChat: "Claude チャット",
+    theme: "テーマ",
   },
   mulmoPoint: {
     title: "MulmoPoint について",

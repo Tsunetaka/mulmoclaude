@@ -1385,6 +1385,79 @@ router.post(API_ROUTES.work.newDeck, async (req, res) => {
   res.end();
 });
 
+// ── テーマ再適用（Phase2）──────────────────────────────────────────────────
+// apply_theme.py（WSL python-pptx・COM 非依存）でデッキ全ページに配色を再適用し、
+// structure.json に theme を永続化 → gen_thumbs でサムネ再生成 → DONE。
+// canvas は明示「更新」ボタンで後追い。ホスト実行なのでサムネ豆腐は出ない。
+
+/** theme body の純粋検証。問題があればエラーメッセージ、無ければ null。 */
+export function validateThemeBody(body: { theme?: unknown }): string | null {
+  if (typeof body.theme !== "string" || !(NEW_DECK_THEME_IDS as readonly string[]).includes(body.theme)) {
+    return `theme は ${NEW_DECK_THEME_IDS.join("/")} のいずれかを指定してください`;
+  }
+  return null;
+}
+
+/** apply_theme.py の CLI 引数を組み立てる（純粋）。 */
+export function buildApplyThemeArgs(scriptPath: string, versionDir: string, theme: string): string[] {
+  return [scriptPath, "--version-dir", versionDir, "--theme", theme];
+}
+
+// apply_theme.py を spawn して SSE に流す。成功(0)なら gen_thumbs → DONE、失敗なら ERROR。
+async function runApplyTheme(wdId: string, version: string, theme: string, send: (line: string) => void): Promise<void> {
+  const versionDir = path.join(workspacePath, "data/work", wdId, version);
+  const scriptPath = path.join(workspacePath, "data/work/tools/apply_theme.py");
+  const args = buildApplyThemeArgs(scriptPath, versionDir, theme);
+  await new Promise<void>((resolve) => {
+    const proc = spawn("python3", args, { env: { ...process.env } });
+    pipeToSse(proc, send, "🎨 ");
+    proc.on("close", (code) => {
+      const finish = async (): Promise<void> => {
+        if (code === 0) {
+          await runGenThumbs(wdId, version, send);
+          send(`DONE:${wdId}`);
+        } else {
+          send("ERROR: apply_theme.py が失敗しました（WSL ホストに python-pptx / lxml が必要: pip install python-pptx lxml --break-system-packages）");
+          send(`ERROR: exit ${String(code)}`);
+        }
+        resolve();
+      };
+      finish().catch((err) => {
+        send(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+        resolve();
+      });
+    });
+    proc.on("error", (err) => {
+      send(`ERROR: ${err.message}`);
+      resolve();
+    });
+  });
+}
+
+// POST /api/work/:wd/:version/theme — デッキ全ページにテーマ再適用（SSE）
+router.post(API_ROUTES.work.theme, async (req, res) => {
+  const { wd, version } = req.params as { wd: string; version: string };
+  const body = req.body as { theme?: string };
+  if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return;
+  }
+  const bodyError = validateThemeBody(body);
+  if (bodyError) {
+    res.status(400).json({ error: bodyError });
+    return;
+  }
+  // preflight: 対象バージョンに structure.json が無ければ 404（SSE flush 前に JSON で返す）
+  if (!(await pathExists(path.join(workspacePath, "data/work", wd, version, ".pages", "structure.json")))) {
+    res.status(404).json({ error: "対象バージョンに structure.json がありません" });
+    return;
+  }
+  const ctx = beginComStream(req, res);
+  if (!ctx) return;
+  await runApplyTheme(wd, version, body.theme ?? "cool", ctx.send);
+  res.end();
+});
+
 // POST /api/work/:wd/:version/fork-from — 編集中由来の新版を .pages コピーで作成（SSE）
 router.post(API_ROUTES.work.forkFrom, async (req, res) => {
   const { wd, version } = req.params as { wd: string; version: string };

@@ -1004,6 +1004,7 @@ const frMessages = {
     selectDoc: "Sélectionner le document",
     canvasRefresh: "Actualiser le canevas",
     toggleChat: "Chat Claude",
+    theme: "Thème",
   },
   mulmoPoint: {
     title: "À propos de MulmoPoint",

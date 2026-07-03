@@ -320,6 +320,41 @@
         </div>
       </div>
     </div>
+
+    <!-- テーマ適用モーダル（Phase2・全ページ配色再適用の進捗） -->
+    <div v-if="themeModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeThemeModal">
+      <div class="w-[32rem] max-w-[90vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
+        <div class="flex items-center gap-2 px-4 py-2.5 bg-[#0a1830] border-b border-[#1a2a44]">
+          <span class="material-icons text-sm text-[#4a8acc]">palette</span>
+          <span class="text-sm font-bold text-[#8aacd0] flex-1">テーマ「{{ pendingTheme }}」を適用中</span>
+          <button
+            class="text-[#3a5a7a] hover:text-[#6a9acc] disabled:opacity-30"
+            :disabled="themePhase === 'running'"
+            aria-label="閉じる"
+            @click="closeThemeModal"
+          >
+            <span class="material-icons text-sm">close</span>
+          </button>
+        </div>
+
+        <!-- SSE ログ -->
+        <div
+          class="px-4 py-3 font-mono text-[11px] text-[#7aa0c0] bg-[#060b14] max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed"
+          style="scrollbar-width: thin; scrollbar-color: #1a2a3a transparent"
+        >
+          <div v-for="(line, i) in themeLog" :key="i">{{ line }}</div>
+          <div v-if="themePhase === 'running'" class="text-yellow-300 animate-pulse">配色を適用中...</div>
+          <div v-if="themePhase === 'done'" class="text-green-300">完了しました。高解像度の反映は「canvas 更新」で行ってください。</div>
+        </div>
+
+        <!-- フッター -->
+        <div class="flex justify-end gap-2 px-4 py-2.5 bg-[#0a1220] border-t border-[#1a2a44]">
+          <button v-if="themePhase !== 'running'" class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a]" @click="closeThemeModal">
+            閉じる
+          </button>
+        </div>
+      </div>
+    </div>
     <!-- eslint-enable @intlify/vue-i18n/no-raw-text -->
   </div>
 </template>
@@ -375,6 +410,12 @@ const refreshModalOpen = ref(false);
 const refreshPhase = ref<"confirm" | "running" | "done">("confirm");
 const refreshFull = ref(false);
 const refreshLog = ref<string[]>([]);
+
+// ── テーマ適用モーダル（Phase2・全ページ配色再適用・SSE） ─────────────────────
+const themeModalOpen = ref(false);
+const themePhase = ref<"running" | "done" | "error">("running");
+const themeLog = ref<string[]>([]);
+const pendingTheme = ref<string>("");
 
 /** dirty（canvas 再生成待ち）ページ数。ヘッダーバッジと確認文言に使う。 */
 const dirtyCount = computed<number>(() => deck.value?.pages.filter((page) => page.dirty).length ?? 0);
@@ -580,8 +621,8 @@ function closeRefreshModal(): void {
   refreshModalOpen.value = false;
 }
 
-/** SSE ストリームを読んでログに追記し、DONE を検出する。 */
-async function drainRefreshSse(body: ReadableStream<Uint8Array>): Promise<boolean> {
+/** SSE ストリームを読んで指定ログに追記し、DONE を検出する（canvas 更新・テーマ適用で共用）。 */
+async function drainSse(body: ReadableStream<Uint8Array>, log: { value: string[] }): Promise<boolean> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -595,7 +636,7 @@ async function drainRefreshSse(body: ReadableStream<Uint8Array>): Promise<boolea
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
       const msg = line.slice(6);
-      refreshLog.value.push(msg);
+      log.value.push(msg);
       if (msg.startsWith("DONE:")) done = true;
     }
   }
@@ -618,7 +659,7 @@ async function runCanvasRefresh(): Promise<void> {
       refreshPhase.value = "confirm";
       return;
     }
-    const done = await drainRefreshSse(res.body);
+    const done = await drainSse(res.body, refreshLog);
     refreshPhase.value = done ? "done" : "confirm";
     if (done) await reloadAfterRefresh();
   } catch (err) {
@@ -630,6 +671,46 @@ async function runCanvasRefresh(): Promise<void> {
 /** canvas 更新完了後にデッキを再読込し、新しい画像を確実に取得する。 */
 async function reloadAfterRefresh(): Promise<void> {
   await reloadDeck();
+}
+
+// ── テーマ再適用（Phase2・リボンのテーマプルダウン発） ────────────────────────
+// デッキ全ページに配色を適用（表紙グラデ／概要帯／本文 Step 色）→ サムネ再生成。
+// canvas は dirty になるので後で「更新」ボタンで高解像度化する。
+
+async function runApplyTheme(themeId: string): Promise<void> {
+  if (!wdId.value || !version.value) return;
+  if (themeId === slideEditor.theme.value) return; // 同一テーマは no-op
+  pendingTheme.value = themeId;
+  themePhase.value = "running";
+  themeLog.value = [];
+  themeModalOpen.value = true;
+  const url = fillRoute(API_ROUTES.work.theme, wdId.value, version.value);
+  try {
+    const res = await apiFetchRaw(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ theme: themeId }),
+    });
+    if (!res.ok || !res.body) {
+      themeLog.value.push(`ERROR: HTTP ${res.status}`);
+      themePhase.value = "error";
+      return;
+    }
+    const done = await drainSse(res.body, themeLog);
+    themePhase.value = done ? "done" : "error";
+    if (done) {
+      slideEditor.theme.value = themeId; // プルダウンの選択を確定
+      await reloadDeck();
+    }
+  } catch (err) {
+    themeLog.value.push(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    themePhase.value = "error";
+  }
+}
+
+function closeThemeModal(): void {
+  if (themePhase.value === "running") return; // 実行中は閉じさせない
+  themeModalOpen.value = false;
 }
 
 // ── Chat helpers ─────────────────────────────────────────────────────────────
@@ -690,6 +771,7 @@ async function applyDeck(wdDir: string, ver: string, opts?: { preserve?: boolean
   version.value = ver;
   sourcePptx.value = structure.source?.from ?? "";
   sourceKind.value = structure.source?.kind ?? "";
+  slideEditor.theme.value = structure.theme ?? "cool"; // リボンのテーマプルダウン初期選択
   const prevId = currentId.value;
   deck.value = buildDeck(structure, manifest);
   const keep = opts?.preserve === true && deck.value.pages.some((page) => page.id === prevId);
@@ -775,6 +857,7 @@ watch(agentRunning, (running, wasRunning) => {
 // canvas 更新・チャットトグルの実体はこのビューが持ち、リボンからは共有ストア
 // 経由でトリガー／状態参照する（App.vue chrome のリボンとは親子関係が無いため）。
 slideEditor.register({
+  onApplyTheme: (themeId: string) => void runApplyTheme(themeId),
   onRefresh: () => openRefreshModal(),
   onToggleChat: () => {
     showChatPane.value = !showChatPane.value;

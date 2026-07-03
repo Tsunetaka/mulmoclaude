@@ -410,6 +410,12 @@ const HOST_API_ROUTES = {
      *  SSE ストリーム。body `{ title, subtitle?, theme, confidential? }`。
      *  作成先に structure.json が既存なら 409（preflight・SSE flush 前に JSON で返す）。 */
     newDeck: "/api/work/:wd/:version/new-deck",
+    /** POST — デッキ全ページにテーマ配色を再適用（Phase2・リボンのテーマ選択発）。
+     *  `apply_theme.py`（WSL python-pptx・COM 非依存）でセクション役割ごとに
+     *  表紙グラデ／概要帯／本文 Step 色を適用し、structure.json に theme を永続化、
+     *  続けて gen_thumbs でサムネ再生成（canvas は明示「更新」ボタンで後追い）。
+     *  ホスト実行なのでサムネの CJK 豆腐は出ない。SSE。body `{ theme }`。 */
+    theme: "/api/work/:wd/:version/theme",
     /** DELETE — リリース後始末の「サブフォルダ限定削除」（N1）。対象
      *  `data/work/<wd>/<version>/` のバージョンサブフォルダだけを WSL と
      *  Windows（`.checkout-source` の `windows_path`/<version>）の両側で削除する。

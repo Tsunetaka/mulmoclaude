@@ -6,9 +6,23 @@
        a button, append one entry — no template edits, and it appears on every
        page it lists in `pages`. -->
   <div class="flex items-center gap-2 w-full min-w-0" data-testid="slide-editor-ribbon">
-    <!-- ── Future edit controls (left zone) ── -->
+    <!-- ── 編集コントロール（左ゾーン）── テーマ選択（Phase2）
+         配色（表紙グラデ＋概要/本文の帯色）を全ページに再適用する。チャット非経由で
+         直接変更（要望）。選択即実行＝SlideEditorView がモーダルで進捗表示する。 -->
     <div class="flex items-center gap-2 flex-1 min-w-0">
-      <!-- Placeholder for future controls such as theme selector -->
+      <template v-if="showSlideControls">
+        <span class="material-icons text-base text-[#6a8aaa]">palette</span>
+        <select
+          class="ribbon-theme-select"
+          data-testid="ribbon-theme-select"
+          :value="theme"
+          :aria-label="t('slides.theme')"
+          :title="t('slides.theme')"
+          @change="onThemeChange"
+        >
+          <option v-for="opt in themes" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+        </select>
+      </template>
     </div>
 
     <!-- ── slides 編集コントロール（canvas 更新・チャット） ──
@@ -67,6 +81,7 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { PAGE_ROUTES, type PageRouteName } from "../router/pageRoutes";
 import { useSlideEditor } from "../composables/useSlideEditor";
+import { NEW_DECK_THEMES } from "../utils/slides/newDeck";
 import iconSelectDoc from "../assets/icons/icon_overview_white.png";
 import iconDone from "../assets/icons/icon_check.png";
 
@@ -76,7 +91,15 @@ const router = useRouter();
 
 // 編集ビュー（SlideEditorView）と共有するコントロール状態・アクション。
 const slideEditor = useSlideEditor();
-const { active, dirtyCount, chatOpen } = slideEditor;
+const { active, dirtyCount, chatOpen, theme } = slideEditor;
+
+// テーマプルダウンの選択肢（new-deck モーダルと同じ 10 テーマカタログを流用）。
+const themes = NEW_DECK_THEMES;
+
+function onThemeChange(event: Event): void {
+  const next = (event.target as HTMLSelectElement).value;
+  slideEditor.triggerApplyTheme(next);
+}
 
 // slides ページで編集ビューがマウント済みのときだけ canvas 更新・チャットを出す。
 const showSlideControls = computed<boolean>(() => route.name === PAGE_ROUTES.slides && active.value);
@@ -152,6 +175,14 @@ const visibleButtons = computed<RibbonButton[]>(() => {
 /* チャットトグル ON 時のアクセント */
 .ribbon-icon-btn--active {
   @apply bg-[#1a3a66] border-[#3a5a8a];
+}
+
+/* テーマ選択プルダウン（左ゾーン・編集コントロール） */
+.ribbon-theme-select {
+  @apply h-8 max-w-[11rem] px-2 rounded text-[11px] font-medium
+         bg-[#1a2a44] hover:bg-[#2a3a66] text-[#8aacd0]
+         border border-[#2a3a60] hover:border-[#3a5a8a]
+         cursor-pointer transition-colors;
 }
 
 /* テキスト付きアクションボタン（canvas 更新など） */

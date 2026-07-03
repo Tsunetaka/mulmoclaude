@@ -1003,6 +1003,7 @@ const ptBRMessages = {
     selectDoc: "Selecionar documento",
     canvasRefresh: "Atualizar canvas",
     toggleChat: "Chat do Claude",
+    theme: "Tema",
   },
   mulmoPoint: {
     title: "Sobre o MulmoPoint",

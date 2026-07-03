@@ -1001,6 +1001,7 @@ const koMessages = {
     selectDoc: "문서 선택",
     canvasRefresh: "캔버스 업데이트",
     toggleChat: "Claude 채팅",
+    theme: "테마",
   },
   mulmoPoint: {
     title: "MulmoPoint 정보",

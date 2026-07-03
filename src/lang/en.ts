@@ -1028,6 +1028,7 @@ const enMessages = {
     selectDoc: "Select Document",
     canvasRefresh: "Update Canvas",
     toggleChat: "Claude Chat",
+    theme: "Theme",
   },
   mulmoPoint: {
     title: "About MulmoPoint",
