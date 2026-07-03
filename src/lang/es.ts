@@ -1015,6 +1015,7 @@ const esMessages = {
     canvasRefresh: "Actualizar lienzo",
     toggleChat: "Chat de Claude",
     theme: "Tema",
+    themeUnapplied: "(Sin aplicar)",
   },
   mulmoPoint: {
     title: "Acerca de MulmoPoint",

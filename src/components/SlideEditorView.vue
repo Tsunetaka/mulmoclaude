@@ -368,7 +368,7 @@ import { apiGet, apiFetchRaw } from "../utils/api";
 import { API_ROUTES } from "../config/apiRoutes";
 import { useAppApi } from "../composables/useAppApi";
 import { useActiveSession } from "../composables/useActiveSession";
-import { useSlideEditor } from "../composables/useSlideEditor";
+import { useSlideEditor, UNAPPLIED_THEME } from "../composables/useSlideEditor";
 import { parseVersionDirs, isVersionName, buildDeck, type SlideStructure, type SlideManifest, type DeckModel, type DeckPage } from "../utils/slides/slideDeck";
 import { SLIDE_ROLE_ID } from "../utils/slides/newDeck";
 
@@ -679,6 +679,7 @@ async function reloadAfterRefresh(): Promise<void> {
 
 async function runApplyTheme(themeId: string): Promise<void> {
   if (!wdId.value || !version.value) return;
+  if (themeId === UNAPPLIED_THEME) return; // 「（未適用）」への差し戻しは不可（適用済みは未適用に戻せない）
   if (themeId === slideEditor.theme.value) return; // 同一テーマは no-op
   pendingTheme.value = themeId;
   themePhase.value = "running";
@@ -771,7 +772,7 @@ async function applyDeck(wdDir: string, ver: string, opts?: { preserve?: boolean
   version.value = ver;
   sourcePptx.value = structure.source?.from ?? "";
   sourceKind.value = structure.source?.kind ?? "";
-  slideEditor.theme.value = structure.theme ?? "cool"; // リボンのテーマプルダウン初期選択
+  slideEditor.theme.value = structure.theme ?? UNAPPLIED_THEME; // theme 欄が無いデッキは「（未適用）」を初期選択
   const prevId = currentId.value;
   deck.value = buildDeck(structure, manifest);
   const keep = opts?.preserve === true && deck.value.pages.some((page) => page.id === prevId);

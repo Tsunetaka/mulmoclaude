@@ -20,6 +20,9 @@
           :title="t('slides.theme')"
           @change="onThemeChange"
         >
+          <!-- 「（未適用）」— theme 欄の無いデッキの初期状態。テーマ適用済み
+               （theme が実 ID）のときは選べないよう disabled にする。 -->
+          <option :value="UNAPPLIED_THEME" :disabled="theme !== UNAPPLIED_THEME">{{ t("slides.themeUnapplied") }}</option>
           <option v-for="opt in themes" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
         </select>
       </template>
@@ -80,7 +83,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { PAGE_ROUTES, type PageRouteName } from "../router/pageRoutes";
-import { useSlideEditor } from "../composables/useSlideEditor";
+import { useSlideEditor, UNAPPLIED_THEME } from "../composables/useSlideEditor";
 import { NEW_DECK_THEMES } from "../utils/slides/newDeck";
 import iconSelectDoc from "../assets/icons/icon_overview_white.png";
 import iconDone from "../assets/icons/icon_check.png";
@@ -98,6 +101,7 @@ const themes = NEW_DECK_THEMES;
 
 function onThemeChange(event: Event): void {
   const next = (event.target as HTMLSelectElement).value;
+  if (next === UNAPPLIED_THEME) return; // 「（未適用）」は選択不可（適用済みは戻せない）
   slideEditor.triggerApplyTheme(next);
 }
 

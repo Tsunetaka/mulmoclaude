@@ -15,8 +15,15 @@ const active = ref(false);
 const dirtyCount = ref(0);
 /** チャットペインが開いているか（リボンのチャットトグル状態用）。 */
 const chatOpen = ref(false);
-/** 現在のテーマ ID（structure.theme 由来・リボンのテーマプルダウン初期選択用）。 */
-const theme = ref<string>("cool");
+/**
+ * 「テーマ未適用」を表すセンチネル値。
+ * structure.theme が無い（外部から ReleasedVersion にコピーされた pptx 等・
+ * どのテーマにも属さない）デッキは、プルダウンで「（未適用）」を選択状態にする。
+ * 実テーマ ID（cool/warm/…）とは決して衝突しない空文字を用いる。
+ */
+export const UNAPPLIED_THEME = "";
+/** 現在のテーマ ID（structure.theme 由来・リボンのテーマプルダウン初期選択用）。未適用は UNAPPLIED_THEME。 */
+const theme = ref<string>(UNAPPLIED_THEME);
 
 type Handler = () => void;
 type ThemeHandler = (themeId: string) => void;
@@ -44,7 +51,7 @@ export function useSlideEditor() {
       active.value = false;
       dirtyCount.value = 0;
       chatOpen.value = false;
-      theme.value = "cool";
+      theme.value = UNAPPLIED_THEME;
     },
     /** リボンからの canvas 更新トリガー。 */
     triggerRefresh(): void {

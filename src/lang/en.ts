@@ -1029,6 +1029,7 @@ const enMessages = {
     canvasRefresh: "Update Canvas",
     toggleChat: "Claude Chat",
     theme: "Theme",
+    themeUnapplied: "(Not applied)",
   },
   mulmoPoint: {
     title: "About MulmoPoint",

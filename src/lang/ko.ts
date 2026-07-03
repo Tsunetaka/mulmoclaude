@@ -1002,6 +1002,7 @@ const koMessages = {
     canvasRefresh: "캔버스 업데이트",
     toggleChat: "Claude 채팅",
     theme: "테마",
+    themeUnapplied: "(미적용)",
   },
   mulmoPoint: {
     title: "MulmoPoint 정보",

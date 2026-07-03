@@ -1005,6 +1005,7 @@ const frMessages = {
     canvasRefresh: "Actualiser le canevas",
     toggleChat: "Chat Claude",
     theme: "Thème",
+    themeUnapplied: "(Non appliqué)",
   },
   mulmoPoint: {
     title: "À propos de MulmoPoint",

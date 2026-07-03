@@ -1004,6 +1004,7 @@ const ptBRMessages = {
     canvasRefresh: "Atualizar canvas",
     toggleChat: "Chat do Claude",
     theme: "Tema",
+    themeUnapplied: "(Não aplicado)",
   },
   mulmoPoint: {
     title: "Sobre o MulmoPoint",

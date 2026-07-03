@@ -1017,6 +1017,7 @@ const deMessages = {
     canvasRefresh: "Canvas aktualisieren",
     toggleChat: "Claude-Chat",
     theme: "Thema",
+    themeUnapplied: "(Nicht angewendet)",
   },
   mulmoPoint: {
     title: "Über MulmoPoint",

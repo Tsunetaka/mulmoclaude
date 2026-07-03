@@ -1000,6 +1000,7 @@ const jaMessages = {
     canvasRefresh: "canvas 更新",
     toggleChat: "Claude チャット",
     theme: "テーマ",
+    themeUnapplied: "（未適用）",
   },
   mulmoPoint: {
     title: "MulmoPoint について",
