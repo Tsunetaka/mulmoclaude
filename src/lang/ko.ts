@@ -42,6 +42,8 @@ const koMessages = {
     placeholder: "Claude에게 메시지…",
     send: "전송",
     stop: "중지",
+    runningPlaceholder: "실행 중… Enter로 대기열에 추가",
+    removeBuffered: "대기열 메시지 제거",
     attachFile: "파일 첨부",
     fileTooLarge: "파일이 너무 큽니다 ({sizeMB} MB). 최대 30 MB 까지 가능합니다.",
     unsupportedFileType: "지원되지 않는 파일 형식입니다. 이미지, PDF, DOCX, XLSX, PPTX, 텍스트 파일만 지원됩니다.",
@@ -55,6 +57,10 @@ const koMessages = {
       start: "음성 입력 시작",
       stop: "음성 입력 중지",
     },
+  },
+  cspViolation: {
+    notice: "⚠ 뷰가 {host}를 불러오려 했지만 콘텐츠 보안 정책({directive})이 차단했습니다. 허용하려면 신뢰하는 경우에만 config/csp.json에 호스트를 추가하세요.",
+    dismiss: "닫기",
   },
   sessionHistoryPanel: {
     filters: {
@@ -141,6 +147,10 @@ const koMessages = {
     disconnectFailed: "연결 해제 실패",
     signInFailed: "Google 로그인 실패",
     statusFailed: "상태를 불러오지 못했습니다",
+    description: "원격 액세스를 사용하면 모바일 기기에서 이 MulmoClaude의 컬렉션과 피드에 연결할 수 있습니다.",
+    howTo: "휴대폰에서 {url} 을(를) 열고 같은 Google 계정으로 로그인하세요.",
+    customViewHint: "모바일에 최적화된 뷰가 필요하다면, 일반 custom view가 아닌 {keyword} 를(을) 만들어 달라고 Claude에게 요청하세요.",
+    qrHint: "휴대폰 카메라로 이 QR 코드를 스캔해도 열 수 있습니다.",
   },
   sidebarHeader: {
     home: "최신 채팅으로 이동",
@@ -184,6 +194,8 @@ const koMessages = {
     reference: "참조",
     // "RO" = Read-Only. 간결한 배지로 표시하기 위해 영문 약어 유지.
     readOnlyBadge: "RO",
+    showSystemFiles: "시스템 파일 표시",
+    showSystemFilesTitle: "사용자 콘텐츠(data/, artifacts/, config/)에 더해 에이전트 내부 최상위 디렉터리(conversations/, feeds/ 등)까지 표시합니다.",
   },
   fileTree: {
     workspace: "(워크스페이스)",
@@ -235,6 +247,9 @@ const koMessages = {
       photos: "사진",
       model: "모델",
       voice: "음성",
+      chatIndex: "채팅 인덱스",
+      journal: "저널",
+      notifications: "Web Push",
       skills: "스킬",
       roles: "역할",
     },
@@ -242,6 +257,7 @@ const koMessages = {
       llm: "LLM",
       servers: "서버",
       workspace: "워크스페이스",
+      notifications: "알림",
       plugins: "플러그인",
       management: "관리",
     },
@@ -268,6 +284,17 @@ const koMessages = {
       loadError: "설정을 불러오지 못했습니다",
       saveError: "저장에 실패했습니다",
     },
+    notificationsTab: {
+      description:
+        "여기서 시작한 작업이 완료되면 등록된 기기로 푸시 알림을 보냅니다. 질문을 남기고 자리를 비운 뒤 답변이 준비되는 순간을 알고 싶을 때 유용합니다.",
+      enableLabel: "작업 완료 시 Web Push 보내기",
+      enableHint: "여기서 시작한 채팅이 완료되면 실행됩니다. 예약 작업이나 백그라운드 작업에서는 실행되지 않습니다.",
+      remoteHostNote: "RemoteHost 연결(로그인 제공)과 등록된 기기가 하나 이상 필요합니다. 둘 중 하나라도 없으면 아무 동작도 하지 않습니다.",
+      statusOn: "Web Push 켜짐",
+      statusOff: "Web Push 꺼짐",
+      loadError: "설정을 불러오지 못했습니다",
+      saveError: "저장에 실패했습니다",
+    },
     modelTab: {
       description: "Claude Code가 각 턴에 사용하는 추론 effort를 제어합니다. 설정하지 않으면 Claude의 기본값이 사용됩니다.",
       effortLabel: "추론 effort",
@@ -289,6 +316,42 @@ const koMessages = {
       ready: "모델 준비 완료",
       downloadError: "모델 다운로드에 실패했습니다.",
       retry: "다시 시도",
+      loadError: "설정을 불러오지 못했습니다",
+      saveError: "저장에 실패했습니다",
+    },
+    chatIndexTab: {
+      description:
+        "채팅 기록의 AI 제목/요약 자동 생성을 설정합니다. 기본값은 off 이며, 자동화 계열 세션(scheduler / 시스템 워커)은 on 상태여도 항상 제외됩니다. 사람 세션만 턴 종료 시 요약이 한 번 실행됩니다.",
+      modeLabel: "채팅 인덱스 모델",
+      helperText: "Haiku 가 더 저렴하고, Sonnet 은 길고 주제가 바뀌는 세션에서 더 정확한 제목을 만듭니다.",
+      mode: {
+        off: "꺼짐",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "인덱싱: 꺼짐",
+        haiku: "Haiku 로 인덱싱 중",
+        sonnet: "Sonnet 으로 인덱싱 중",
+      },
+      loadError: "설정을 불러오지 못했습니다",
+      saveError: "저장에 실패했습니다",
+    },
+    journalTab: {
+      description:
+        "일일 저널 자동 생성 설정입니다. 최근 채팅 세션을 journal/*.md 로 요약하고 지속 메모(memory.md)를 추출합니다. 기본값은 off. 자동화 세션(scheduler / 시스템 워커)은 이 설정과 무관하게 항상 제외됩니다.",
+      modeLabel: "저널 모델",
+      helperText: "Haiku 가 더 저렴하고, Sonnet 은 일일/주제 요약 품질이 더 좋습니다. 매시 실행은 이 설정이 켜져 있을 때만 동작합니다.",
+      mode: {
+        off: "꺼짐",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "저널: 꺼짐",
+        haiku: "Haiku 로 저널 실행 중",
+        sonnet: "Sonnet 으로 저널 실행 중",
+      },
       loadError: "설정을 불러오지 못했습니다",
       saveError: "저장에 실패했습니다",
     },
@@ -385,6 +448,8 @@ const koMessages = {
     rendered: "렌더링",
     raw: "원본",
     closeFile: "파일 닫기",
+    revealInOs: "폴더에서 보기",
+    revealInOsFailed: "폴더를 열 수 없습니다",
   },
   fileContentRenderer: {
     download: "ZIP",
@@ -401,6 +466,9 @@ const koMessages = {
     redo: "다시 실행",
     editMarp: "슬라이드 소스 편집",
     marpEditorLabel: "Marp 슬라이드 소스",
+    openInOs: "OS에서 열기",
+    openingInOs: "여는 중…",
+    openInOsFailed: "OS에서 열 수 없습니다",
   },
   filesView: {
     chatPlaceholder: "이 파일에 대해 질문하세요…",
@@ -936,6 +1004,8 @@ const koMessages = {
     cancel: "취소",
     seededByPlugin: "{pkg}에서",
     seededByPluginTooltip: "이 메시지는 사용자가 보낸 것이 아니라 {pkg} 플러그인에서 작성한 것입니다.",
+    truncatedForRender:
+      "이 메시지는 매우 깁니다(총 {total}자). 탭이 멈추지 않도록 앞부분만 표시됩니다 — {omitted}자 숨김. 전체 원문은 복사 버튼으로 가져올 수 있습니다.",
   },
   pluginSkill: {
     noDescription: "(설명 없음)",

@@ -103,6 +103,8 @@ const zhMessages: CollectionMessages = {
     kanbanUncategorized: "未分类",
     kanbanOpenCard: "打开 {label}",
     addView: "添加视图",
+    addViewDesktop: "自定义视图",
+    addViewMobile: "手机视图",
     config: {
       open: "集合设置",
       title: "{title} · 设置",
@@ -115,6 +117,8 @@ const zhMessages: CollectionMessages = {
     customViewError: "无法加载此视图：{error}",
     addViewPrompt:
       '我想为“{title}”集合添加一个自定义视图。先问我想查看或编辑什么，然后在 {base}/views/your-view.html 创建 HTML 视图文件，并在 {base}/schema.json 的 `views[]` 中注册（只读视图用 capabilities ["read"]，需要编辑记录则用 ["read","write"]）。数据契约请遵循 custom-view 帮助文档。',
+    addMobileViewPrompt:
+      '我想为“{title}”集合添加一个手机（远程应用）自定义视图。先问我想查看或编辑什么，然后在 {base}/views/your-view.html 创建 HTML 视图文件，并在 {base}/schema.json 的 `views[]` 中以 `target: "mobile"` 注册（默认只读；仅在需要编辑记录时声明 `editableFields` / `allowDelete`）。数据契约请遵循 custom-view-remote 帮助文档 — 视图内禁止任何 fetch。',
     repair: "修复",
     dataIssuesDetected: "有 {count} 个记录文件存在数据问题，可能未显示在此视图中。",
     repairPrompt:

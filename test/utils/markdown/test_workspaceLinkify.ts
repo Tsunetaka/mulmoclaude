@@ -86,8 +86,16 @@ describe("marked codespan → workspace-link auto-linkify", () => {
     const html = (marked.parse("see `artifacts/documents/2026/05/summary.pdf` to review") as string).trim();
     assert.match(
       html,
-      /<a href="artifacts\/documents\/2026\/05\/summary\.pdf"[^>]*class="workspace-link"[^>]*data-workspace-path="artifacts\/documents\/2026\/05\/summary\.pdf"[^>]*><code>artifacts\/documents\/2026\/05\/summary\.pdf<\/code><\/a>/,
+      /<a href="\/artifacts\/documents\/2026\/05\/summary\.pdf"[^>]*class="workspace-link"[^>]*data-workspace-path="artifacts\/documents\/2026\/05\/summary\.pdf"[^>]*><code>artifacts\/documents\/2026\/05\/summary\.pdf<\/code><\/a>/,
     );
+  });
+
+  it("emits a workspace-absolute href (leading slash) so FilesView resolves from the workspace root, not the current dir (#1548)", () => {
+    const html = (marked.parse("`data/wiki/sources/foo/lecture.md`") as string).trim();
+    // href is workspace-absolute (leading slash); data-workspace-path stays root-relative.
+    assert.match(html, /href="\/data\/wiki\/sources\/foo\/lecture\.md"/);
+    assert.match(html, /data-workspace-path="data\/wiki\/sources\/foo\/lecture\.md"/);
+    assert.doesNotMatch(html, /href="data\//); // never a no-slash href for a linkified path
   });
 
   it("leaves non-workspace-path codespans untouched", () => {
@@ -113,7 +121,7 @@ describe("marked codespan → workspace-link auto-linkify", () => {
     //   - inline code with an artifacts/ path
     //   - followed by plain Japanese text "開いて内容を確認"
     const html = (marked.parse("`artifacts/documents/2026/05/example.pdf` 開いて内容を確認") as string).trim();
-    assert.match(html, /<a href="artifacts\/documents\/2026\/05\/example\.pdf"[^>]*class="workspace-link"/);
+    assert.match(html, /<a href="\/artifacts\/documents\/2026\/05\/example\.pdf"[^>]*class="workspace-link"/);
     assert.match(html, /開いて内容を確認/);
   });
 

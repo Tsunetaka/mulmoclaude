@@ -65,6 +65,20 @@ export interface ModelStatus {
   error?: string;
 }
 
+/** Report status precedence: an in-flight download wins, then an on-disk ready
+ *  file, then the last transient state (idle if none). Pure so the precedence
+ *  is unit-testable without touching the filesystem. */
+export function pickModelStatus(live: ModelStatus | undefined, isReady: boolean): ModelStatus {
+  if (live?.state === "downloading") return live;
+  if (isReady) return { state: "ready" };
+  return live ?? { state: "idle" };
+}
+
+/** Parse a `Content-Length` header to a byte count; unknown / malformed → 0. */
+export function parseContentLength(header: string | null): number {
+  return Number(header) || 0;
+}
+
 // Abort a download if no bytes arrive for this long (stalled connection).
 const DOWNLOAD_STALL_TIMEOUT_MS = ONE_MINUTE_MS;
 
@@ -73,72 +87,83 @@ export interface ModelDownloader {
   ensure: (name: WhisperModelName) => Promise<void>;
 }
 
+interface StreamToFileDeps {
+  downloadStatus: Map<WhisperModelName, ModelStatus>;
+  onProgress: () => void;
+}
+
+/** Drain the response stream into the `.partial` file, resetting the stall
+ *  timer on every chunk and publishing progress once the total size is known. */
+async function streamToFile(
+  body: ReadableStream<Uint8Array>,
+  partialPath: string,
+  total: number,
+  name: WhisperModelName,
+  deps: StreamToFileDeps,
+): Promise<void> {
+  const reader = body.getReader();
+  const fileStream = createWriteStream(partialPath);
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      deps.onProgress();
+      received += value.byteLength;
+      if (!fileStream.write(value)) await once(fileStream, "drain");
+      if (total > 0) deps.downloadStatus.set(name, { state: "downloading", progress: received / total });
+    }
+    fileStream.end();
+    await once(fileStream, "finish");
+  } catch (err) {
+    // `createWriteStream` opens lazily. Destroying it while that open is still
+    // in flight lets the open's own failure land later as an `error` event with
+    // no listener — an uncaughtException that kills the process. `err` already
+    // carries the real cause, so absorb the late one.
+    fileStream.on("error", () => {});
+    fileStream.destroy();
+    throw err;
+  }
+}
+
+/** Fetch a model into a `.partial` file, reject a truncated transfer via the
+ *  size floor, then atomically rename it into place. */
+async function downloadModel(name: WhisperModelName, modelsDir: string, downloadStatus: Map<WhisperModelName, ModelStatus>): Promise<void> {
+  const spec = WHISPER_MODELS[name];
+  mkdirSync(modelsDir, { recursive: true });
+  const dest = modelFilePath(modelsDir, name);
+  const partial = `${dest}.partial`;
+  const controller = new AbortController();
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
+  const resetStall = () => {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => controller.abort(), DOWNLOAD_STALL_TIMEOUT_MS);
+  };
+  try {
+    const response = await fetch(spec.url, { signal: controller.signal });
+    if (!response.ok || !response.body) {
+      throw new Error(`download failed: HTTP ${response.status}`);
+    }
+    const total = parseContentLength(response.headers.get("content-length"));
+    resetStall();
+    await streamToFile(response.body, partial, total, name, { downloadStatus, onProgress: resetStall });
+    if (statSync(partial).size < spec.minBytes) {
+      unlinkSync(partial);
+      throw new Error("downloaded file is smaller than expected — likely truncated");
+    }
+    renameSync(partial, dest);
+  } finally {
+    if (stallTimer) clearTimeout(stallTimer);
+  }
+}
+
 export function createModelDownloader(modelsDir: string, logger: WhisperLogger = NOOP_LOGGER): ModelDownloader {
   // A finished file on disk is the source of truth for "ready"; this map tracks
   // transient progress + the last error.
   const downloadStatus = new Map<WhisperModelName, ModelStatus>();
 
   function getStatus(name: WhisperModelName): ModelStatus {
-    const live = downloadStatus.get(name);
-    if (live?.state === "downloading") return live;
-    if (isModelReady(modelsDir, name)) return { state: "ready" };
-    return live ?? { state: "idle" };
-  }
-
-  async function streamToFile(
-    body: ReadableStream<Uint8Array>,
-    partialPath: string,
-    total: number,
-    name: WhisperModelName,
-    onProgress: () => void,
-  ): Promise<void> {
-    const reader = body.getReader();
-    const fileStream = createWriteStream(partialPath);
-    let received = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        onProgress();
-        received += value.byteLength;
-        if (!fileStream.write(value)) await once(fileStream, "drain");
-        if (total > 0) downloadStatus.set(name, { state: "downloading", progress: received / total });
-      }
-      fileStream.end();
-      await once(fileStream, "finish");
-    } catch (err) {
-      fileStream.destroy();
-      throw err;
-    }
-  }
-
-  async function download(name: WhisperModelName): Promise<void> {
-    const spec = WHISPER_MODELS[name];
-    mkdirSync(modelsDir, { recursive: true });
-    const dest = modelFilePath(modelsDir, name);
-    const partial = `${dest}.partial`;
-    const controller = new AbortController();
-    let stallTimer: ReturnType<typeof setTimeout> | null = null;
-    const resetStall = () => {
-      if (stallTimer) clearTimeout(stallTimer);
-      stallTimer = setTimeout(() => controller.abort(), DOWNLOAD_STALL_TIMEOUT_MS);
-    };
-    try {
-      const response = await fetch(spec.url, { signal: controller.signal });
-      if (!response.ok || !response.body) {
-        throw new Error(`download failed: HTTP ${response.status}`);
-      }
-      const total = Number(response.headers.get("content-length")) || 0;
-      resetStall();
-      await streamToFile(response.body, partial, total, name, resetStall);
-      if (statSync(partial).size < spec.minBytes) {
-        unlinkSync(partial);
-        throw new Error("downloaded file is smaller than expected — likely truncated");
-      }
-      renameSync(partial, dest);
-    } finally {
-      if (stallTimer) clearTimeout(stallTimer);
-    }
+    return pickModelStatus(downloadStatus.get(name), isModelReady(modelsDir, name));
   }
 
   // Fire-and-forget friendly: errors land in the status map, never thrown.
@@ -152,7 +177,7 @@ export function createModelDownloader(modelsDir: string, logger: WhisperLogger =
     downloadStatus.set(name, { state: "downloading", progress: 0 });
     logger.info("model download: start", { model: name });
     try {
-      await download(name);
+      await downloadModel(name, modelsDir, downloadStatus);
       downloadStatus.set(name, { state: "ready" });
       logger.info("model download: ok", { model: name });
     } catch (err) {

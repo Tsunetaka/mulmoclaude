@@ -40,6 +40,8 @@ const esMessages = {
     placeholder: "Mensaje para Claude…",
     send: "Enviar",
     stop: "Detener",
+    runningPlaceholder: "En ejecución… pulsa Enter para poner en cola",
+    removeBuffered: "Eliminar mensaje en cola",
     attachFile: "Adjuntar archivo",
     fileTooLarge: "El archivo es demasiado grande ({sizeMB} MB). El máximo es 30 MB.",
     unsupportedFileType: "Tipo de archivo no admitido. Se aceptan: imágenes, PDF, DOCX, XLSX, PPTX y archivos de texto.",
@@ -53,6 +55,11 @@ const esMessages = {
       start: "Iniciar entrada de voz",
       stop: "Detener entrada de voz",
     },
+  },
+  cspViolation: {
+    notice:
+      "⚠ Una vista intentó cargar {host}, pero la política de seguridad de contenido lo bloqueó ({directive}). Para permitirlo, añade el host a config/csp.json, solo si confías en él.",
+    dismiss: "Descartar",
   },
   sessionHistoryPanel: {
     filters: {
@@ -139,6 +146,10 @@ const esMessages = {
     disconnectFailed: "Error al desconectar",
     signInFailed: "Error al iniciar sesión con Google",
     statusFailed: "Error al cargar el estado",
+    description: "El acceso remoto permite que un dispositivo móvil se conecte a las colecciones y feeds de este MulmoClaude.",
+    howTo: "En tu teléfono, abre {url} e inicia sesión con la misma cuenta de Google.",
+    customViewHint: "Para una vista compatible con móviles, pide a Claude que cree una {keyword} (no una custom view normal).",
+    qrHint: "O escanea este código QR con la cámara de tu teléfono.",
   },
   sidebarHeader: {
     home: "Ir al chat más reciente",
@@ -183,6 +194,9 @@ const esMessages = {
     // "RO" = Read-Only. Se mantiene la abreviatura en inglés para
     // renderizarse como una insignia compacta junto al label Referencia.
     readOnlyBadge: "RO",
+    showSystemFiles: "Mostrar archivos del sistema",
+    showSystemFilesTitle:
+      "Muestra los directorios raíz internos del agente (conversations/, feeds/, etc.) además del contenido del usuario (data/, artifacts/, config/).",
   },
   fileTree: {
     workspace: "(área de trabajo)",
@@ -234,6 +248,9 @@ const esMessages = {
       photos: "Fotos",
       model: "Modelo",
       voice: "Voz",
+      chatIndex: "Índice de chat",
+      journal: "Diario",
+      notifications: "Web Push",
       skills: "Skills",
       roles: "Roles",
     },
@@ -241,6 +258,7 @@ const esMessages = {
       llm: "LLM",
       servers: "Servidores",
       workspace: "Espacio de trabajo",
+      notifications: "Notificaciones",
       plugins: "Plugins",
       management: "Gestión",
     },
@@ -268,6 +286,18 @@ const esMessages = {
       loadError: "Error al cargar los ajustes",
       saveError: "Error al guardar",
     },
+    notificationsTab: {
+      description:
+        "Recibe una notificación push en tus dispositivos registrados cuando termina una tarea que iniciaste aquí — útil cuando preguntas algo, te alejas y quieres saber en cuanto la respuesta esté lista.",
+      enableLabel: "Enviar una Web Push cuando termine una tarea",
+      enableHint: "Se activa cuando se completa un chat que iniciaste aquí. Las tareas programadas y en segundo plano no lo activan.",
+      remoteHostNote:
+        "Requiere la conexión RemoteHost (que proporciona el inicio de sesión) y al menos un dispositivo registrado. Si falta alguno, no hace nada.",
+      statusOn: "Web Push está ACTIVADO",
+      statusOff: "Web Push está DESACTIVADO",
+      loadError: "Error al cargar los ajustes",
+      saveError: "Error al guardar",
+    },
     modelTab: {
       description: "Controla el esfuerzo de razonamiento que Claude Code usa en cada turno. Déjalo sin configurar para usar el valor por defecto de Claude.",
       effortLabel: "Esfuerzo de razonamiento",
@@ -291,6 +321,42 @@ const esMessages = {
       ready: "Modelo listo",
       downloadError: "Error al descargar el modelo.",
       retry: "Reintentar",
+      loadError: "Error al cargar los ajustes",
+      saveError: "Error al guardar",
+    },
+    chatIndexTab: {
+      description:
+        "Títulos y resúmenes automáticos generados por IA para tu historial de chat. Sale desactivado por defecto — las sesiones de automatización (scheduler / trabajadores del sistema) siempre se omiten aunque esté activado; las sesiones humanas solo pagan una llamada al resumidor al terminar cada turno.",
+      modeLabel: "Modelo del índice de chat",
+      helperText: "Haiku es más económico; Sonnet ofrece títulos más precisos en sesiones largas con cambios de tema.",
+      mode: {
+        off: "Desactivado",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "La indexación está DESACTIVADA",
+        haiku: "Indexando con Haiku",
+        sonnet: "Indexando con Sonnet",
+      },
+      loadError: "Error al cargar los ajustes",
+      saveError: "Error al guardar",
+    },
+    journalTab: {
+      description:
+        "Diario automático — resume las sesiones de chat recientes en journal/*.md y extrae notas de memoria duradera. Sale desactivado. Las sesiones de automatización (scheduler / trabajadores del sistema) se excluyen siempre, independientemente de esta configuración.",
+      modeLabel: "Modelo del diario",
+      helperText: "Haiku es más económico; Sonnet produce resúmenes diarios y por tema más ricos. El pase horario solo se ejecuta cuando esto está activado.",
+      mode: {
+        off: "Desactivado",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "El diario está DESACTIVADO",
+        haiku: "Diario en ejecución con Haiku",
+        sonnet: "Diario en ejecución con Sonnet",
+      },
       loadError: "Error al cargar los ajustes",
       saveError: "Error al guardar",
     },
@@ -389,6 +455,8 @@ const esMessages = {
     rendered: "Renderizado",
     raw: "Fuente",
     closeFile: "Cerrar archivo",
+    revealInOs: "Mostrar en la carpeta",
+    revealInOsFailed: "No se pudo mostrar en la carpeta",
   },
   fileContentRenderer: {
     download: "ZIP",
@@ -405,6 +473,9 @@ const esMessages = {
     redo: "Rehacer",
     editMarp: "Editar fuente de la diapositiva",
     marpEditorLabel: "Fuente de diapositivas Marp",
+    openInOs: "Abrir en el SO",
+    openingInOs: "Abriendo…",
+    openInOsFailed: "No se pudo abrir en el SO",
   },
   filesView: {
     chatPlaceholder: "Pregunta sobre este archivo…",
@@ -948,6 +1019,8 @@ const esMessages = {
     cancel: "Cancelar",
     seededByPlugin: "desde {pkg}",
     seededByPluginTooltip: "Este mensaje fue generado por el plugin {pkg}, no enviado por ti.",
+    truncatedForRender:
+      "Este mensaje es inusualmente largo ({total} caracteres en total). Solo se muestra la primera parte — {omitted} caracteres ocultos para mantener la pestaña receptiva. Usa Copiar para obtener el texto completo.",
   },
   pluginSkill: {
     noDescription: "(sin descripción)",

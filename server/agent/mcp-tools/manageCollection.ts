@@ -53,6 +53,7 @@ import { dataSkillDir, mirrorSkillWrite } from "@mulmoclaude/core/skill-bridge";
 import { helpsAssetDir, isPresetSlug } from "@mulmoclaude/core/workspace-setup";
 import { writeFileAtomic } from "../../utils/files/atomic.js";
 import { WORKSPACE_DIRS, workspacePath } from "../../workspace/paths.js";
+import { isAblated } from "../../system/env.js";
 
 /** Refuse an unselective getItems beyond this many records — a silent
  *  truncation would read as "covered everything", and an unbounded dump
@@ -72,7 +73,14 @@ export const MAX_SCHEMA_ISSUES = 20;
  *  after a `putSchema` write (default: the same refreshers
  *  `/api/config/refresh` wraps); tests inject a no-op so they never
  *  touch the real workspace. */
-export type ManageCollectionDeps = DiscoveryOptions & { refreshAfterWrite?: () => Promise<void> };
+export type ManageCollectionDeps = DiscoveryOptions & {
+  refreshAfterWrite?: () => Promise<void>;
+  /** Evaluation-only (MULMOCLAUDE_ABLATION=validation): skip pre-write
+   *  record validation in putItems and the getItems record-issue scan.
+   *  The production singleton binds this from `env.ablation`; leave
+   *  unset everywhere else. */
+  ablateValidation?: boolean;
+};
 
 /** Resolve the workspace root the same way every collections call does:
  *  the injected override (tests) or the live workspace path (prod). */
@@ -123,6 +131,7 @@ function projectFields(record: CollectionItem, fields: string[], primaryKey: str
  *  dispatch. The record VALUES in `items` ride verbatim, like a raw
  *  file Read — only host-composed report strings are defanged. */
 async function recordIssuesWarning(collection: LoadedCollection, deps: ManageCollectionDeps): Promise<string | undefined> {
+  if (deps.ablateValidation) return undefined;
   const issues = await validateCollectionRecords(collection, { workspaceRoot: deps.workspaceRoot });
   if (issues.length === 0) return undefined;
   const lines = issues.map((issue) => `- ${defangForPrompt(issue.file)}: ${defangForPrompt(issue.problem)}`).join("\n");
@@ -233,8 +242,10 @@ async function putOneItem(
     if (typeof merged === "string") return reject(itemId, merged);
     toWrite = merged;
   }
-  const invalid = validateRecordObject(toWrite, itemId, schema);
-  if (invalid) return reject(itemId, invalid);
+  if (!deps.ablateValidation) {
+    const invalid = validateRecordObject(toWrite, itemId, schema);
+    if (invalid) return reject(itemId, invalid);
+  }
   const result = await writeItem(collection.dataDir, itemId, toWrite, {
     refuseOverwrite: mode === "create",
     workspaceRoot: deps.workspaceRoot,
@@ -393,6 +404,41 @@ async function handlePutSchema(slug: string, schemaArg: unknown, deps: ManageCol
   return JSON.stringify({ collection: collection.slug, written: true });
 }
 
+const MANAGE_COLLECTION_PROMPT =
+  "Use `manageCollection` instead of raw Read/Write/Edit when working with a collection's records OR its schema (raw file I/O stays available as the escape hatch). " +
+  "Before authoring or changing a collection's `schema.json`, call `schemaDocs` to load the field/DSL reference, then read with `getSchema` and write with `putSchema` — `putSchema` validates the whole schema before writing and returns actionable errors instead of silently failing discovery's validation. " +
+  "`getItems` is the only way to see computed values — `derived` fields (e.g. a portfolio's value), `toggle` projections, and `embed` records are host-computed and never present in the stored JSON files. On large collections pass `ids` and/or `fields` to keep the result small. " +
+  "`putItems` validates every row against the schema before writing (required fields, enum values, primaryKey = record id) and returns `{ written, rejected }`; fix each rejected row using its `problem` text and retry just those rows. Never include computed fields in a row you write. " +
+  'To update a few fields of an existing record, use `mode: "merge"` with a partial row ({ id, <changed fields> }) — the default upsert replaces the WHOLE record, so a partial upsert would silently erase every optional field it omits.';
+
+// The tool's action dispatch. Extracted from the factory's returned object so
+// `makeManageCollectionTool` stays under the max-lines threshold; each branch
+// already delegates to a handler. Behavior is unchanged — covered by
+// test/agent/test_manageCollection.ts.
+async function manageCollectionHandler(deps: ManageCollectionDeps, args: Record<string, unknown>): Promise<string> {
+  const action = typeof args.action === "string" ? args.action : "";
+  if (action === "schemaDocs") return handleSchemaDocs(deps);
+  const slug = typeof args.slug === "string" ? args.slug.trim() : "";
+  if (!slug) return "manageCollection: `slug` is required (the collection's slug).";
+  if (action === "getSchema") return handleGetSchema(slug, deps);
+  if (action === "putSchema") return handlePutSchema(slug, args.schema, deps);
+  if (action !== "getItems" && action !== "putItems") {
+    return 'manageCollection: `action` must be "getItems", "putItems", "schemaDocs", "getSchema", or "putSchema".';
+  }
+  const collection = await loadCollection(slug, deps);
+  if (!collection) return unknownCollection(slug);
+  if (action === "getItems") {
+    const ids = optionalStringArray(args.ids, "ids");
+    if (!ids.ok) return ids.error;
+    const fields = optionalStringArray(args.fields, "fields");
+    if (!fields.ok) return fields.error;
+    return handleGetItems(collection, { slug, ids: ids.value, fields: fields.value }, deps);
+  }
+  const parsed = parsePutItems(args, slug);
+  if (typeof parsed === "string") return parsed;
+  return handlePutItems(collection, parsed, deps);
+}
+
 export function makeManageCollectionTool(deps: ManageCollectionDeps = {}) {
   return {
     definition: {
@@ -440,37 +486,10 @@ export function makeManageCollectionTool(deps: ManageCollectionDeps = {}) {
     // push unlisted roles back onto unvalidated file I/O.
     alwaysActive: true,
 
-    prompt:
-      "Use `manageCollection` instead of raw Read/Write/Edit when working with a collection's records OR its schema (raw file I/O stays available as the escape hatch). " +
-      "Before authoring or changing a collection's `schema.json`, call `schemaDocs` to load the field/DSL reference, then read with `getSchema` and write with `putSchema` — `putSchema` validates the whole schema before writing and returns actionable errors instead of silently failing discovery's validation. " +
-      "`getItems` is the only way to see computed values — `derived` fields (e.g. a portfolio's value), `toggle` projections, and `embed` records are host-computed and never present in the stored JSON files. On large collections pass `ids` and/or `fields` to keep the result small. " +
-      "`putItems` validates every row against the schema before writing (required fields, enum values, primaryKey = record id) and returns `{ written, rejected }`; fix each rejected row using its `problem` text and retry just those rows. Never include computed fields in a row you write. " +
-      'To update a few fields of an existing record, use `mode: "merge"` with a partial row ({ id, <changed fields> }) — the default upsert replaces the WHOLE record, so a partial upsert would silently erase every optional field it omits.',
+    prompt: MANAGE_COLLECTION_PROMPT,
 
-    async handler(args: Record<string, unknown>): Promise<string> {
-      const action = typeof args.action === "string" ? args.action : "";
-      if (action === "schemaDocs") return handleSchemaDocs(deps);
-      const slug = typeof args.slug === "string" ? args.slug.trim() : "";
-      if (!slug) return "manageCollection: `slug` is required (the collection's slug).";
-      if (action === "getSchema") return handleGetSchema(slug, deps);
-      if (action === "putSchema") return handlePutSchema(slug, args.schema, deps);
-      if (action !== "getItems" && action !== "putItems") {
-        return 'manageCollection: `action` must be "getItems", "putItems", "schemaDocs", "getSchema", or "putSchema".';
-      }
-      const collection = await loadCollection(slug, deps);
-      if (!collection) return unknownCollection(slug);
-      if (action === "getItems") {
-        const ids = optionalStringArray(args.ids, "ids");
-        if (!ids.ok) return ids.error;
-        const fields = optionalStringArray(args.fields, "fields");
-        if (!fields.ok) return fields.error;
-        return handleGetItems(collection, { slug, ids: ids.value, fields: fields.value }, deps);
-      }
-      const parsed = parsePutItems(args, slug);
-      if (typeof parsed === "string") return parsed;
-      return handlePutItems(collection, parsed, deps);
-    },
+    handler: (args: Record<string, unknown>): Promise<string> => manageCollectionHandler(deps, args),
   };
 }
 
-export const manageCollection = makeManageCollectionTool();
+export const manageCollection = makeManageCollectionTool({ ablateValidation: isAblated("validation") || undefined });

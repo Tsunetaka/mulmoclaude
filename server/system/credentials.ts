@@ -17,6 +17,21 @@ const PTY_TIMEOUT_MS = 30 * ONE_SECOND_MS;
 /** Delay before sending input to the claude CLI. */
 const PTY_INPUT_DELAY_MS = 3 * ONE_SECOND_MS;
 
+// After the echo, only treat output as a successful renewal when it
+// looks like a real Claude response — a conversational opener
+// (Hello / Hi / I'm / …) AND a non-trivial amount of text. Error
+// chunks ("Please log in", "Invalid credentials", network blips)
+// don't match both conditions, so they fall through to the timeout and
+// we treat the renewal as failed. A final safety net: refreshCredentials()
+// re-reads the Keychain and calls isTokenExpired() before writing, so
+// even a false positive here can't persist a stale token.
+const RESPONSE_PATTERN_RE = /\b(Hello|Hi|I['’]m|I can|How can)\b/i;
+const MIN_RESPONSE_CHARS = 20;
+
+export function looksLikeClaudeResponse(text: string): boolean {
+  return RESPONSE_PATTERN_RE.test(text) && text.length >= MIN_RESPONSE_CHARS;
+}
+
 interface CredentialsJson {
   claudeAiOauth?: {
     accessToken?: string;
@@ -62,17 +77,7 @@ function isTokenExpired(raw: string): boolean {
  * OAuth token. The CLI handles the refresh internally and writes the new
  * token back to the macOS Keychain.
  */
-async function renewTokenViaPty(): Promise<boolean> {
-  // Dynamic import — node-pty is a native module that may not be present
-  // on all platforms. Guard with try/catch.
-  let pty: typeof import("node-pty");
-  try {
-    pty = await import("node-pty");
-  } catch {
-    log.error("credentials", "node-pty not available, cannot renew token");
-    return false;
-  }
-
+function awaitTokenRenewal(pty: typeof import("node-pty")): Promise<boolean> {
   return new Promise((resolve) => {
     const proc = pty.spawn("claude", [], {
       name: "xterm-color",
@@ -114,17 +119,6 @@ async function renewTokenViaPty(): Promise<boolean> {
     // false-positive the echo detection.
     const ECHO_RE = /\bhi\b/;
 
-    // After the echo, only treat output as a successful renewal when
-    // it looks like a real Claude response — a conversational opener
-    // (Hello / Hi / I'm / …) AND a non-trivial amount of text. Error
-    // chunks ("Please log in", "Invalid credentials", network blips)
-    // don't match both conditions, so they fall through to the
-    // 30-second timeout and we treat the renewal as failed. A final
-    // safety net: `refreshCredentials()` re-reads the Keychain and
-    // calls `isTokenExpired()` before writing, so even a false
-    // positive here can't persist a stale token.
-    const RESPONSE_PATTERN_RE = /\b(Hello|Hi|I['’]m|I can|How can)\b/i;
-    const MIN_RESPONSE_CHARS = 20;
     let echoEndIdx = -1;
 
     proc.onData((data: string) => {
@@ -143,7 +137,7 @@ async function renewTokenViaPty(): Promise<boolean> {
       }
 
       const response = buffer.slice(echoEndIdx);
-      if (response.length >= MIN_RESPONSE_CHARS && RESPONSE_PATTERN_RE.test(response)) {
+      if (looksLikeClaudeResponse(response)) {
         finish(true);
       }
     });
@@ -155,6 +149,20 @@ async function renewTokenViaPty(): Promise<boolean> {
       }
     }, PTY_INPUT_DELAY_MS);
   });
+}
+
+async function renewTokenViaPty(): Promise<boolean> {
+  // Dynamic import — node-pty is a native module that may not be present
+  // on all platforms. Guard with try/catch.
+  let pty: typeof import("node-pty");
+  try {
+    pty = await import("node-pty");
+  } catch {
+    log.error("credentials", "node-pty not available, cannot renew token");
+    return false;
+  }
+
+  return awaitTokenRenewal(pty);
 }
 
 /**

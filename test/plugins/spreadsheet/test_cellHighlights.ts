@@ -75,7 +75,7 @@ describe("highlightCell", () => {
   });
 
   it("is a no-op for a null table", () => {
-    highlightCell(null, { row: 0, col: 0 }, "x");
+    assert.doesNotThrow(() => highlightCell(null, { row: 0, col: 0 }, "x"));
   });
 
   it("is a no-op when row is out of range", () => {
@@ -111,12 +111,12 @@ describe("clearCellHighlights", () => {
   });
 
   it("is a no-op when container is null", () => {
-    clearCellHighlights(null);
+    assert.doesNotThrow(() => clearCellHighlights(null));
   });
 
   it("is a no-op when there are no previous highlights", () => {
     const container = makeContainer({});
-    clearCellHighlights(container);
+    assert.doesNotThrow(() => clearCellHighlights(container));
   });
 });
 
@@ -135,12 +135,12 @@ describe("applyCellHighlights", () => {
   });
 
   it("no-op when container is null", () => {
-    applyCellHighlights(null, { row: 0, col: 0 }, []);
+    assert.doesNotThrow(() => applyCellHighlights(null, { row: 0, col: 0 }, []));
   });
 
   it("no-op when #spreadsheet-table is missing", () => {
     const container = makeContainer({});
-    applyCellHighlights(container, { row: 0, col: 0 }, []);
+    assert.doesNotThrow(() => applyCellHighlights(container, { row: 0, col: 0 }, []));
   });
 
   it("skips editing cell when null, still applies references", () => {

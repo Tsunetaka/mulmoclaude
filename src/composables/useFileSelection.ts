@@ -1,29 +1,11 @@
-// Composable: file selection, content loading with abort, URL sync.
-// Extracted from FilesView.vue (#507 step 2).
+// Composable: file selection + URL sync. Content loading/abort is
+// owned by useFileContentLoader; this composes it and keeps the
+// route-sync concern. Extracted from FilesView.vue (#507 step 2).
 
 import { ref } from "vue";
 import { useRoute, useRouter, isNavigationFailure } from "vue-router";
-import { apiGet } from "../utils/api";
-import { API_ROUTES } from "../config/apiRoutes";
 import { isNonEmptyString } from "../utils/types";
-
-interface TextContent {
-  kind: "text";
-  path: string;
-  content: string;
-  size: number;
-  modifiedMs: number;
-}
-
-interface MetaContent {
-  kind: "image" | "pdf" | "audio" | "video" | "binary" | "too-large";
-  path: string;
-  size: number;
-  modifiedMs: number;
-  message?: string;
-}
-
-export type FileContent = TextContent | MetaContent;
+import { useFileContentLoader } from "./useFileContentLoader";
 
 /** Segment-wise traversal check: rejects `../` path components
  *  but allows legitimate filenames like `my..notes.txt`. */
@@ -52,37 +34,10 @@ export function useFileSelection() {
   const route = useRoute();
   const router = useRouter();
 
+  const { content, contentLoading, contentError, loadContent, abortContent } = useFileContentLoader();
+
   const pathFromRoute = readPathMatch(route.params.pathMatch);
   const selectedPath = ref<string | null>(isValidFilePath(pathFromRoute) ? pathFromRoute : null);
-  const content = ref<FileContent | null>(null);
-  const contentLoading = ref(false);
-  const contentError = ref<string | null>(null);
-
-  let contentAbort: AbortController | null = null;
-
-  async function loadContent(filePath: string): Promise<void> {
-    contentAbort?.abort();
-    const controller = new AbortController();
-    contentAbort = controller;
-
-    contentLoading.value = true;
-    contentError.value = null;
-    content.value = null;
-    try {
-      const result = await apiGet<FileContent>(API_ROUTES.files.content, { path: filePath }, { signal: controller.signal });
-      if (controller.signal.aborted) return;
-      if (!result.ok) {
-        contentError.value = result.error;
-      } else {
-        content.value = result.data;
-      }
-    } finally {
-      if (contentAbort === controller) {
-        contentLoading.value = false;
-        contentAbort = null;
-      }
-    }
-  }
 
   function selectFile(filePath: string): void {
     selectedPath.value = filePath;
@@ -102,23 +57,15 @@ export function useFileSelection() {
   }
 
   function deselectFile(): void {
-    contentAbort?.abort();
-    contentAbort = null;
+    abortContent();
     selectedPath.value = null;
     content.value = null;
-    contentLoading.value = false;
     contentError.value = null;
     router.replace({ name: "files", params: { pathMatch: [] }, query: route.query }).catch((err: unknown) => {
       if (!isNavigationFailure(err)) {
         console.error("[deselectFile] navigation failed:", err);
       }
     });
-  }
-
-  function abortContent(): void {
-    contentAbort?.abort();
-    contentAbort = null;
-    contentLoading.value = false;
   }
 
   return {

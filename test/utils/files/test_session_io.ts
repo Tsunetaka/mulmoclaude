@@ -75,8 +75,7 @@ describe("updateHasUnread", () => {
   });
 
   it("no-ops when session meta does not exist", async () => {
-    // Should not throw
-    await updateHasUnread("ghost", false, root);
+    await assert.doesNotReject(updateHasUnread("ghost", false, root));
   });
 });
 

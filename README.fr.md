@@ -8,11 +8,17 @@
 
 [English](README.md) · [日本語](README.ja.md) · [简体中文](README.zh.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Português (BR)](README.pt-BR.md) · **Français** · [Deutsch](README.de.md)
 
+**Un assistant IA qui sait tout de vous et vous accompagne 24 heures sur 24 ne se vend nulle part. Vous ne pouvez pas en acheter un — vous ne pouvez que le cultiver. MulmoClaude est un outil pour cultiver votre propre assistant IA, sur votre propre ordinateur.**
+
+La substance d'un assistant n'est pas le modèle d'IA — le modèle n'est que le moteur. Ce qui fait la valeur d'un assistant, c'est tout ce qu'il sait de vous : vos conversations, votre agenda, vos notes, vos données et les applications que vous utilisez. Une chose aussi importante ne devrait être confiée à aucun fournisseur de services — plus vous l'utilisez, plus il devient difficile de partir. MulmoClaude est open source et s'exécute localement : tout ce que votre assistant accumule — souvenirs, données, applications — reste entre vos mains, sous forme de simples fichiers dans votre workspace.
+
+Cultiver demande un environnement, et MulmoClaude en fournit un : un lieu pour accumuler des souvenirs (un wiki personnel que Claude construit et entretient lui-même), un lieu pour conserver vos données (collections pilotées par schéma, flux, fichiers simples) et un lieu pour créer des applications rien que pour vous — sans aucune connaissance en programmation. Vous dites « je voudrais quelque chose comme ça » avec des mots de tous les jours, et Claude construit la petite application dont vous avez besoin : une liste de restaurants, un suivi de factures, des exercices de vocabulaire — du logiciel pour un public d'une seule personne. Juste après l'installation, le jardin est encore vide ; vous semez des graines, vous soignez la terre, et vous cultivez un assistant qui n'appartient qu'à vous.
+
+Et l'assistant n'est pas attaché à votre bureau. Connectez-vous depuis votre téléphone — ou depuis une application de messagerie que vous utilisez déjà — et vous retrouvez le même assistant qui vit sur votre ordinateur. Le serveur relais ne fait que transporter des messages en transit — vos souvenirs, vos données et vos applications ne quittent jamais votre ordinateur.
+
+Sous le capot, MulmoClaude est une plateforme d'applications AI-natives : les capacités sont des plugins au sein d'un unique registre (aujourd'hui : un système comptable complet avec une véritable logique de tenue de livres côté serveur, un wiki personnel, un lecteur de documents SEC, et plus encore), Claude agit comme un contrôleur universel qui compose à travers eux, et le chat invoque la bonne GUI pour chaque tâche — markdown, graphiques, formulaires, wikis, feuilles de calcul ou scènes 3D.
+
 > **[How AI-Native Applications Should Be Built](MANIFEST.md)** — la thèse architecturale, UX et protocolaire derrière MulmoClaude.
-
-MulmoClaude est une plateforme d'applications AI-natives, open source, qui s'exécute localement sur votre machine. Au lieu d'applications cloisonnées, les capacités sont construites en tant que plugins au sein d'un unique registre. Les applications qui tournent dessus aujourd'hui incluent un système comptable complet (avec une véritable logique de tenue de livres côté serveur), un wiki personnel et un lecteur de documents SEC (Edgar). Claude agit comme un contrôleur universel qui compose à travers ces plugins.
-
-Vous interagissez en langage naturel, et Claude invoque la bonne GUI pour la tâche — en répondant en markdown, graphiques, formulaires, wikis, feuilles de calcul ou scènes 3D. Toutes les données vivent sous forme de fichiers simples dans votre workspace.
 
 ## Démarrage rapide
 
@@ -421,7 +427,9 @@ Exécutez d'abord `claude mcp` une fois dans un terminal et complétez le flux O
 Ajoutez des serveurs MCP externes sans éditer le JSON à la main. Deux types sont pris en charge :
 
 - **HTTP** — serveurs distants (par ex. `https://example.com/mcp`). Fonctionne dans tous les modes ; dans Docker, les URL `localhost` / `127.0.0.1` sont réécrites automatiquement en `host.docker.internal`.
-- **Stdio** — sous-processus local, limité à `npx` / `node` / `tsx` pour la sécurité. Lorsque l'isolation Docker est activée, les chemins de scripts doivent se trouver sous l'espace de travail pour être résolus à l'intérieur du conteneur.
+- **Stdio** — sous-processus local (p. ex. un MCP `npx`), limité à `npx` / `node` / `tsx` pour la sécurité. S'exécute sur l'hôte lorsque l'isolation Docker est **désactivée**. Lorsqu'elle est **activée**, les entrées stdio sont **ignorées par défaut** (l'image d'isolation minimale ne peut pas héberger des runtimes arbitraires) — utilisez `"hostExecInDocker": true` pour en exécuter un sur l'hôte derrière une passerelle `stdio ↔ HTTP`. Voir [docs/mcp-sandbox.md](docs/mcp-sandbox.md).
+
+Transmettez les identifiants à un serveur stdio via une table **`env`** (`"env": { "IMAP_PASS": "…" }`). Les valeurs sont littérales et stockées dans `mcp.json` (mode `0600`, mais **en clair** — protection par permissions de fichier, pas un coffre-fort). Tous les détails, y compris l'option `hostExecInDocker` et la façon dont `env` atteint le processus, sont dans [docs/mcp-sandbox.md](docs/mcp-sandbox.md).
 
 La configuration se trouve sous `<workspace>/config/` :
 
@@ -474,6 +482,25 @@ Contraintes appliquées par le serveur lors du chargement du fichier :
 - `command` stdio est limité à `npx`, `node` ou `tsx`.
 - Les entrées qui échouent à la validation sont silencieusement ignorées au chargement (un avertissement est consigné) ; le reste du fichier s'applique tout de même.
 
+**Exemple** — un serveur stdio avec identifiants qui fonctionne aussi sous l'isolation Docker (p. ex. un MCP IMAP) :
+
+```json
+{
+  "mcpServers": {
+    "imap": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "some-imap-mcp"],
+      "env": { "IMAP_HOST": "imap.example.com", "IMAP_USER": "me", "IMAP_PASS": "secret" },
+      "hostExecInDocker": true,
+      "enabled": true
+    }
+  }
+}
+```
+
+`hostExecInDocker` exécute ce serveur sur l'hôte, hors de l'isolation. C'est une option par serveur — activez-la pour autant de serveurs que nécessaire, mais uniquement ceux de confiance. Sans l'isolation, elle est ignorée (le serveur s'exécute déjà sur l'hôte).
+
 **Exemple `settings.json`** :
 
 ```json
@@ -514,6 +541,27 @@ Le canevas (panneau de droite) prend en charge 8 modes d'affichage, permutables 
 | `Cmd/Ctrl+8` | Roles     | `?view=roles`     | Gestion des rôles                              |
 
 Chaque mode d'affichage est piloté par l'URL : cliquer sur un bouton du lanceur met à jour `?view=`, et atterrir sur une URL avec `?view=wiki` (par exemple) restaure la vue correspondante. La liste des modes d'affichage est définie une seule fois dans `src/utils/canvas/viewMode.ts` — ajouter un nouveau mode est un simple ajout à un tableau.
+
+## Accès à distance
+
+Accédez à votre MulmoClaude en cours d'exécution depuis un téléphone (ou n'importe quel navigateur) : parcourez ses collections, ses feeds et ses vues personnalisées, et démarrez des chats, où que vous soyez. Aucun compte ni serveur distinct à configurer : l'accès est accordé simplement en vous connectant aux **deux** extrémités avec le **même compte Google**.
+
+**Comment se connecter**
+
+1. Sur le bureau, cliquez sur l'icône **phonelink** dans l'en-tête pour ouvrir le popover _Hôte distant_, puis choisissez **Se connecter avec Google**. MulmoClaude se connecte en tant que votre utilisateur Google et ouvre un canal de commandes via Firebase (le projet public partagé [`mulmoserver`](https://mulmoserver.web.app)). L'icône devient verte tant que l'hôte est en ligne.
+2. Sur votre téléphone, ouvrez **[https://mulmoserver.web.app](https://mulmoserver.web.app)** et connectez-vous avec le **même compte Google**. L'application web trouve votre hôte en ligne et s'y connecte.
+
+Comme les deux extrémités s'authentifient en tant que même utilisateur Firebase, le téléphone et le bureau ne se rencontrent qu'à l'intérieur de votre propre espace utilisateur — aucun tiers ne peut atteindre votre hôte.
+
+**Firebase et Firestore ne servent que de transport** — un relais pour transmettre les commandes et les réponses entre votre téléphone et votre bureau. Vos données ne sont **jamais stockées ni conservées** sur l'un ou l'autre. Sur l'hôte, seuls vos fichiers locaux de l'espace de travail existent ; tout ce qui doit traverser le canal (comme une pièce jointe transitant par Firebase Storage) est supprimé dès qu'il atteint sa destination.
+
+**Ce que vous pouvez faire depuis le téléphone**
+
+- Parcourir et feuilleter vos **collections** et vos **feeds**.
+- Ouvrir des **vues distantes personnalisées** (custom remote views) — des pages adaptées au mobile que Claude crée pour vous. Demandez à Claude de créer une _custom remote view_ (et non une vue personnalisée classique) ; elle peut être en lecture seule ou modifiable.
+- **Démarrer un chat** sur l'hôte et joindre des **photos, vidéos ou PDF** depuis le téléphone. Les octets des pièces jointes sont trop volumineux pour le canal de commandes ; ils transitent donc par Firebase Storage ; l'hôte télécharge chaque fichier dans son espace de travail (`data/attachments/`), supprime la copie en transit et transmet le fichier à Claude avec votre message.
+
+Le canal est basé sur des commandes et piloté par l'hôte : le téléphone envoie des requêtes et votre MulmoClaude de bureau y répond. Utilisez **Déconnecter** dans le popover (ou quittez MulmoClaude) pour mettre l'hôte hors ligne.
 
 ## Espace de travail
 

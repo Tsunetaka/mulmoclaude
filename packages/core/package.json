@@ -1,7 +1,7 @@
 {
   "name": "@mulmoclaude/core",
-  "version": "0.6.0",
-  "description": "Shared server-side core for MulmoClaude and MulmoTerminal — the always-shipped-together subsystems consolidated behind subpath exports so the two hosts can't drift. Server-only except the browser-safe ./whisper/client, ./workspace-setup/slug, ./translation/client and ./remote-view entries. All host specifics are injected.",
+  "version": "0.13.1",
+  "description": "Shared server-side core for MulmoClaude and MulmoTerminal — the always-shipped-together subsystems consolidated behind subpath exports so the two hosts can't drift. Server-only except the browser-safe ./whisper/client, ./workspace-setup/slug, ./translation/client, ./remote-view and ./remote-host entries. All host specifics are injected.",
   "type": "module",
   "exports": {
     "./collection": {
@@ -118,6 +118,18 @@
       "require": "./dist/remote-view/index.cjs",
       "default": "./dist/remote-view/index.js"
     },
+    "./remote-host": {
+      "types": "./dist/remote-host/index.d.ts",
+      "import": "./dist/remote-host/index.js",
+      "require": "./dist/remote-host/index.cjs",
+      "default": "./dist/remote-host/index.js"
+    },
+    "./remote-host/server": {
+      "types": "./dist/remote-host/server/index.d.ts",
+      "import": "./dist/remote-host/server/index.js",
+      "require": "./dist/remote-host/server/index.cjs",
+      "default": "./dist/remote-host/server/index.js"
+    },
     "./translation/client": {
       "types": "./dist/translation/client.d.ts",
       "import": "./dist/translation/client.js",
@@ -148,21 +160,27 @@
     "test": "tsx --test test/**/test_*.ts"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.9.3",
-    "js-yaml": "^5.2.0",
+    "fast-xml-parser": "^5.10.0",
+    "js-yaml": "^5.2.1",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
     "@receptron/task-scheduler": "*",
+    "firebase": "^12.0.0",
     "gui-chat-protocol": "^0.4.0"
+  },
+  "peerDependenciesMeta": {
+    "firebase": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@receptron/task-scheduler": "*",
-    "@types/node": "^26.1.0",
+    "@types/node": "^26.1.1",
     "gui-chat-protocol": "^0.4.0",
-    "tsx": "^4.22.4",
+    "tsx": "^4.23.1",
     "typescript": "^6.0.3",
-    "vite": "^8.1.2",
+    "vite": "^8.1.4",
     "vite-plugin-dts": "^5.0.3"
   },
   "license": "MIT"

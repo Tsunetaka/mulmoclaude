@@ -8,11 +8,17 @@
 
 **English** · [日本語](README.ja.md) · [简体中文](README.zh.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Português (BR)](README.pt-BR.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
+**An AI assistant that knows everything about you and supports you around the clock is not sold anywhere. You cannot buy one — you can only nurture one. MulmoClaude is a tool for nurturing your own AI assistant, on your own computer.**
+
+The substance of an assistant is not the AI model — the model is just the engine. What makes an assistant valuable is how much it knows about you: your conversations, your calendar, your notes, your data, and the apps you use. Something that important should not be entrusted to any single service provider — the longer you use it, the harder it becomes to leave. MulmoClaude is open source and runs locally, so everything your assistant accumulates — memories, data, apps — stays in your own hands, as plain files in your workspace.
+
+Nurturing takes an environment, and MulmoClaude provides one: a place to accumulate memories (a personal wiki that Claude builds and maintains itself), a place to keep your data (schema-driven collections, feeds, plain files), and a place to build apps just for you — no programming knowledge required. You say "I want something like this" in everyday words, and Claude builds the small app you need: a restaurant list, an invoice tracker, vocabulary practice — software for an audience of one. Right after install the garden is empty; you plant seeds and tend the soil, and grow an assistant that is yours alone.
+
+And the assistant is not tied to your desk. Log in from your phone — or a messaging app you already use — and you reach the same assistant living on your computer. The relay server only carries messages in transit — your memories, data, and apps never leave your computer.
+
+Under the hood, MulmoClaude is an AI-native application platform: capabilities are plugins in a single registry (today: a full accounting system with real server-side bookkeeping logic, a personal wiki, an SEC-filings reader, and more), Claude acts as a universal controller that composes across them, and chat summons the right GUI for each task — markdown, charts, forms, wikis, spreadsheets, or 3D scenes.
+
 > **[How AI-Native Applications Should Be Built](MANIFEST.md)** — the architecture, UX, and protocol thesis behind MulmoClaude.
-
-MulmoClaude is an open-source, AI-native application platform that runs locally on your machine. Instead of siloed apps, capabilities are built as plugins within a single registry. Applications running on it today include a full accounting system (real server-side bookkeeping logic), a personal wiki, and an SEC-filings reader (Edgar). Claude acts as a universal controller that composes across these plugins.
-
-You interact in natural language, and Claude summons the right GUI for the task — replying in markdown, charts, forms, wikis, spreadsheets, or 3D scenes. All data lives as plain files in your workspace.
 
 ## Quick Start
 
@@ -474,7 +480,9 @@ First, run `claude mcp` once in a terminal and complete the OAuth flow for each 
 Add external MCP servers without hand-editing JSON. Two types are supported:
 
 - **HTTP** — remote servers (e.g. `https://example.com/mcp`). Works in every mode; in Docker, `localhost` / `127.0.0.1` URLs are rewritten to `host.docker.internal` automatically.
-- **Stdio** — local subprocess, restricted to `npx` / `node` / `tsx` for safety. When Docker sandboxing is enabled, script paths must live under the workspace so they resolve inside the container.
+- **Stdio** — local subprocess (e.g. an `npx` MCP), restricted to `npx` / `node` / `tsx` for safety. Runs on the host when the Docker sandbox is **off**. When the sandbox is **on**, stdio entries are **dropped by default** (the minimal sandbox image can't host arbitrary runtimes) — set `"hostExecInDocker": true` to run one on the host behind a `stdio ↔ HTTP` gateway instead. See [docs/mcp-sandbox.md](docs/mcp-sandbox.md).
+
+Pass credentials to a stdio server with an **`env`** map (`"env": { "IMAP_PASS": "…" }`). Values are literal and stored in `mcp.json` (mode `0600`, but **plaintext** — file-permission protection, not a vault). Full details, including the `hostExecInDocker` opt-in and how `env` reaches the process, are in [docs/mcp-sandbox.md](docs/mcp-sandbox.md).
 
 Configuration lives under `<workspace>/config/`:
 
@@ -527,6 +535,25 @@ Constraints the server enforces when loading the file:
 - Stdio `command` is restricted to `npx`, `node`, or `tsx`.
 - Entries that fail validation are silently dropped on load (a warning is logged); the rest of the file still applies.
 
+**Example** — a credentialed stdio server that also runs under the Docker sandbox (e.g. an IMAP MCP):
+
+```json
+{
+  "mcpServers": {
+    "imap": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "some-imap-mcp"],
+      "env": { "IMAP_HOST": "imap.example.com", "IMAP_USER": "me", "IMAP_PASS": "secret" },
+      "hostExecInDocker": true,
+      "enabled": true
+    }
+  }
+}
+```
+
+`hostExecInDocker` runs that server on the host, outside the sandbox. It's a per-server flag — enable it on as many servers as you need, but only ones you trust. With the sandbox off it's ignored (the server already runs on the host).
+
 **Example `settings.json`**:
 
 ```json
@@ -567,6 +594,27 @@ The canvas (right panel) supports 8 view modes, switchable via the launcher tool
 | `Cmd/Ctrl+8` | Roles     | `?view=roles`     | Role management                  |
 
 Every view mode is URL-driven: clicking a launcher button updates `?view=`, and landing on a URL with `?view=wiki` (for example) restores the corresponding view. The view mode list is defined once in `src/utils/canvas/viewMode.ts` — adding a new mode is a single array append.
+
+## Remote Access
+
+Reach your running MulmoClaude from a phone (or any browser) — browse its collections, feeds, and custom views, and start chats, from anywhere. There is no separate account or server to set up: access is granted simply by signing in to **both** ends with the **same Google account**.
+
+**How to connect**
+
+1. On the desktop, click the **phonelink** icon in the header to open the _Remote host_ popover, then choose **Sign in with Google**. MulmoClaude signs in as your Google user and opens a command channel over Firebase (the shared public [`mulmoserver`](https://mulmoserver.web.app) project). The icon turns green while the host is online.
+2. On your phone, open **[https://mulmoserver.web.app](https://mulmoserver.web.app)** and sign in with the **same Google account**. The web app finds your online host and connects to it.
+
+Because both ends authenticate as the same Firebase user, the phone and the desktop only ever meet inside your own user space — no third party can reach your host.
+
+**Firebase and Firestore are used purely as a transport** — a relay to pass commands and responses between your phone and your desktop. Your data is **never stored or retained** on either. Nothing lives on the host except your local workspace files; anything that must cross the channel (such as an attachment staged through Firebase Storage) is deleted as soon as it reaches its destination.
+
+**What you can do from the phone**
+
+- Browse and page through your **collections** and **feeds**.
+- Open **custom remote views** — mobile-friendly pages Claude builds for you. Ask Claude to build a _custom remote view_ (not a regular custom view), which can be read-only or writable.
+- **Start a chat** on the host and attach **photos, videos, or PDFs** from the phone. Attachment bytes are too large for the command channel, so they stage through Firebase Storage; the host downloads each file into its workspace (`data/attachments/`), deletes the staged copy, and hands the file to Claude alongside your message.
+
+The channel is command-based and host-driven: the phone issues requests and your desktop MulmoClaude answers them. Use **Disconnect** in the popover (or quit MulmoClaude) to take the host offline.
 
 ## Workspace
 

@@ -5,16 +5,20 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  DEFAULT_IMAGE_MAX_EDGE,
   REMOTE_VIEW_MESSAGES,
   REMOTE_VIEW_PROTOCOL,
   buildRemoteViewCsp,
   buildRemoteViewSrcdoc,
+  clampImageMaxEdge,
   clampLimit,
   clampOffset,
   handleRemoteViewMessage,
   normalizeFields,
+  normalizeMutate,
   pageFromItems,
   projectItems,
+  type RemoteViewMutateRequest,
 } from "../../src/remote-view/index.js";
 
 describe("buildRemoteViewCsp", () => {
@@ -49,6 +53,21 @@ describe("buildRemoteViewSrcdoc", () => {
     assert.match(srcdoc, /<body><p>hi<\/p><\/body>/);
   });
 
+  it("carries protocol 2 and defaults writable:false; installs mutators only when writable", () => {
+    const readOnlyBoot = buildRemoteViewSrcdoc("<html><head></head></html>", { slug: "x" });
+    assert.match(readOnlyBoot, new RegExp(`"protocol":${REMOTE_VIEW_PROTOCOL}`));
+    assert.equal(REMOTE_VIEW_PROTOCOL, 2);
+    assert.match(readOnlyBoot, /"writable":false/);
+    // Read-only boot: the mutators reject rather than post.
+    assert.match(readOnlyBoot, /this view is read-only/);
+
+    const writableBoot = buildRemoteViewSrcdoc("<html><head></head></html>", { slug: "x", writable: true });
+    assert.match(writableBoot, /"writable":true/);
+    // Writable boot still ships the read-only fallback string in the (untaken)
+    // else branch — assert the mutate wiring is present instead.
+    assert.match(writableBoot, new RegExp(REMOTE_VIEW_MESSAGES.mutate));
+  });
+
   it("escapes `<` in the boot JSON so a hostile dict value can't break out", () => {
     const srcdoc = buildRemoteViewSrcdoc("<html><head></head></html>", {
       slug: "x",
@@ -74,6 +93,15 @@ describe("clamps + projection", () => {
     assert.deepEqual(normalizeFields(["title", " ", 3, "start"]), ["title", "start"]);
     assert.equal(normalizeFields([]), undefined);
     assert.equal(normalizeFields("title"), undefined);
+  });
+
+  it("clampImageMaxEdge defaults and bounds the thumbnail edge to [64, 1024]", () => {
+    assert.equal(clampImageMaxEdge(undefined), DEFAULT_IMAGE_MAX_EDGE);
+    assert.equal(clampImageMaxEdge(0), DEFAULT_IMAGE_MAX_EDGE);
+    assert.equal(clampImageMaxEdge(-10), DEFAULT_IMAGE_MAX_EDGE);
+    assert.equal(clampImageMaxEdge(16), 64);
+    assert.equal(clampImageMaxEdge(9999), 1024);
+    assert.equal(clampImageMaxEdge("384"), 384);
   });
 
   it("projectItems keeps the primary key and only the listed fields", () => {
@@ -158,5 +186,79 @@ describe("handleRemoteViewMessage", () => {
     assert.equal(await handleRemoteViewMessage({ type: REMOTE_VIEW_MESSAGES.startChat, slug: "plan", prompt: "  do it  ", role: 3 }, handlers, reply), true);
     assert.equal(await handleRemoteViewMessage({ type: REMOTE_VIEW_MESSAGES.startChat, slug: "plan", prompt: "   " }, handlers, reply), true);
     assert.deepEqual(chats, [{ prompt: "do it", role: undefined }]);
+  });
+});
+
+describe("normalizeMutate", () => {
+  it("accepts update (object patch) and delete, coercing id to string", () => {
+    assert.deepEqual(normalizeMutate({ op: "update", id: 7, patch: { done: true } }), { op: "update", id: "7", patch: { done: true } });
+    assert.deepEqual(normalizeMutate({ op: "delete", id: "a" }), { op: "delete", id: "a" });
+  });
+
+  it("rejects unknown op, missing id, and a non-object update patch", () => {
+    assert.equal(normalizeMutate({ op: "wipe", id: "a" }), null);
+    assert.equal(normalizeMutate({ op: "delete" }), null);
+    assert.equal(normalizeMutate({ op: "update", id: "a", patch: [1, 2] }), null);
+    assert.equal(normalizeMutate({ op: "update", id: "a", patch: "x" }), null);
+  });
+});
+
+describe("handleRemoteViewMessage — mutate", () => {
+  const mutateMsg = (extra: Record<string, unknown>): Record<string, unknown> => ({
+    type: REMOTE_VIEW_MESSAGES.mutate,
+    slug: "plan",
+    requestId: "m1",
+    ...extra,
+  });
+
+  it("applies an update/delete via onMutate and replies with the result", async () => {
+    const seen: RemoteViewMutateRequest[] = [];
+    const replies: Record<string, unknown>[] = [];
+    const handlers = {
+      slug: "plan",
+      getPage: () => pageFromItems([], { offset: 0, limit: 50 }, "id"),
+      onMutate: (request: RemoteViewMutateRequest) => {
+        seen.push(request);
+        return request.op === "delete" ? { id: request.id } : { item: { id: request.id, done: true } };
+      },
+    };
+    await handleRemoteViewMessage(mutateMsg({ op: "update", id: "a", patch: { done: true } }), handlers, (msg) => replies.push(msg));
+    await handleRemoteViewMessage(mutateMsg({ op: "delete", id: "a", requestId: "m2" }), handlers, (msg) => replies.push(msg));
+    assert.deepEqual(seen, [
+      { op: "update", id: "a", patch: { done: true } },
+      { op: "delete", id: "a" },
+    ]);
+    assert.deepEqual(replies, [
+      { type: REMOTE_VIEW_MESSAGES.mutateResult, requestId: "m1", ok: true, result: { item: { id: "a", done: true } } },
+      { type: REMOTE_VIEW_MESSAGES.mutateResult, requestId: "m2", ok: true, result: { id: "a" } },
+    ]);
+  });
+
+  it("replies read-only when the parent supplies no onMutate", async () => {
+    const replies: Record<string, unknown>[] = [];
+    const handled = await handleRemoteViewMessage(
+      mutateMsg({ op: "update", id: "a", patch: { done: true } }),
+      { slug: "plan", getPage: () => pageFromItems([], { offset: 0, limit: 50 }, "id") },
+      (msg) => replies.push(msg),
+    );
+    assert.equal(handled, true);
+    assert.deepEqual(replies, [{ type: REMOTE_VIEW_MESSAGES.mutateResult, requestId: "m1", ok: false, error: "this view is read-only" }]);
+  });
+
+  it("replies with the error message when onMutate throws, and rejects a malformed request", async () => {
+    const replies: Record<string, unknown>[] = [];
+    const handlers = {
+      slug: "plan",
+      getPage: () => pageFromItems([], { offset: 0, limit: 50 }, "id"),
+      onMutate: () => {
+        throw new Error("field 'x' is not editable");
+      },
+    };
+    await handleRemoteViewMessage(mutateMsg({ op: "update", id: "a", patch: { x: 1 } }), handlers, (msg) => replies.push(msg));
+    await handleRemoteViewMessage(mutateMsg({ op: "wipe", id: "a", requestId: "m3" }), handlers, (msg) => replies.push(msg));
+    assert.deepEqual(replies, [
+      { type: REMOTE_VIEW_MESSAGES.mutateResult, requestId: "m1", ok: false, error: "field 'x' is not editable" },
+      { type: REMOTE_VIEW_MESSAGES.mutateResult, requestId: "m3", ok: false, error: "invalid mutate request" },
+    ]);
   });
 });

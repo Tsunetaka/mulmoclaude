@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync
 import path from "node:path";
 import { tmpdir } from "node:os";
 
-import { writeImportedCollection, claudeSkillDir, dataSkillDir } from "../../src/collection/registry/server/importWriter.ts";
+import { writeImportedCollection, claudeSkillDir, dataSkillDir, hasNonDirAncestor } from "../../src/collection/registry/server/importWriter.ts";
 import type { RegistryEntry } from "../../src/collection/registry/registryIndex.ts";
 
 // `registryName` is the short label the multi-registry refactor passes through
@@ -320,5 +320,33 @@ describe("writeImportedCollection", () => {
     assert.ok(!existsSync(backup), "leftover backup dir removed");
     assert.ok(existsSync(path.join(sourceDir(wsRoot), "SKILL.md")));
     assert.ok(existsSync(path.join(mirrorDir(wsRoot), "SKILL.md")));
+  });
+});
+
+// The ENOENT branch of `statType` is invisible to the integration tests on
+// POSIX (there a file ancestor yields ENOTDIR, not ENOENT) — but it IS the path
+// Windows takes for the same layout. Test `hasNonDirAncestor` directly so every
+// runner covers the logic that turns a file-ancestor conflict into a 409.
+describe("hasNonDirAncestor", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "mc-ancestor-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("true when an ancestor of the target is a non-directory file", async () => {
+    writeFileSync(path.join(root, "a"), "i am a file");
+    assert.equal(await hasNonDirAncestor(path.join(root, "a", "b", "c")), true);
+  });
+
+  it("false when the whole existing ancestor chain is directories", async () => {
+    mkdirSync(path.join(root, "a", "b"), { recursive: true });
+    assert.equal(await hasNonDirAncestor(path.join(root, "a", "b", "c")), false);
+  });
+
+  it("false when the target is genuinely absent under an existing directory", async () => {
+    assert.equal(await hasNonDirAncestor(path.join(root, "missing", "deep", "leaf")), false);
   });
 });

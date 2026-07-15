@@ -10,6 +10,243 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ---
 
+## [1.0.0] - 2026-07-14
+
+MulmoClaude reaches **1.0** — the first stable release. Functionally it builds directly on 0.9.7, adding **Web Push on task finish** (get a push on your phone the moment the answer to a question you asked is ready) and a launcher fix that loads `.env` from the directory you launch from. 18 non-merge commits since 0.9.7.
+
+### Highlights
+
+#### Web Push on task finish (#2086)
+
+Enable **Settings → Notifications → Web Push** to get a push on your registered devices when a turn you started finishes — the "ask a question, step away, get pinged when the answer's ready" flow, working even with the browser tab closed as long as the host machine is up. Only **human-initiated** turns fire it (scheduler / skill / bridge / system turns are excluded), and only while the **RemoteHost** channel is connected (that's what supplies the Firebase sign-in) — otherwise it's a silent no-op. The send core is the new auth-agnostic **`@mulmobridge/web-push`** package, extracted so MulmoClaude and MulmoTerminal share one source of truth for the mulmoserver `sendPush` wire contract; device registration and delivery stay server-side (mulmoserver#46).
+
+### Fixed
+
+- **Launcher loads `<launch-dir>/.env`** (#2081) — `npx mulmoclaude` now reads a `.env` in the directory you launch from, so `GEMINI_API_KEY` (and other env vars) take effect without exporting them by hand. Previously only the isolated `~/mulmoclaude` workspace was consulted.
+
+### Changed
+
+- Dependency refresh (#2088).
+
+### `@mulmoclaude/core@0.13.1` - 2026-07-14
+
+- **Docs (#2081)**: the Gemini API-key help now tells users to put `GEMINI_API_KEY` in a `.env` file **in the directory they launch MulmoClaude from** (not the isolated `~/mulmoclaude` workspace), matching the launcher's new launch-dir `.env` loading. Ships via `assets/helps/gemini.md`.
+
+📦 npm: [`mulmoclaude@1.0.0`](https://www.npmjs.com/package/mulmoclaude/v/1.0.0)
+
+---
+
+## [0.9.7] - 2026-07-14
+
+Chat input no longer locks while the agent is running — messages you type are queued and flushed in order once the run finishes. RemoteHost (driving MulmoClaude from a phone) now persists its Firebase session in the browser and reconnects across server/browser restarts, without a re-login popup — bundled via `@mulmoclaude/core@0.13.0`. 25 non-merge commits since 0.9.6.
+
+### Highlights
+
+#### Chat input: queue sends while the agent runs (#2067)
+
+The composer no longer disables while a run is in progress — messages you type are buffered and sent in order once the agent is free, instead of the input locking. The buffer is scoped per session, and Ctrl/Cmd+Enter inserts a newline without triggering the slash menu.
+
+#### RemoteHost session persistence (#2073, #2075)
+
+A host's Firebase session is now parked in the browser and restored after a server or browser restart, so a phone paired to the host stays connected without a re-login popup. Reconnect is non-destructive: a transient network failure keeps the live session, while an expired or malformed session blob is dropped rather than retried forever. Shipped in `@mulmoclaude/core@0.13.0` (see the sub-note below for the API surface).
+
+### Fixed
+
+- e2e-live CI: pinned the auth token to stop an intermittent 401 flake caused by a token-regeneration race (#2069).
+
+### Documentation
+
+- Documented the MCP stdio-under-Docker opt-in (`hostExecInDocker`, a per-server toggle) and environment-variable passthrough, propagated across all README translations, with a plain-language "Short version" lead and a Japanese edition of the sandbox guide (#2071). The feature itself shipped earlier (#1421); this release documents it.
+
+### `@mulmoclaude/core@0.13.0` - 2026-07-13
+
+RemoteHost session persistence (receptron/mulmoserver#50, case A'): a host's Firebase session is parked in the browser and restored after a server restart, without a re-login popup. First core release carrying this API (#2074) and the mulmoclaude-wiring hardening (#2076).
+
+- **New API**: `createHostSessionPersistence()` (seed/export-able Firebase Auth persistence) and `createRemoteHostSession(config)` — `open(seedBlob?, validate?)` / `close()` / `exportSession()` / `onSessionChange()`. New exports: `isSeedableBlob`, `RemoteHostSessionValidate`, `HostAuthPersistenceClass`, `HostAuthPersistenceInstance`.
+- **Fix (#2076)**: persistence is now a class as `initializeAuth` requires — fixes `INTERNAL ASSERTION FAILED: Expected a class definition` that broke `createRemoteHostSession.open()`. Non-destructive `(re)connect` via a pre-teardown `validate` hook (a failed sign-in / expired blob keeps the live session). Reconnect classifies expired/malformed blobs (drop) vs transient failures (keep), so a network blip no longer forces a re-login and a corrupt blob is not retried forever.
+
+📦 npm: [`@mulmoclaude/core@0.13.0`](https://www.npmjs.com/package/@mulmoclaude/core/v/0.13.0)
+
+---
+
+## [0.9.6] - 2026-07-12
+
+Resolves the `handlePermission not found` MCP-broker failure family end-to-end — one error symptom with three distinct root causes (#2052 / #2056 / #2057) — so the Docker sandbox and scheduled runs stop losing all their tools at once. Adds a mobile-PWA QR code to the remote-host popover. 95 non-merge commits since 0.9.5.
+
+### Highlights
+
+#### MCP broker `handlePermission not found` — full family fix (#2058)
+
+The sandbox MCP broker could fail to come up, dropping every `mcp__mulmoclaude__*` tool at once — so the CLI reported the missing permission-prompt tool instead of the real cause. Fixed across two layers, each with regression tests (mapped in `plans/mcp-broker-availability-matrix.md`):
+
+- **Windows junction fallback now covers every workspace scope (#2052)** — the `/app/pkg_modules` fallback previously covered only `@mulmoclaude/*`, so `@mulmobridge/*` dangled inside the Linux container and the broker died at load. Verified on real Windows CI (WSL2 + native `dockerd`, real NTFS junctions).
+- **npx nested `node_modules` mounted (#2056)** — when npm nests deps in the launcher's own `node_modules` instead of hoisting them, they are now bind-mounted into the container.
+- **Scheduler startup race (#2057)** — a spawned chat's broker can lose the startup race to the CLI's first tool call. Now same-minute firings are staggered (capped to half a tick), a lost race is auto-recovered by replaying the turn once (guarded against double-execution and aborts), and a spawned-but-failed run records its real error instead of a false `"success"`.
+
+#### Remote host: mobile PWA QR code (#2054)
+
+The remote-host popover now shows a QR code for the mobile PWA, so pairing a phone no longer requires typing the URL by hand.
+
+### Fixed
+
+- `isTestEnv` no longer misdetects any path containing "test" (which caused `yarn dev` 401s) — it exact-matches argv now (#2064).
+- npm `file:` specifiers emit POSIX separators, fixing Windows CI installs (#2048).
+- Whisper absorbs a late partial-file open error during model download instead of crashing the stream (#2046, #2047).
+
+### Changed
+
+- Large internal refactors to clear the `max-lines-per-function` lint ratchet across whisper, relay, and several composables (#2049, #2050, #2051, #2053, #2060, #2045, #2044, #2042, #2041, #2040, #2039).
+- README / MANIFEST now lead with the product "nurture" vision (#2061, #2062).
+- Dependency refresh (#2065).
+
+---
+
+## [0.9.5] - 2026-07-08
+
+Windows Docker sandbox is now fully functional end-to-end (the ESM half of the resolver gap #1946 / #1982 landed alongside the CJS fix from 0.9.4), HEIC / HEIF attachments transparently convert to JPEG on upload with in-browser preview, and a **user-extensible sandbox CSP** lets the runtime whitelist third-party origins through `config/csp.json` instead of hard-coding them. Remote host gains offline queueing (mobile requests hold until the host comes back). The lint suite got a deep clean: `sonarjs/assertions-in-tests` is now `error`, so an assertion-less test can't slip in unnoticed. 23 non-merge commits since 0.9.4.
+
+### Highlights
+
+#### Windows Docker sandbox: end-to-end fix (#1982)
+- New `server/agent/mcp-esm-loader.mjs` + `mcp-esm-bootstrap.mjs` — an ESM resolver hook registered via `tsx --import` on the MCP child in Docker mode. NODE_PATH is CJS-only per Node's spec, so the previous 0.9.4 fix restored preset loading but left static ESM imports (`import { readXPost } from "@mulmoclaude/x-plugin"`) broken. Now every `@mulmoclaude/*` specifier resolves.
+- Windows CI probe (`test/sandbox-repro/probe.ts` + `.github/workflows/docker_sandbox_windows.yaml`) grew an ESM `import()` step, so this class of regression can't slip through again.
+- **No-op on Linux / macOS** — the hook's fallback only fires when primary resolution fails; the ESM loader is unchanged everywhere else.
+
+#### HEIC / HEIF / TIFF / BMP / AVIF attachments (#1996)
+- Uploader auto-converts these formats to JPEG server-side before the chat surface sees them (heic-convert on the launcher deps).
+- Pre-send preview chip decodes HEIC in the browser (#2000), so the confirmation thumbnail is legible instead of a broken image.
+
+#### User-extensible sandbox CSP (#1989)
+- Sandboxed collection views can now whitelist third-party origins via workspace `config/csp.json`.
+- A CSP-violation notice + boot-time warnings surface misconfigurations to the user instead of failing silently.
+
+#### Remote host offline queueing (step 1 of #1993)
+- Mobile companion's `startChat` requests queue while the host is offline; the host + `@mulmoclaude/core` layer replay them once the presence doc goes live.
+- `advertise host capabilities in the presence doc` (#1992) lands as the discovery half — mobile now knows what the host supports before submitting.
+
+#### Lint: assertions-in-tests as an error (batches #1999 / #2001 / #2005)
+- 26 flagged tests (server / utils / plugins node:test + e2e Playwright specs) rewritten to wrap the target call in `assert.doesNotThrow(...)` / `assert.doesNotReject(...)` — no semantic change, contracts made explicit.
+- Includes a new real boundary test for `deleteProjectSkill`'s user-scope refusal path (was an empty placeholder before), driven by a `userDir` seam so the guard is actually exercised.
+- Rule promoted to `error` in `eslint.config.mjs` — CI blocks a new assertion-less test.
+
+#### Files: "Open in OS" button (#1985)
+- Binary / unsupported previews get an OS-native open button so the file view isn't a dead end when MulmoClaude can't render inline.
+
+#### Sandbox: allow collection view downloads (#1997)
+- File downloads now work from sandboxed collection views (were being blocked by the iframe sandbox flags).
+
+### Added
+- ESM resolver hook + bootstrap for Windows Docker MCP child (#1982 / #1995).
+- HEIC / HEIF / TIFF / BMP / AVIF → JPEG on upload + browser-side HEIC preview (#1996 / #2000).
+- Sandbox CSP allowlist via `config/csp.json` + violation surface (#1989 / #1990).
+- Remote host offline queue for `startChat` + host-capability advertisement (#1992 / #1993).
+- Real unit coverage for `deleteProjectSkill` user-scope refusal via new `userDir` seam (#2001).
+- Files view: "Open in OS" button for binary previews (#1985 / #1988).
+- Smoke: resolve first-party deps from the workspace instead of public npm (#1994) — trims flakiness when a shared package is mid-publish.
+
+### Changed
+- `sonarjs/assertions-in-tests` promoted from `warn` to `error` (#2005). Every existing hit rewritten in advance across #1999 / #2001.
+- Windows Docker CI probe now runs an ESM step (`docker_sandbox_windows.yaml`).
+- `resolvePresetRoot` delegates to Node's resolver for NODE_PATH (#1984, tidies the fallback path #1974 introduced).
+- `@mulmoclaude/collection-plugin` bumped to 0.7.4 in the workspace + published (#1987 for 0.7.1 → 0.7.4 range).
+- Documentation: remote host guide (#1979) + launch plan re-centred on Collections (#1971).
+- `remote-host` transport extracted into `@mulmoclaude/core` (#1980) — reusable across host + mobile pairs.
+
+### Fixed
+- Sandboxed collection view file downloads blocked by iframe flags (#1997).
+- Ref-crossing derived fields in mobile `getItems` failing to resolve (#1978).
+- The `mulmoclaude@0.9.5` launcher publish itself required a cascade publish of `@mulmoclaude/collection-plugin@0.7.4` (skill §2 drift check covers only `@mulmobridge/*` scope). PR #2006 updates the skill so the manual `@mulmoclaude/*` check is now a documented step.
+
+### Security
+- User-extensible sandbox CSP (#1989) narrows what a sandboxed collection view can reach — the default remains locked down; only origins explicitly listed in `config/csp.json` are allowed through.
+
+---
+
+## [0.9.4] - 2026-07-05
+
+Retrospective release entry for the `mulmoclaude@0.9.4` npm publish that shipped without a matching GitHub release. Focused on **Windows Docker sandbox recovery** (root of #1946) and a batch of **remote host / mobile-companion** improvements (session-history summaries, listSkills, attachments over Storage, capability advertisement). 19 non-merge commits since 0.9.3.
+
+### Highlights
+
+#### Windows Docker sandbox: CJS-side fix (#1946)
+- `packages/mulmoclaude/package.json` gets a NODE_PATH fallback so `@mulmoclaude/*` workspace packages resolve inside the Linux container even when the yarn workspace symlinks (Windows junctions) dangle.
+- Follow-up ESM half landed in 0.9.5; the 0.9.4 fix restored the preset loader path only.
+
+#### Remote host / mobile companion polish
+- **Remote view attachments** (#1954): mobile can now share photos / videos / PDFs into a chat via Storage, without pulling them through localhost.
+- **listSkills + free-form `startChat`** (#1947): mobile can enumerate host skills and start chats without picking a role first.
+- **List accounting books + choose role on startChat** (#1962): mobile-side workflow selects a role at chat creation.
+- **Popover UI help** (#1955): explanations for the presence popover so users understand the same-Google-account contract.
+
+#### Collections + Files
+- **Dynamic collection icons** based on data state (#1900 / #1957).
+- **Hide agent-internal top-level dirs by default** (#1896 / #1963) — the file tree stops leaking `chat/` / `summaries/` unless the user opts in.
+
+#### Session history: summary-first
+- **Summary-first, hover for full** (#1958 / #1959) — the session list surfaces the LLM-generated summary; hovering reveals the full first message.
+- **Journal + chat-index: configurable mode + always-on origin filter** (#1944 follow-ups: #1949 / #1951).
+
+### Added
+- Remote-view attachments via Storage (#1954).
+- Mobile `listSkills` + free-form `startChat` (#1947); accounting book picker (#1962).
+- Popover UI help copy on the remote-host presence indicator (#1955).
+- Dynamic collection icons (#1957).
+- Session-history summary-first with hover-for-full (#1959).
+- Files: hide agent-internal top-level dirs by default (#1963).
+- Docs: consolidate what runs in Docker vs host (#1966); Remote Access README section (#1970); CLAUDE.md rule forbidding preemptive launcher version bumps in `chore(release)` (#1948).
+
+### Changed
+- Journal + chat-index: configurable mode + always-on origin filter (#1944 / #1949 / #1951).
+- `mulmocast` bumped to 2.7.0 (#1952).
+
+### Fixed
+- Collections: 409 on file-ancestor import path is Windows-safe (#1967).
+- Windows cross-platform path bugs failing lint_test_windows (#1965).
+- Address CodeRabbit review comments from #1951 (#1953).
+
+---
+
+## [0.9.3] - 2026-07-03
+
+Two threads dominate this release: **writable remote custom views for the mobile companion** (phase 3–5 of the remote-view work — mobile-optimised LLM-generated views, update/delete over the Firestore channel, and inlined workspace image thumbnails so the phone doesn't reach localhost) and a **batch of correctness fixes** across chat UI, long-message rendering, collection deep-links, notification icon clashes, and the billing recipe. Plus the new CI gate that enforces launcher ↔ shared-package sync (root cause of #1920). 38 non-merge commits since 0.9.2.
+
+### Added
+
+- **Remote custom views — phase 3** ([#1932](https://github.com/receptron/mulmoclaude/pull/1932)) — collection views can now specify `target: "mobile"`, and the desktop shows a phone-frame preview. `getRemoteView` handler lets the mobile companion (mulmoserver) fetch these views over the Firestore command channel.
+- **Remote custom views — phase 4** ([#1933](https://github.com/receptron/mulmoclaude/pull/1933)) — writable mobile views: `mutateRemoteView` handler supports update/delete of records from the phone, with derived-field resolution + clone-safe preview pages so edits round-trip cleanly.
+- **Remote custom views — phase 5** ([#1938](https://github.com/receptron/mulmoclaude/pull/1938)) — workspace image thumbnails inlined into the mobile response (via `sharp`), so the phone never has to reach localhost. Includes thumbnail budget mutation, invalid-id reporting on update, and log hygiene per review.
+
+### Changed
+
+- **launcher-sync CI gate — strict lockstep** ([#1927](https://github.com/receptron/mulmoclaude/pull/1927)) — added invariants 4 (launcher range lower bound == workspace source, strict) and 5 (`gui-chat-protocol` peer dep major.minor == launcher pin major.minor) to `scripts/mulmoclaude/launcherSync.mjs`. Enforces the class of drift that caused [#1920](https://github.com/receptron/mulmoclaude/issues/1920) at PR time.
+- **`bin/mulmoclaude.js` reads version from `package.json`** ([#1925](https://github.com/receptron/mulmoclaude/pull/1925)) — no more hardcoded string that silently drifts every publish. `--version` now always matches the shipped `package.json`.
+- **Chat-index scheduler skips unchanged sessions** ([#1930](https://github.com/receptron/mulmoclaude/pull/1930), tracking [#1929](https://github.com/receptron/mulmoclaude/issues/1929)) — before this fix, the hourly `system:chat-index` scheduler re-summarised every session every hour regardless of whether the jsonl had changed. Now only sessions whose jsonl mtime is newer than the last index get re-processed; the CLI call rate drops from `O(sessions × 24)` to `O(actually-touched sessions × 24)` per day on a busy workspace.
+- **billing-clients-worklog recipe reconciles pre-existing data** ([#1941](https://github.com/receptron/mulmoclaude/pull/1941), tracking [#1626](https://github.com/receptron/mulmoclaude/issues/1626)) — the recipe now includes a mandatory reconcile step that inventories existing worklog rows, slugifies non-slug `clientId` values (with slug-contract enforcement + empty/oversize fallbacks + collision detection), and rewrites worklog rows in lockstep. Prevents the "setup looks done but ref links break" trap when a user has legacy worklog data with display-name `clientId` values.
+- **Session role icons** ([#1942](https://github.com/receptron/mulmoclaude/pull/1942), tracking [#1684](https://github.com/receptron/mulmoclaude/issues/1684)) — General → `auto_awesome`, Debug → `bug_report`, unknown-role fallback → `smart_toy`. Was `star` on all three, colliding with the PinToggle's ★ (favourite) glyph for collection shortcuts.
+
+### Fixed
+
+- **Chat UI silently loses events mid-turn** ([#1934](https://github.com/receptron/mulmoclaude/pull/1934), tracking [#1915](https://github.com/receptron/mulmoclaude/issues/1915)) — three complementary fixes so the "考え中…" indicator can never stick when the server actually finished. Immediate `isRunning=false` on `session_finished`, new `usePubSub().onReconnect()` API for socket.io reconnect catch-up, and a `document.visibilitychange` handler that covers Safari's silent tab throttling (WS stays "connected" server-side while delivery stops client-side).
+- **Safari freezes on model degenerate-repetition output** ([#1936](https://github.com/receptron/mulmoclaude/pull/1936), tracking [#1863](https://github.com/receptron/mulmoclaude/issues/1863)) — cap the string fed into `marked()` at 100k chars in the text-response view. Opus 4.8's repeat-word bug could produce 30k `<p>` elements per message; Safari's layout/paint froze for minutes. Now shows a truncation banner + preview slice; the full raw text is still one click away via the Copy button. Localised across all 8 locales.
+- **`?selected=<id>` deep-link no longer forces calendar view** ([#1939](https://github.com/receptron/mulmoclaude/pull/1939), tracking [#1675](https://github.com/receptron/mulmoclaude/issues/1675)) — Bell-notification deep-links now open the record modal in the user's saved view mode (table / kanban / calendar) instead of always switching to calendar and writing "calendar" into localStorage. e2e tests updated to assert the new contract.
+- **`sharp` was missing from launcher `dependencies`** ([#1938](https://github.com/receptron/mulmoclaude/pull/1938)) — the remote-view thumbnail flow added a `sharp` import to `server/*` but the launcher `package.json` never declared it, so `npx mulmoclaude` would `ERR_MODULE_NOT_FOUND` on the first thumbnail request. `deps.mjs` gate would have caught it; adding the entry closes the gap.
+- **CodeQL false-positive in remote-view sessionId sanitisation** ([#1937](https://github.com/receptron/mulmoclaude/pull/1937)) — switched to `path.basename` as the CodeQL-recognised path sanitizer; sessionId is now sanitised at every entry point.
+- **`chat-index` scheduler interval relaxed to 6h** ([#1931](https://github.com/receptron/mulmoclaude/pull/1931)) — hourly was excessive given the skip-unchanged optimisation; 6h keeps the summary fresh enough for the picker without CLI cost.
+
+### Internal
+
+- **Root ↔ launcher ↔ plugin peer dep sync gate** ([#1923](https://github.com/receptron/mulmoclaude/pull/1923)) — new `scripts/mulmoclaude/launcherSync.mjs` audits every PR for three invariants (root ↔ launcher common dep range identical, workspace source satisfies launcher range, plugin `peerDependencies` satisfied by launcher pins). Catches the [#1920](https://github.com/receptron/mulmoclaude/issues/1920) class of bug at PR time.
+- **CHANGELOG.md for 0.9.2 with PR / issue links** ([#1926](https://github.com/receptron/mulmoclaude/pull/1926)) — retroactive entry documenting the 30 PRs shipped in 0.9.2.
+- **Fix plan archived** ([#1935](https://github.com/receptron/mulmoclaude/pull/1935)) — `plans/fix-1915-chat-ui-stuck-mid-turn.md` → `plans/done/` after merge.
+
+### Cascade publishes
+
+- `@mulmoclaude/core` 0.7.0 → 0.7.1 → 0.8.0 → 0.8.1
+- `@mulmoclaude/collection-plugin` 0.6.0 → 0.7.0
+- `@mulmobridge/client` 0.1.4 → 0.1.5
+
+---
+
 ## [0.9.2] - 2026-07-02
 
 Two threads dominate this release: a **critical fresh-install regression on npm** (#1920 — bundled plugins silently dropped by `ERESOLVE overriding peer dependency`), and the first two phases of a **mobile remote channel** so a companion app can browse a workspace over Firestore. Plus share-as-zip landing in three phases, mermaid diagrams inside markdown finally rendering as diagrams, session-role continuity across `/switch` and HTTP `/connect`, a wiki-engine extraction into `@mulmoclaude/core/wiki`, and a new CI gate that catches the class of drift that caused #1920 in the first place. 30 PRs merged since 0.9.1.

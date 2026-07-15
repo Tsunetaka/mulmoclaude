@@ -11,11 +11,12 @@
 
 import { spawn, type ChildProcessByStdio } from "child_process";
 import type { Readable, Writable } from "stream";
-import { buildCliArgs, buildDockerSpawnArgs, buildUserMessageLine } from "../config.js";
+import { buildCliArgs, buildDockerSpawnArgs, buildUserMessageLine, type CliArgsParams } from "../config.js";
 import { resolveSandboxAuth } from "../sandboxMounts.js";
 import { getCachedReferenceDirs, referenceDirMountArgs } from "../../workspace/reference-dirs.js";
 import { createStreamParser, type AgentEvent, type RawStreamEvent } from "../stream.js";
 import { createMcpFailureMonitor } from "../mcpFailureMonitor.js";
+import { isMcpBrokerNotReadyError } from "../mcpBrokerFailover.js";
 import { log } from "../../system/logger/index.js";
 import { errorMessage } from "../../utils/errors.js";
 import { EVENT_TYPES } from "../../../src/types/events.js";
@@ -116,6 +117,16 @@ export function buildExitErrorEvent(
   return { type: EVENT_TYPES.error, message: stderrOutput || exitSummary };
 }
 
+// The broker startup race (#2057) can leave the CLI exiting 0 — the model gives
+// up after the first tool call fails, so `buildExitErrorEvent` sees a clean exit
+// and returns null. Scan stderr for the permission-prompt-tool phrase and
+// surface it as an error the fail-over loop can retry on. A non-zero exit
+// carrying the same phrase already flows through `buildExitErrorEvent`, so this
+// only covers the clean-exit case.
+export function brokerNotReadyErrorEvent(stderrOutput: string): { type: typeof EVENT_TYPES.error; message: string } | null {
+  return isMcpBrokerNotReadyError(stderrOutput) ? { type: EVENT_TYPES.error, message: stderrOutput } : null;
+}
+
 async function* readAgentEvents(proc: ClaudeProc, abortSignal?: AbortSignal): AsyncGenerator<AgentEvent> {
   let stderrOutput = "";
   let stderrBuffer = "";
@@ -175,19 +186,25 @@ async function* readAgentEvents(proc: ClaudeProc, abortSignal?: AbortSignal): As
   log.info("agent", "claude exited", { exitCode, signal });
   mcpTracker.logIfSuspicious();
 
-  const errorEvent = buildExitErrorEvent(exitCode, signal, abortSignal, stderrOutput);
+  const errorEvent = buildExitErrorEvent(exitCode, signal, abortSignal, stderrOutput) ?? brokerNotReadyErrorEvent(stderrOutput);
   if (errorEvent) yield errorEvent;
 }
 
-async function* runClaudeAgent(input: AgentInput): AsyncGenerator<AgentEvent> {
-  const cliArgs = buildCliArgs({
+// The one non-pass-through mapping is `sessionToken` -> `claudeSessionId`
+// (the CLI's `--resume` id); the rest forward verbatim.
+export function cliArgsForInput(input: AgentInput): CliArgsParams {
+  return {
     systemPrompt: input.systemPrompt,
     activePlugins: input.activePlugins,
     claudeSessionId: input.sessionToken,
     mcpConfigPath: input.mcpConfigPath,
     extraAllowedTools: input.extraAllowedTools,
     effortLevel: input.effortLevel,
-  });
+  };
+}
+
+async function* runClaudeAgent(input: AgentInput): AsyncGenerator<AgentEvent> {
+  const cliArgs = buildCliArgs(cliArgsForInput(input));
 
   // spawnClaude can throw synchronously when `claudeBinPath()` fails
   // to locate `claude.exe` on Windows — surface that through the same

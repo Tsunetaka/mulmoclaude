@@ -12,7 +12,7 @@
 //   - deep-link `?path=a/b/c.md` auto-loads ancestor dirs
 
 import { test, expect, type Page, type Route } from "@playwright/test";
-import { mockAllApis } from "../fixtures/api";
+import { mockAllApis, enableFilesShowSystem } from "../fixtures/api";
 
 import { ONE_SECOND_MS } from "../../server/utils/time.ts";
 
@@ -106,6 +106,7 @@ async function mockLazyDirs(page: Page): Promise<CountingMock> {
 test.beforeEach(async ({ page }) => {
   await mockAllApis(page);
   await mockLazyDirs(page);
+  await enableFilesShowSystem(page);
 });
 
 test.describe("file explorer lazy expand (#200 phase 2)", () => {

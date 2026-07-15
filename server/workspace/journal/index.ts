@@ -11,13 +11,14 @@ import {
   listDailyFiles as listDailyFilesIO,
   countArchivedTopics as countArchivedIO,
 } from "../../utils/files/journal-io.js";
-import { readState, writeState, isDailyDue, isOptimizationDue } from "./state.js";
+import { readState, writeState, isDailyDue, isOptimizationDue, type JournalState } from "./state.js";
 import { runDailyPass } from "./dailyPass.js";
 import { runOptimizationPass } from "./optimizationPass.js";
 import { buildIndexMarkdown, type IndexTopicEntry, type IndexDailyEntry } from "./indexFile.js";
-import { runClaudeCli, ClaudeCliNotFoundError, type Summarize } from "./archivist-cli.js";
+import { runClaudeCli, ClaudeCliNotFoundError, type Summarize, type JournalSummaryModel } from "./archivist-cli.js";
 import { extractFirstH1 } from "../../../src/utils/markdown/extractFirstH1.js";
 import { log } from "../../system/logger/index.js";
+import { journalMode as resolveJournalMode, loadSettings, type JournalMode } from "../../system/config.js";
 
 export { extractFirstH1 };
 
@@ -39,14 +40,24 @@ export interface MaybeRunJournalOptions {
   activeSessionIds?: ReadonlySet<string>;
   // Bypass the interval gate; the disable flags (CLI missing, in-process lock) still apply.
   force?: boolean;
+  // Injectable journal mode — defaults to `journalMode(loadSettings())`
+  // when omitted. "off" short-circuits before any lock / state read;
+  // "haiku" / "sonnet" pick the model the archivist CLI spawns. Tests
+  // and the force-run switch inject this directly; production callers
+  // (turn-end hook, scheduled task) let the resolver pick it up.
+  mode?: JournalMode;
 }
 
 export async function maybeRunJournal(opts: MaybeRunJournalOptions = {}): Promise<void> {
   if (disabled) return;
   if (running) return;
+  // Config-driven kill switch. Resolve at entry time so a settings edit
+  // takes effect on the very next turn without a server restart.
+  const mode = opts.mode ?? resolveJournalMode(loadSettings());
+  if (mode === "off") return;
   running = true;
   try {
-    await runJournalPass(opts);
+    await runJournalPass(opts, mode);
   } catch (err) {
     if (err instanceof ClaudeCliNotFoundError) {
       disabled = true;
@@ -61,9 +72,14 @@ export async function maybeRunJournal(opts: MaybeRunJournalOptions = {}): Promis
   }
 }
 
-async function runJournalPass(opts: MaybeRunJournalOptions): Promise<void> {
+async function runJournalPass(opts: MaybeRunJournalOptions, model: JournalSummaryModel): Promise<void> {
   const workspaceRoot = opts.workspaceRoot ?? defaultWorkspacePath;
-  const summarize = opts.summarize ?? runClaudeCli;
+  // Pre-bind the model into the summarize callable so every layer
+  // downstream (dailyPass / optimizationPass / memoryExtractor) picks
+  // the user-selected model without threading the parameter through
+  // half a dozen call sites.
+  const rawSummarize = opts.summarize ?? runClaudeCli;
+  const summarize: Summarize = (sys, user) => rawSummarize(sys, user, { model });
   const activeSessionIds = opts.activeSessionIds ?? new Set<string>();
 
   const state = await readState(workspaceRoot);
@@ -79,53 +95,70 @@ async function runJournalPass(opts: MaybeRunJournalOptions): Promise<void> {
   let nextState = state;
 
   if (daily) {
-    log.info("journal", "running daily pass");
-    const { nextState: afterDaily, result } = await runDailyPass(nextState, {
-      workspaceRoot,
-      summarize,
-      activeSessionIds,
-    });
-    // Only bump lastDailyRunAt when no days were skipped — otherwise transient archivist failures silently lose events.
-    nextState = {
-      ...afterDaily,
-      ...(result.skipped.length === 0 && {
-        lastDailyRunAt: new Date(now).toISOString(),
-      }),
-    };
-    log.info("journal", "daily pass done", {
-      sessions: result.sessionsIngested.length,
-      days: result.daysTouched.length,
-      topicsCreated: result.topicsCreated.length,
-      topicsUpdated: result.topicsUpdated.length,
-      daysSkipped: result.skipped.length,
-    });
+    nextState = await runDailyPhase(nextState, now, { workspaceRoot, summarize, activeSessionIds });
   }
 
   if (optimize) {
-    log.info("journal", "running optimization pass");
-    const { nextState: afterOpt, result } = await runOptimizationPass(nextState, { workspaceRoot, summarize });
-    // Same rule as daily, except "fewer than 2 topics" is still success — bump so we don't re-check every session-end.
-    const optimizationSucceeded = !result.skipped || result.skippedReason === "fewer than 2 topics";
-    nextState = {
-      ...afterOpt,
-      ...(optimizationSucceeded && {
-        lastOptimizationRunAt: new Date(now).toISOString(),
-      }),
-    };
-    if (result.skipped) {
-      log.info("journal", "optimization pass skipped", {
-        reason: result.skippedReason,
-      });
-    } else {
-      log.info("journal", "optimization pass done", {
-        merged: result.mergedSlugs.length,
-        archived: result.archivedSlugs.length,
-      });
-    }
+    nextState = await runOptimizationPhase(nextState, now, { workspaceRoot, summarize });
   }
 
   await rebuildIndex(workspaceRoot);
   await writeState(workspaceRoot, nextState);
+}
+
+interface DailyPhaseDeps {
+  workspaceRoot: string;
+  summarize: Summarize;
+  activeSessionIds: ReadonlySet<string>;
+}
+
+async function runDailyPhase(state: JournalState, now: number, deps: DailyPhaseDeps): Promise<JournalState> {
+  log.info("journal", "running daily pass");
+  const { nextState: afterDaily, result } = await runDailyPass(state, deps);
+  // Only bump lastDailyRunAt when no days were skipped — otherwise transient archivist failures silently lose events.
+  const nextState = {
+    ...afterDaily,
+    ...(result.skipped.length === 0 && {
+      lastDailyRunAt: new Date(now).toISOString(),
+    }),
+  };
+  log.info("journal", "daily pass done", {
+    sessions: result.sessionsIngested.length,
+    days: result.daysTouched.length,
+    topicsCreated: result.topicsCreated.length,
+    topicsUpdated: result.topicsUpdated.length,
+    daysSkipped: result.skipped.length,
+  });
+  return nextState;
+}
+
+interface OptimizationPhaseDeps {
+  workspaceRoot: string;
+  summarize: Summarize;
+}
+
+async function runOptimizationPhase(state: JournalState, now: number, deps: OptimizationPhaseDeps): Promise<JournalState> {
+  log.info("journal", "running optimization pass");
+  const { nextState: afterOpt, result } = await runOptimizationPass(state, deps);
+  // Same rule as daily, except "fewer than 2 topics" is still success — bump so we don't re-check every session-end.
+  const optimizationSucceeded = !result.skipped || result.skippedReason === "fewer than 2 topics";
+  const nextState = {
+    ...afterOpt,
+    ...(optimizationSucceeded && {
+      lastOptimizationRunAt: new Date(now).toISOString(),
+    }),
+  };
+  if (result.skipped) {
+    log.info("journal", "optimization pass skipped", {
+      reason: result.skippedReason,
+    });
+  } else {
+    log.info("journal", "optimization pass done", {
+      merged: result.mergedSlugs.length,
+      archived: result.archivedSlugs.length,
+    });
+  }
+  return nextState;
 }
 
 async function rebuildIndex(workspaceRoot: string): Promise<void> {

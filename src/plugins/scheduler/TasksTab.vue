@@ -52,7 +52,7 @@
             </div>
             <div class="flex items-center gap-1 shrink-0">
               <button
-                v-if="task.origin === 'user'"
+                v-if="task.origin !== 'system'"
                 class="px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded"
                 :title="t('pluginSchedulerTasks.runNow')"
                 :aria-label="t('pluginSchedulerTasks.runNow')"

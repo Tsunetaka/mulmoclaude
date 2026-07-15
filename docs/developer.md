@@ -208,6 +208,7 @@ Three independent Node processes cooperate at runtime:
   config/             # app configuration
     settings.json     (web Settings UI — extraAllowedTools)
     mcp.json          (Claude CLI --mcp-config compatible)
+    csp.json          (optional — extend the sandbox-view CSP; see csp-config.md)
     roles/            user-defined role overrides
     helps/            synced from server/workspace/helps/ at every boot
   conversations/      # chat + distilled context
@@ -236,7 +237,7 @@ Three independent Node processes cooperate at runtime:
   .mulmoclaude/       internal: per-session MCP config files
 ```
 
-The `config/` dir is the home for the [web Settings UI](../README.md#configuring-additional-tools-web-settings) — `settings.json` carries `extraAllowedTools`, `mcp.json` follows Claude CLI's `--mcp-config` format so you can copy it between machines.
+The `config/` dir is the home for the [web Settings UI](../README.md#configuring-additional-tools-web-settings) — `settings.json` carries `extraAllowedTools`, `mcp.json` follows Claude CLI's `--mcp-config` format so you can copy it between machines. The optional `csp.json` extends the sandbox-view Content Security Policy (e.g. to allow a Google Maps embed) — see [csp-config.md](csp-config.md) for the schema and the security tradeoffs.
 
 Pre-#284 workspaces (with `chat/`, `summaries/`, `memory.md` at the workspace root) are still accepted by the server — old directory names continue to work alongside the modern layout. If you want to clean them up by hand, move them under `conversations/` and `data/` per the tree above.
 

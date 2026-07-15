@@ -29,6 +29,18 @@ function parseDispatchAction(body: string | null): string | undefined {
   }
 }
 
+/** Flip the Files Explorer "show system files" toggle on before the
+ *  page mounts. Most e2e file-tree fixtures use ad-hoc top-level dir
+ *  names (`wiki`, `notes`, `dir-a`) that aren't in the whitelisted set
+ *  (`data` / `artifacts` / `config`), so the default filter would hide
+ *  them and blow up locators like `file-tree-dir-wiki`. See #1896.
+ *  Call BEFORE `page.goto(...)` in tests that render the file tree. */
+export async function enableFilesShowSystem(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    localStorage.setItem("filesView.showHiddenSystem", "true");
+  });
+}
+
 const DEFAULT_ROLES: unknown[] = [];
 
 const DEFAULT_HEALTH = {

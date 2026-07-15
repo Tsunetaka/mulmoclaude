@@ -37,68 +37,81 @@ export interface SwapResult {
 export async function swapStagingIntoMemory(workspaceRoot: string): Promise<SwapResult> {
   const stagingPath = topicStagingPath(workspaceRoot);
   const memoryPath = path.join(workspaceRoot, WORKSPACE_DIRS.memoryDir);
-  const stagingExists = await pathExists(stagingPath);
-  if (!stagingExists) {
+  if (!(await pathExists(stagingPath))) {
     return { swapped: false, backupPath: null, reason: "staging dir not found" };
   }
 
-  let backupPath: string | null = null;
-  if (await pathExists(memoryPath)) {
-    backupPath = await pickBackupPath(memoryPath);
-    try {
-      await rename(memoryPath, backupPath);
-    } catch (err) {
-      log.error("memory", "topic-swap: backup rename failed", { from: memoryPath, to: backupPath, error: errorMessage(err) });
-      return { swapped: false, backupPath: null, reason: "backup rename failed" };
-    }
-  }
+  const backup = await backupExistingMemory(memoryPath);
+  if (backup.error) return { swapped: false, backupPath: null, reason: backup.error };
 
+  const promoted = await promoteStagingWithRollback(stagingPath, memoryPath, backup.path);
+  if (!promoted.ok) return { swapped: false, backupPath: promoted.backupPath, reason: promoted.reason };
+
+  const finalBackup = backup.path ? await parkBackupInsideMemory(backup.path, memoryPath) : null;
+  log.info("memory", "topic-swap: done", { backupPath: finalBackup, memoryPath });
+  return { swapped: true, backupPath: finalBackup };
+}
+
+// Rename an existing memory/ out of the way so staging can take over.
+// Returns the parked path (null when there was nothing to back up), or
+// an error string when the rename itself failed.
+async function backupExistingMemory(memoryPath: string): Promise<{ path: string | null; error?: string }> {
+  if (!(await pathExists(memoryPath))) return { path: null };
+  const backupPath = await pickBackupPath(memoryPath);
+  try {
+    await rename(memoryPath, backupPath);
+    return { path: backupPath };
+  } catch (err) {
+    log.error("memory", "topic-swap: backup rename failed", { from: memoryPath, to: backupPath, error: errorMessage(err) });
+    return { path: null, error: "backup rename failed" };
+  }
+}
+
+// Rename staging → memory and roll the backup back on failure. When
+// rollback ALSO fails the prior data still lives at `backupPath`;
+// return it so a human (or retry loop) can move it back manually —
+// telling callers `null` would signal "no recovery point exists"
+// (#1072 review).
+async function promoteStagingWithRollback(
+  stagingPath: string,
+  memoryPath: string,
+  backupPath: string | null,
+): Promise<{ ok: true } | { ok: false; backupPath: string | null; reason: string }> {
   try {
     await rename(stagingPath, memoryPath);
+    return { ok: true };
   } catch (err) {
     log.error("memory", "topic-swap: staging rename failed", { from: stagingPath, to: memoryPath, error: errorMessage(err) });
-    // Try to put the backup back so the workspace isn't left empty.
-    let rollbackFailed = false;
-    if (backupPath) {
-      try {
-        await rename(backupPath, memoryPath);
-      } catch (rollbackErr) {
-        rollbackFailed = true;
-        log.error("memory", "topic-swap: rollback failed; manual intervention needed", {
-          backupPath,
-          memoryPath,
-          error: errorMessage(rollbackErr),
-        });
-      }
-    }
-    // When rollback ALSO fails, the prior data still lives at
-    // `backupPath`. Returning `backupPath: null` would tell callers
-    // "no recovery point exists" and they'd give up — surface the
-    // path so a human (or a retry loop) can move it back manually
-    // (#1072 review).
-    return { swapped: false, backupPath: rollbackFailed ? backupPath : null, reason: "staging rename failed" };
+    const rollbackFailed = backupPath ? !(await tryRollback(backupPath, memoryPath)) : false;
+    return { ok: false, backupPath: rollbackFailed ? backupPath : null, reason: "staging rename failed" };
   }
+}
 
-  // Park the backup INSIDE the new memory dir so it travels with
-  // the workspace. A flat sibling backup (`memory.atomic-backup`)
-  // is also fine but clutters `conversations/`.
-  if (backupPath) {
-    const inside = path.join(memoryPath, ".atomic-backup");
-    await mkdir(inside, { recursive: true });
-    const finalLocation = path.join(inside, path.basename(backupPath));
-    try {
-      await rename(backupPath, finalLocation);
-      backupPath = finalLocation;
-    } catch (err) {
-      log.warn("memory", "topic-swap: failed to park backup inside memory/, leaving at sibling location", {
-        backupPath,
-        error: errorMessage(err),
-      });
-    }
+async function tryRollback(backupPath: string, memoryPath: string): Promise<boolean> {
+  try {
+    await rename(backupPath, memoryPath);
+    return true;
+  } catch (err) {
+    log.error("memory", "topic-swap: rollback failed; manual intervention needed", { backupPath, memoryPath, error: errorMessage(err) });
+    return false;
   }
+}
 
-  log.info("memory", "topic-swap: done", { backupPath, memoryPath });
-  return { swapped: true, backupPath };
+// Move the backup INSIDE the new memory dir so it travels with the
+// workspace. A flat sibling backup (`memory.atomic-backup`) is also
+// fine but clutters `conversations/`. Returns the final backup path
+// (staying at the sibling location if the move failed).
+async function parkBackupInsideMemory(backupPath: string, memoryPath: string): Promise<string> {
+  const inside = path.join(memoryPath, ".atomic-backup");
+  await mkdir(inside, { recursive: true });
+  const finalLocation = path.join(inside, path.basename(backupPath));
+  try {
+    await rename(backupPath, finalLocation);
+    return finalLocation;
+  } catch (err) {
+    log.warn("memory", "topic-swap: failed to park backup inside memory/, leaving at sibling location", { backupPath, error: errorMessage(err) });
+    return backupPath;
+  }
 }
 
 async function pathExists(target: string): Promise<boolean> {

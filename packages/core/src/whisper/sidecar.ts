@@ -9,13 +9,15 @@ import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { errorMessage, NOOP_LOGGER, ONE_MINUTE_MS, ONE_SECOND_MS, type WhisperLogger } from "./internal.ts";
 import { modelFilePath, type WhisperModelName } from "./models.ts";
+import { appendStderrTail, buildServerArgs, parseInferenceText } from "./sidecar-helpers.ts";
 
 const HOST = "127.0.0.1";
 const READY_TIMEOUT_MS = 60 * ONE_SECOND_MS;
 const READY_POLL_INTERVAL_MS = 500;
 const INFERENCE_TIMEOUT_MS = 2 * ONE_MINUTE_MS;
+const STDERR_TAIL_MAX_CHARS = 4_000;
 
-interface ActiveSidecar {
+export interface ActiveSidecar {
   readonly port: number;
   readonly proc: ChildProcess;
   readonly model: WhisperModelName;
@@ -63,7 +65,7 @@ async function waitUntilReady(port: number): Promise<void> {
 function drainStderr(proc: ChildProcess, tail: { text: string }): void {
   proc.stderr?.setEncoding("utf8");
   proc.stderr?.on("data", (chunk: string) => {
-    tail.text = (tail.text + chunk).slice(-4000);
+    tail.text = appendStderrTail(tail.text, chunk, STDERR_TAIL_MAX_CHARS);
   });
 }
 
@@ -99,15 +101,96 @@ function waitForReadyOrFailure(proc: ChildProcess, port: number): Promise<void> 
   });
 }
 
-function parseInferenceText(data: unknown): string {
-  if (typeof data === "object" && data !== null && "text" in data) {
-    const { text } = data as { text: unknown };
-    if (typeof text === "string") return text;
+// POST the wav to whisper-server's `/inference` and return the transcript.
+// Isolated from the lifecycle so the HTTP contract is unit-testable without a
+// live child (stub `fetch`, hand it a real wav path).
+export async function postInference(port: number, wavPath: string, language: string): Promise<string> {
+  const buf = await readFile(wavPath);
+  const form = new FormData();
+  form.append("file", new Blob([buf], { type: "audio/wav" }), "audio.wav");
+  form.append("response_format", "json");
+  form.append("language", language || "auto");
+  let res: Response;
+  try {
+    res = await fetch(`http://${HOST}:${port}/inference`, { method: "POST", body: form, signal: AbortSignal.timeout(INFERENCE_TIMEOUT_MS) });
+  } catch (err) {
+    throw new Error(`whisper-server request failed: ${errorMessage(err)}`);
   }
-  return "";
+  if (!res.ok) throw new Error(`whisper-server returned HTTP ${res.status}`);
+  return parseInferenceText(await res.json());
 }
 
-export function createSidecar(modelsDir: string, serverBinary = "whisper-server", logger: WhisperLogger = NOOP_LOGGER): Sidecar {
+// The impure primitives the start lifecycle depends on, injected so the
+// cancellation / single-flight / model-switch logic can be driven with fakes.
+export interface StartLifecycleDeps {
+  /** Reserve a free TCP port for the next child — the sole async step of a start. */
+  allocatePort: () => Promise<number>;
+  /** Spawn the whisper-server child on `port`. MUST be synchronous so the spawn
+   *  and the `startingProc` handoff stay in one tick: `shutdown()` has to be able
+   *  to kill an in-flight child immediately, with no await gap after it exists. */
+  spawnServer: (model: WhisperModelName, port: number) => ChildProcess;
+  /** Resolve once the child answers HTTP, or reject on spawn failure / early exit. */
+  waitReady: (proc: ChildProcess, port: number) => Promise<void>;
+  logger: WhisperLogger;
+}
+
+export interface StartLifecycle {
+  ensureSidecar: (model: WhisperModelName) => Promise<ActiveSidecar>;
+  shutdown: () => void;
+}
+
+export function defaultSpawnServer(modelsDir: string, serverBinary: string, logger: WhisperLogger): StartLifecycleDeps["spawnServer"] {
+  return (model: WhisperModelName, port: number): ChildProcess => {
+    const args = buildServerArgs(modelFilePath(modelsDir, model), HOST, port);
+    logger.info("sidecar: spawning", { model, port });
+    return spawn(serverBinary, args, { stdio: ["ignore", "ignore", "pipe"] });
+  };
+}
+
+// Wires the three listeners every whisper-server child needs: stderr drain,
+// permanent `error` handler (an unhandled 'error' from ENOENT etc. would crash
+// the host), and `exit` handler that both logs and lets the caller decide
+// whether this proc is still the active one (identity check via `onExit` — a
+// stale process must not evict a newer live sidecar).
+function instrumentChildProcess(proc: ChildProcess, model: WhisperModelName, logger: WhisperLogger, onExit: (exited: ChildProcess) => void): { text: string } {
+  const stderrTail = { text: "" };
+  drainStderr(proc, stderrTail);
+  proc.on("error", (err) => logger.warn("sidecar: process error", { model, error: errorMessage(err) }));
+  proc.on("exit", (code) => {
+    logger.warn("sidecar: exited", { model, code, stderrTail: stderrTail.text.slice(-500) });
+    onExit(proc);
+  });
+  return stderrTail;
+}
+
+// Await server readiness; on failure, kill the child and surface both the
+// underlying error and the tail of stderr (whisper-server usually explains its
+// crash there). Kept at module scope so `startSidecar` stays under the
+// per-function line cap.
+async function awaitReadyOrThrow(proc: ChildProcess, port: number, stderrTail: { text: string }, waitReady: StartLifecycleDeps["waitReady"]): Promise<void> {
+  try {
+    await waitReady(proc, port);
+  } catch (err) {
+    proc.kill();
+    throw new Error(`whisper-server failed to start: ${errorMessage(err)} — stderr: ${stderrTail.text.slice(-500)}`);
+  }
+}
+
+// Abort a start that was raced by `shutdown()` (or a newer start). Compares
+// the token captured at start entry against the current token; if they differ,
+// kill the freshly-booted child rather than publish it after shutdown returned.
+function throwIfStartCancelled(startedToken: number, currentToken: number, proc: ChildProcess): void {
+  if (startedToken !== currentToken) {
+    proc.kill();
+    throw new Error("whisper-server start cancelled");
+  }
+}
+
+// Owns the single warm child's lifecycle: which model is live, the in-flight
+// start, and the cancellation token. Kept as a factory closure so the mutable
+// state is encapsulated rather than threaded through parameters.
+export function createStartLifecycle(deps: StartLifecycleDeps): StartLifecycle {
+  const { allocatePort, spawnServer, waitReady, logger } = deps;
   let sidecar: ActiveSidecar | null = null;
   let starting: { model: WhisperModelName; promise: Promise<ActiveSidecar> } | null = null;
   // The child of an in-flight start (before it's published as `sidecar`), plus a
@@ -118,58 +201,34 @@ export function createSidecar(modelsDir: string, serverBinary = "whisper-server"
 
   function shutdown(): void {
     startToken += 1;
-    if (startingProc) {
-      startingProc.kill();
-      startingProc = null;
-    }
-    if (sidecar) {
-      sidecar.proc.kill();
-      sidecar = null;
-    }
+    startingProc?.kill();
+    startingProc = null;
+    sidecar?.proc.kill();
+    sidecar = null;
   }
 
   async function startSidecar(model: WhisperModelName): Promise<ActiveSidecar> {
     const token = ++startToken;
-    const port = await findFreePort();
-    const args = ["--model", modelFilePath(modelsDir, model), "--host", HOST, "--port", String(port)];
-    logger.info("sidecar: spawning", { model, port });
-    const proc = spawn(serverBinary, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const port = await allocatePort();
+    const proc = spawnServer(model, port);
     startingProc = proc;
-    const stderrTail = { text: "" };
-    drainStderr(proc, stderrTail);
-    // Permanent error listener — a missing one would let a process 'error'
-    // (e.g. ENOENT) throw uncaught and crash the host.
-    proc.on("error", (err) => logger.warn("sidecar: process error", { model, error: errorMessage(err) }));
-    proc.on("exit", (code) => {
-      logger.warn("sidecar: exited", { model, code, stderrTail: stderrTail.text.slice(-500) });
-      if (sidecar?.proc === proc) sidecar = null;
-    });
+    // onExit fires when THIS proc exits: only null out `sidecar` if it's still the live one.
+    const stderrTail = instrumentChildProcess(proc, model, logger, (exited) => sidecar?.proc === exited && (sidecar = null));
     try {
-      await waitForReadyOrFailure(proc, port);
-    } catch (err) {
-      proc.kill();
-      throw new Error(`whisper-server failed to start: ${errorMessage(err)} — stderr: ${stderrTail.text.slice(-500)}`);
+      await awaitReadyOrThrow(proc, port, stderrTail, waitReady);
     } finally {
       if (startingProc === proc) startingProc = null;
     }
-    // shutdown() (or a newer start) ran while we were booting — discard this
-    // child instead of publishing a sidecar after shutdown returned.
-    // eslint-disable-next-line security/detect-possible-timing-attacks -- in-memory start-cancellation token, not an auth compare
-    if (token !== startToken) {
-      proc.kill();
-      throw new Error("whisper-server start cancelled");
-    }
+    throwIfStartCancelled(token, startToken, proc);
     sidecar = { port, proc, model };
     logger.info("sidecar: ready", { model, port });
     return sidecar;
   }
 
-  // Module-scoped spawn so it isn't a loop closure (no-loop-func). Only ever one
-  // start is in flight at a time, so clearing `starting` on settle is safe.
+  // Own function so it isn't a loop closure (no-loop-func). Only ever one start
+  // is in flight at a time, so clearing `starting` on settle is safe.
   function beginStart(model: WhisperModelName): Promise<ActiveSidecar> {
-    const promise = startSidecar(model).finally(() => {
-      starting = null;
-    });
+    const promise = startSidecar(model).finally(() => (starting = null));
     starting = { model, promise };
     return promise;
   }
@@ -190,30 +249,29 @@ export function createSidecar(modelsDir: string, serverBinary = "whisper-server"
     }
   }
 
+  return { ensureSidecar, shutdown };
+}
+
+export function createSidecar(modelsDir: string, serverBinary = "whisper-server", logger: WhisperLogger = NOOP_LOGGER): Sidecar {
+  const lifecycle = createStartLifecycle({
+    allocatePort: findFreePort,
+    spawnServer: defaultSpawnServer(modelsDir, serverBinary, logger),
+    waitReady: waitForReadyOrFailure,
+    logger,
+  });
+
   async function warmup(model: WhisperModelName): Promise<void> {
     try {
-      await ensureSidecar(model);
+      await lifecycle.ensureSidecar(model);
     } catch (err) {
       logger.warn("sidecar: warmup failed", { model, error: errorMessage(err) });
     }
   }
 
   async function transcribeWav(wavPath: string, language: string, model: WhisperModelName): Promise<string> {
-    const active = await ensureSidecar(model);
-    const buf = await readFile(wavPath);
-    const form = new FormData();
-    form.append("file", new Blob([buf], { type: "audio/wav" }), "audio.wav");
-    form.append("response_format", "json");
-    form.append("language", language || "auto");
-    let res: Response;
-    try {
-      res = await fetch(`http://${HOST}:${active.port}/inference`, { method: "POST", body: form, signal: AbortSignal.timeout(INFERENCE_TIMEOUT_MS) });
-    } catch (err) {
-      throw new Error(`whisper-server request failed: ${errorMessage(err)}`);
-    }
-    if (!res.ok) throw new Error(`whisper-server returned HTTP ${res.status}`);
-    return parseInferenceText(await res.json());
+    const active = await lifecycle.ensureSidecar(model);
+    return postInference(active.port, wavPath, language);
   }
 
-  return { transcribeWav, warmup, shutdown };
+  return { transcribeWav, warmup, shutdown: lifecycle.shutdown };
 }

@@ -42,7 +42,11 @@ describe("isolated-dev-server.assertHostUntouched", () => {
   it("returns no error when nothing changed", async () => {
     const target = await seedTarget();
     const baseline = await snapshotHostFs(target);
-    await assertHostUntouched([baseline]);
+    // `assertHostUntouched` throws on mismatch; wrapping in
+    // `doesNotReject` makes the contract explicit for sonarjs (the
+    // helper name pattern isn't recognised as an assertion by the
+    // linter even though it internally throws).
+    await assert.doesNotReject(assertHostUntouched([baseline]));
   });
 
   it("detects an in-place rewrite of an existing file (the Codex-flagged regression)", async () => {

@@ -7,7 +7,7 @@ const roles: Role[] = [
   {
     id: "general",
     name: "General",
-    icon: "star",
+    icon: "auto_awesome",
     prompt: "",
     availablePlugins: [],
   },
@@ -29,7 +29,7 @@ const roles: Role[] = [
 
 describe("roleIcon", () => {
   it("returns the role's icon when it is a valid Material Icon name", () => {
-    assert.equal(roleIcon(roles, "general"), "star");
+    assert.equal(roleIcon(roles, "general"), "auto_awesome");
     assert.equal(roleIcon(roles, "tutor"), "school");
   });
 
@@ -37,8 +37,11 @@ describe("roleIcon", () => {
     assert.equal(roleIcon(roles, "broken"), "smart_toy");
   });
 
-  it("falls back to star when the role is unknown", () => {
-    assert.equal(roleIcon(roles, "no-such-role"), "star");
+  // Unknown role must not fall back to `star` — that's the PinToggle glyph
+  // for collection shortcuts, and collision made `General` and pinned
+  // collections indistinguishable (#1684).
+  it("falls back to smart_toy when the role is unknown (never star)", () => {
+    assert.equal(roleIcon(roles, "no-such-role"), "smart_toy");
   });
 
   it("accepts only lowercase letters and underscores as valid icons", () => {

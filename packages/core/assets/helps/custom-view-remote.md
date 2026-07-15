@@ -27,8 +27,11 @@ Same place as desktop views — the HTML lives under `views/` and must end in
   desktop view and is never served to the phone.
 - `id` / `label` / `icon` / `i18n` — as for desktop views. The selector icon
   defaults to `smartphone`.
-- **No `capabilities`** — remote views are **read-only** in this phase. There
-  is no write path; a button that should _do_ something uses `startChat`.
+- **Read-only by default.** A view with no `editableFields` and no `allowDelete`
+  cannot mutate anything — its `updateItem` / `deleteItem` reject. Declare a
+  write surface only when the user asks the view to _change_ data (toggle a
+  checkbox, delete a row); see **Writing records** below. For anything more
+  open-ended (compose a message, kick off a task) use `startChat`.
 
 Feed collections register theirs in `feeds/<slug>/schema.json` with the HTML
 at `feeds/<slug>/views/<name>.html`, like desktop views.
@@ -52,16 +55,20 @@ window.__MC_VIEW = {
   slug: "annual-plan", // this collection
   locale: "en", // active app locale ("" when no translations)
   target: "mobile",
-  protocol: 1,
+  protocol: 2,
+  writable: false, // true iff the view declared editableFields / allowDelete
   getItems: (opts) => Promise, // the ONLY way to read records — see below
+  updateItem: (id, patch) => Promise, // patch declared fields (see Writing records)
+  deleteItem: (id) => Promise, // remove a record (requires allowDelete)
   startChat: (prompt, role) => void, // draft a new chat for the user
   t: (key, named) => string, // vue-i18n-style dict lookup (same as desktop)
 };
 ```
 
 What is deliberately **absent** compared to the desktop contract: `token`,
-`dataUrl` (nothing to fetch), `onChange` (no live refresh yet — render on
-load), and `openItem` (no host record panel on the phone yet).
+`dataUrl` (nothing to fetch), `onChange` (no live refresh yet — re-call
+`getItems` after a mutate resolves), and `openItem` (no host record panel on
+the phone yet).
 
 ### Reading records — `getItems` (paginated, always)
 
@@ -79,13 +86,113 @@ const page = await window.__MC_VIEW.getItems({
   Render the first page, then offer a **"Load more"** affordance while
   `items.length < total` (see the example).
 - **Always pass `fields`.** The projection keeps pages small (the primary key
-  is always included). List the columns your view actually renders.
+  is always included). List the columns your view actually renders — including
+  any `image`-type field you want inlined (see **Displaying images**).
 - The promise **rejects** on failure or after a 30 s timeout — catch it and
   show the message; don't fail silently.
-- **`derived` formulas that read only the record's own fields come back
-  resolved** (e.g. `won * 3 + drawn`). Formulas that dereference a `ref`
-  field, and `embed` fields, are NOT resolved on the phone — don't rely on
-  them; compute from base fields or omit.
+- **Computed fields resolve host-side, exactly as on desktop.** `derived`
+  formulas — including ones that dereference a `ref` into another collection
+  (e.g. `ticker.price`, `shares * ticker.price`) — plus `toggle` and `embed`
+  fields all come back fully resolved. The host does the join before serializing
+  the page; the phone just receives the plain values. A `ref` target that's
+  missing resolves that field to `null` (same fail-soft as desktop), so guard
+  for `null` rather than assuming a number is always present.
+
+### Writing records — `updateItem` / `deleteItem`
+
+A remote view may **change** data too — flip a todo's `done`, edit a status,
+delete a row — but only within a surface the view **declares** and the host
+**enforces**. Nothing is writable by default.
+
+**1. Declare the surface** in the `views[]` entry:
+
+```jsonc
+{
+  "id": "phone",
+  "label": "Todos",
+  "target": "mobile",
+  "file": "views/phone.html",
+  "editableFields": ["done"], // ONLY these fields may be patched
+  "allowDelete": true, // omit / false ⇒ deleteItem is refused
+}
+```
+
+**2. Call the methods** (both resolve/reject like `getItems`):
+
+```js
+const { item } = await window.__MC_VIEW.updateItem(id, { done: true });
+// patch is a partial record; the host merges it onto the stored record and
+// returns the merged { item }.
+
+const { id: removed } = await window.__MC_VIEW.deleteItem(id);
+```
+
+- **The host is the authority, not the view.** Every mutate is re-checked
+  server-side: a patch key not in `editableFields` (or the primary key) is
+  **refused**; `deleteItem` without `allowDelete` is **refused**. The promise
+  rejects with the reason — surface it. Declaring the surface honestly is how
+  you keep the blast radius small.
+- **No `writable` declaration ⇒ the methods reject** (`"this view is
+  read-only"`). Check `window.__MC_VIEW.writable` before showing edit affordances
+  if you want to degrade gracefully.
+- **`editableFields` never includes the primary key** — a record's id is fixed.
+- **Re-render after a mutate resolves.** There is no live `onChange` yet: either
+  optimistically update your local copy from the returned `item`, or re-call
+  `getItems` to refetch. The preview's real write also refreshes the desktop
+  collection, so you see the true result while iterating.
+- **The returned `item` is shaped like a `getItems` item** — host-computed fields
+  (`derived`, including ref-crossing formulas, `toggle`, `embed`) are resolved and
+  the view's declared `imageFields` come back inlined as `data:` URLs (not bare
+  paths), so merging the result (`items[i] = { ...items[i], ...res.item }`) keeps
+  computed columns and thumbnails intact — no refetch needed just to recompute them.
+- **Create is not available** in this phase — `updateItem` only patches an
+  existing record; use `startChat` to ask the agent to add a new one.
+
+### Displaying images — `imageFields`
+
+A collection's `image`-type field holds a **workspace path** (`data/attachments/…`,
+`artifacts/images/…`) that the phone can't fetch. To render it, list the field in
+the view's **`imageFields`** and the host inlines it as a **downscaled JPEG
+`data:` URL thumbnail** inside each `getItems` page — the value your view reads is
+then a ready-to-use `data:` URL, not a path.
+
+**1. Declare the image fields** in the `views[]` entry:
+
+```jsonc
+{
+  "id": "gallery",
+  "label": "Gallery",
+  "target": "mobile",
+  "file": "views/gallery.html",
+  "imageFields": ["photo"], // inline these image-type fields as thumbnails
+  "imageMaxEdge": 384        // optional longest-edge px (default 512, clamped [64, 1024])
+}
+```
+
+**2. Render the value as an image**, and **request the field** so it survives the
+projection (a field you don't list in `fields` is never inlined):
+
+```js
+const page = await window.__MC_VIEW.getItems({ offset: 0, limit: 20, fields: ["title", "photo"] });
+// page.items[0].photo === "data:image/jpeg;base64,…"  → <img src="…">
+```
+
+- **Only `image`-type fields listed in `imageFields` are inlined.** A non-image
+  field name is ignored; a field the page's `fields` projection dropped is not
+  inlined (so paging without the image column costs nothing).
+- **Thumbnails are downscaled**, longest edge `imageMaxEdge` (default 512). Keep
+  it small and keep pages small (`limit`): every inlined image travels inside the
+  size-capped page. The host enforces a **per-page byte budget** — once a page is
+  full, further images are **left as their original path** (which renders as a
+  broken/placeholder `<img>`), never dropped silently but never overflowing the
+  channel either. Fewer, smaller images per page = more reliably rendered.
+- **A field may come back as a path, not a `data:` URL** (over budget, missing
+  file, or an undecodable source). Handle both: `onerror` a placeholder, or check
+  for the `data:` prefix before rendering.
+- **Cost**: inlined thumbnails are the one thing that grows a page's bytes;
+  they're opt-in per view and per projection precisely so a view pays only for the
+  images it shows. The preview's caption reports `N images (M over budget)` so you
+  can size `imageMaxEdge` / `limit` against the budget while iterating.
 
 ### Starting a chat — `startChat`
 
@@ -138,8 +245,11 @@ than desktop views:
   HTML anyway (see the size budget).
 - **`<img>` / `<audio>` / `<video>` may load any `https:` URL** (plus `data:`
   / `blob:`) — a record's public image/media URL renders. A **workspace file
-  path does not** (it lives on this machine, which the phone can't reach):
-  treat `image`-type fields as desktop-only and skip or placeholder them.
+  path does not** by itself (it lives on this machine, which the phone can't
+  reach) — but the host **can inline a workspace `image`-type field** as a
+  downscaled `data:` URL thumbnail when the view declares it in `imageFields`;
+  see **Displaying images** below. `audio` / `video` and non-declared image
+  paths stay desktop-only (skip or placeholder them).
 - **Outbound links**: `<a href="…" target="_blank" rel="noopener">` opens
   normally; a same-tab `<a href>` is blocked by the sandbox.
 - No cookies, no `localStorage`, no parent access — and no token exists in
@@ -293,4 +403,136 @@ A phone-first record list: single column, 44px+ tap targets, paginated through
     </script>
   </body>
 </html>
+```
+
+## Example — writable todo (toggle `done`, delete)
+
+A phone-first todo list that **checks off** and **deletes** records. Schema has
+`title` (string) and `done` (boolean). Registration declares the write surface:
+`{ "id": "phone", "label": "Todos", "target": "mobile", "file": "views/phone.html", "editableFields": ["done"], "allowDelete": true }`.
+
+The core of `views/phone.html` (styles/`<head>` as above):
+
+```html
+<div id="list"></div>
+<script>
+  var items = [];
+
+  function row(item) {
+    var el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML =
+      '<label class="meta"><input type="checkbox" data-toggle="' +
+      item.id +
+      '"' +
+      (item.done ? " checked" : "") +
+      ' style="width:22px;height:22px"><b></b>' +
+      '<button class="chat" data-del="' +
+      item.id +
+      '" style="margin-left:auto">Delete</button></label>';
+    el.querySelector("b").textContent = item.title || item.id;
+    if (item.done) el.style.opacity = 0.5;
+    return el;
+  }
+
+  function render() {
+    var list = document.getElementById("list");
+    list.innerHTML = "";
+    items.forEach(function (item) {
+      list.appendChild(row(item));
+    });
+  }
+
+  async function load() {
+    var page = await window.__MC_VIEW.getItems({ offset: 0, limit: 200, fields: ["title", "done"] });
+    items = page.items;
+    render();
+  }
+
+  document.getElementById("list").addEventListener("change", async function (e) {
+    var id = e.target.dataset.toggle;
+    if (!id) return;
+    try {
+      // Host merges the patch and returns the merged record; reflect it.
+      var res = await window.__MC_VIEW.updateItem(id, { done: e.target.checked });
+      var i = items.findIndex(function (r) {
+        return String(r.id) === id;
+      });
+      if (i >= 0) items[i] = res.item;
+      render();
+    } catch (err) {
+      e.target.checked = !e.target.checked; // revert on refusal
+      alert(err.message);
+    }
+  });
+
+  document.getElementById("list").addEventListener("click", async function (e) {
+    var id = e.target.dataset.del;
+    if (!id) return;
+    try {
+      await window.__MC_VIEW.deleteItem(id);
+      items = items.filter(function (r) {
+        return String(r.id) !== id;
+      });
+      render();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  load().catch(function (err) {
+    document.getElementById("list").innerHTML = '<div class="err">' + err.message + "</div>";
+  });
+</script>
+```
+
+## Example — image gallery (inlined thumbnails)
+
+A phone-first photo grid. Schema has `title` (string) and `photo` (image, a
+workspace path). Registration declares the image field + a small edge:
+`{ "id": "gallery", "label": "Gallery", "target": "mobile", "file": "views/gallery.html", "imageFields": ["photo"], "imageMaxEdge": 384 }`.
+`getItems` must **request `photo`** (else it isn't inlined); the host returns it
+as a `data:` URL, and a small `limit` keeps each page under the byte budget.
+
+The core of `views/gallery.html` (styles/`<head>` as in the first example):
+
+```html
+<div id="grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px"></div>
+<button id="more" class="more" hidden>Load more</button>
+<script>
+  var loaded = [];
+  var total = 0;
+  var PAGE = 20; // small: every inlined thumbnail travels inside the page
+
+  function tile(item) {
+    var el = document.createElement("div");
+    el.className = "card";
+    var src = typeof item.photo === "string" && item.photo.indexOf("data:") === 0 ? item.photo : "";
+    el.innerHTML =
+      '<img loading="lazy" alt="" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:#e2e8f0">' + "<b></b>";
+    if (src) el.querySelector("img").src = src; // else leave the placeholder background
+    el.querySelector("b").textContent = item.title || item.id;
+    return el;
+  }
+
+  async function loadMore() {
+    var page = await window.__MC_VIEW.getItems({ offset: loaded.length, limit: PAGE, fields: ["title", "photo"] });
+    total = page.total;
+    loaded = loaded.concat(page.items);
+    var grid = document.getElementById("grid");
+    page.items.forEach(function (item) {
+      grid.appendChild(tile(item));
+    });
+    document.getElementById("more").hidden = loaded.length >= total;
+  }
+
+  document.getElementById("more").onclick = function () {
+    loadMore().catch(function (e) {
+      alert(e.message);
+    });
+  };
+  loadMore().catch(function (e) {
+    document.getElementById("grid").innerHTML = '<div class="err">' + e.message + "</div>";
+  });
+</script>
 ```

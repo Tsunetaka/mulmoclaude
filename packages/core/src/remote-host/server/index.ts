@@ -1,0 +1,18 @@
+// Server-only surface of the remote-host transport: the command loop, the
+// connect/disconnect lifecycle, and the Firebase init + auth primitives. Each
+// host (MulmoClaude, MulmoTerminal) provides its own handler table, hostId, and
+// public Firebase config; everything here is host-agnostic.
+//
+// The browser-safe protocol (wire types + Firestore path helpers) lives at the
+// parent `@mulmoclaude/core/remote-host` so the remote/mobile client can share
+// it without pulling this server surface.
+export { startHostRunner } from "./hostRunner.js";
+export type { HostEvent, HostRunnerOptions } from "./hostRunner.js";
+export { createRemoteHost } from "./lifecycle.js";
+export type { RemoteHostStatus, RemoteHostLogger, RemoteHostDeps, RemoteHostLifecycle } from "./lifecycle.js";
+export { createRemoteHostAuth } from "./auth.js";
+export type { RemoteHostAuth } from "./auth.js";
+export { createRemoteHostFirebase, createRemoteHostSession } from "./firebase.js";
+export type { RemoteHostFirebase, RemoteHostSession, RemoteHostSessionHandles, RemoteHostSessionValidate } from "./firebase.js";
+export { createHostSessionPersistence, isSeedableBlob } from "./sessionPersistence.js";
+export type { HostSessionPersistence, HostAuthPersistenceClass, HostAuthPersistenceInstance } from "./sessionPersistence.js";

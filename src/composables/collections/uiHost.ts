@@ -13,6 +13,8 @@
 import {
   configureCollectionUi,
   type CollectionRemoteViewResult,
+  type CollectionRemoteViewMutateResult,
+  type CollectionRemoteViewItemsResult,
   type CollectionViewI18nResult,
   type CollectionViewToken,
   type RegistryListResponse,
@@ -35,6 +37,8 @@ import { htmlPreviewUrlFor, svgPreviewUrlFor } from "../useContentDisplay";
 import { isValidFilePath } from "../useFileSelection";
 import { resolveImageSrc } from "../../utils/image/resolve";
 import { buildCustomViewSrcdoc } from "../../utils/html/customViewSrcdoc";
+import { cspExtra, loadCspExtra } from "../useCspExtra";
+import { registerViewNonce } from "../useCspViolations";
 import { useConfirm } from "../useConfirm";
 import { useShortcuts } from "../useShortcuts";
 import PinToggle from "../../components/PinToggle.vue";
@@ -58,6 +62,10 @@ const collectionActionUrl = (slug: string, actionId: string): string =>
   withSlug(API_ROUTES.collections.collectionAction, slug).replace(":actionId", encodeURIComponent(actionId));
 const viewDeleteUrl = (slug: string, viewId: string): string =>
   withSlug(API_ROUTES.collections.viewDelete, slug).replace(":viewId", encodeURIComponent(viewId));
+const remoteViewMutateUrl = (slug: string, viewId: string): string =>
+  withSlug(API_ROUTES.collections.remoteViewMutate, slug).replace(":viewId", encodeURIComponent(viewId));
+const remoteViewItemsUrl = (slug: string, viewId: string): string =>
+  withSlug(API_ROUTES.collections.remoteViewItems, slug).replace(":viewId", encodeURIComponent(viewId));
 
 // ── Deferred app bindings (need a component context; set by App.vue setup) ──
 type StartChat = (prompt: string, role: string) => void;
@@ -89,6 +97,10 @@ configureCollectionUi({
   mintViewToken: (slug, viewId) => apiPost<CollectionViewToken>(withSlug(API_ROUTES.collections.viewToken, slug), { viewId }),
   fetchViewHtml: async (slug, viewId) => {
     try {
+      // Refresh the CSP extension so a `config/csp.json` edit takes effect on
+      // the next view open (not only after an app reload) — the srcdoc CSP is
+      // built client-side from the cached `cspExtra` a moment later. Best-effort.
+      await loadCspExtra();
       const resp = await apiFetchRaw(withSlug(API_ROUTES.collections.viewFile, slug), { query: { id: viewId } });
       return resp.ok ? { ok: true, html: await resp.text() } : { ok: false, status: resp.status };
     } catch {
@@ -100,7 +112,20 @@ configureCollectionUi({
   },
   fetchViewI18n: (slug, viewId, locale) => apiGet<CollectionViewI18nResult>(withSlug(API_ROUTES.collections.viewI18n, slug), { id: viewId, locale }),
   fetchRemoteView: (slug, viewId, locale) => apiGet<CollectionRemoteViewResult>(withSlug(API_ROUTES.collections.remoteView, slug), { id: viewId, locale }),
-  buildViewSrcdoc: (html, boot) => buildCustomViewSrcdoc(html, boot),
+  mutateRemoteView: (slug, viewId, request) => apiPost<CollectionRemoteViewMutateResult>(remoteViewMutateUrl(slug, viewId), request),
+  fetchRemoteViewItems: (slug, viewId, request) =>
+    apiGet<CollectionRemoteViewItemsResult>(remoteViewItemsUrl(slug, viewId), {
+      offset: request.offset,
+      limit: request.limit,
+      fields: request.fields?.join(",") || undefined,
+    }),
+  buildViewSrcdoc: (html, boot) => {
+    // Per-render nonce: only a violation report echoing this exact nonce is
+    // trusted by the host collector, so a nested hostile iframe can't spoof it.
+    const nonce = crypto.randomUUID();
+    registerViewNonce(nonce);
+    return buildCustomViewSrcdoc(html, boot, cspExtra.value, nonce);
+  },
 
   // record CRUD + actions
   createItem: (slug, record) => apiPost<ItemMutationResponse>(withSlug(API_ROUTES.collections.items, slug), record),

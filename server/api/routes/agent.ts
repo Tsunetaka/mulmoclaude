@@ -19,7 +19,10 @@ import {
 import { getRole } from "../../workspace/roles.js";
 import { runAgent } from "../../agent/index.js";
 import { prependJournalPointer } from "../../agent/prompt.js";
+import { notifyTaskFinished } from "../../agent/webPush.js";
 import { buildTranscriptPreamble, isStaleSessionError } from "../../agent/resumeFailover.js";
+import { isMcpBrokerNotReadyError } from "../../agent/mcpBrokerFailover.js";
+import { ONE_SECOND_MS } from "../../utils/time.js";
 import { getOrCreateSession, beginRun, endRun, cancelRun, pushSessionEvent, pushToolResult, getActiveSessionIds } from "../../events/session-store/index.js";
 import { workspacePath } from "../../workspace/workspace.js";
 import { discoverSkills } from "../../workspace/skills/discovery.js";
@@ -159,6 +162,10 @@ export async function spawnSystemWorker(args: {
   message: string;
   roleId: string;
   hidden: boolean;
+  /** Path-bearing attachments to hand the spawned chat (e.g. files the mobile
+   *  remote attached, ingested into the workspace). Forwarded to `startChat`,
+   *  which loads their bytes for the model like any other attachment. */
+  attachments?: Attachment[];
   onComplete?: CompletionHook;
 }): Promise<SpawnSystemWorkerResult> {
   const chatId = randomUUID();
@@ -171,7 +178,7 @@ export async function spawnSystemWorker(args: {
   }
   let result: StartChatResult;
   try {
-    result = await startChat({ message: args.message, roleId: args.roleId, chatSessionId: chatId, origin });
+    result = await startChat({ message: args.message, roleId: args.roleId, chatSessionId: chatId, origin, attachments: args.attachments });
   } catch (err) {
     // `startChat` is normally fire-and-forget, but a synchronous setup failure
     // can reject — release the reservation so the slot isn't leaked until restart.
@@ -191,7 +198,7 @@ export async function spawnSystemWorker(args: {
 }
 
 export async function startChat(params: StartChatParams): Promise<StartChatResult> {
-  const { message, roleId, chatSessionId, selectedImageData, attachments, userTimezone } = params;
+  const { message, roleId, chatSessionId, selectedImageData, attachments } = params;
   // Bridge-only compat: external bridge clients may still populate
   // `selectedImageData`. Fold it into `attachments` so the rest of
   // this function only deals with one input shape.
@@ -268,6 +275,22 @@ export async function startChat(params: StartChatParams): Promise<StartChatResul
     return { kind: "error", error: "Invalid attachments payload", status: 400 };
   }
 
+  const validOrigin = await persistUserTurn(params, { isFirstTurn, attachedPaths });
+  await dispatchAgentRun(params, { extras, resultsFilePath, abortController, validOrigin });
+
+  return { kind: "started", chatSessionId };
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+// Persist the user turn: write session metadata, count the query,
+// append the user message to the jsonl, and broadcast it to other
+// tabs viewing this session. Returns the validated origin so the
+// dispatch phase can reuse it.
+async function persistUserTurn(params: StartChatParams, ctx: { isFirstTurn: boolean; attachedPaths: string[] }): Promise<SessionOrigin | undefined> {
+  const { message, roleId, chatSessionId } = params;
+  const { isFirstTurn, attachedPaths } = ctx;
+
   // Now persist the user message so callers (and other tabs) see the
   // turn. Metadata first — it powers the sidebar title cache; the
   // append follows so the jsonl is always a superset of what metadata
@@ -302,6 +325,20 @@ export async function startChat(params: StartChatParams): Promise<StartChatResul
     ...(attachedPaths.length > 0 ? { attachments: attachedPaths } : {}),
   });
 
+  return validOrigin;
+}
+
+// Build the LLM-bound message (journal pointer + attached-file
+// markers) and kick off the detached background agent run. The
+// background run itself is fire-and-forget; this awaits only the
+// claudeSessionId read that must precede it.
+async function dispatchAgentRun(
+  params: StartChatParams,
+  ctx: { extras: RequestExtras; resultsFilePath: string; abortController: AbortController; validOrigin: SessionOrigin | undefined },
+): Promise<void> {
+  const { message, roleId, chatSessionId, userTimezone } = params;
+  const { extras, resultsFilePath, abortController, validOrigin } = ctx;
+
   const role = getRole(roleId);
   const claudeSessionId = await readClaudeSessionIdFromSession(chatSessionId);
 
@@ -329,11 +366,7 @@ export async function startChat(params: StartChatParams): Promise<StartChatResul
     userTimezone,
     origin: validOrigin,
   });
-
-  return { kind: "started", chatSessionId };
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────
 
 interface RequestExtras {
   attachments: Attachment[] | undefined;
@@ -933,8 +966,185 @@ export const _splitSkillAndReplyForTest = splitSkillAndReply;
 
 /** A stale `--resume` failure we can recover from by retrying without it: an
  *  error event carrying a stale-session message, while failover budget remains. */
-function isRecoverableStaleSession(event: { type: string; message?: unknown }, failoverAttemptsRemaining: number): boolean {
-  return failoverAttemptsRemaining > 0 && event.type === EVENT_TYPES.error && typeof event.message === "string" && isStaleSessionError(event.message);
+function isRecoverableStaleSession(event: { type: string; message?: unknown }, attemptsRemaining: number): boolean {
+  return attemptsRemaining > 0 && event.type === EVENT_TYPES.error && typeof event.message === "string" && isStaleSessionError(event.message);
+}
+
+/** The transient MCP-broker startup race (#2057): the CLI couldn't resolve the
+ *  permission-prompt tool because the broker's stdio wasn't connected when the
+ *  first tool call ran. Recoverable by waiting a moment and replaying the SAME
+ *  turn — nothing executed, the first tool call is what failed. Hits fresh
+ *  sessions too, so it carries a budget independent of `--resume`. */
+function isRecoverableBrokerNotReady(event: { type: string; message?: unknown }, attemptsRemaining: number): boolean {
+  return attemptsRemaining > 0 && event.type === EVENT_TYPES.error && typeof event.message === "string" && isMcpBrokerNotReadyError(event.message);
+}
+
+// How long to let the broker finish connecting before replaying (#2057). The
+// forensics show it comes up a few seconds after losing the race.
+const BROKER_RECONNECT_WAIT_MS = 3 * ONE_SECOND_MS;
+
+// Abortable wait so a stop during the retry pause ends promptly instead of
+// spawning a doomed replay after the user already cancelled.
+const abortableSleep = (delayMs: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, delayMs);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+
+type RecoveryKind = "stale" | "broker" | null;
+
+interface RetryBudgets {
+  stale: number;
+  broker: number;
+}
+
+/** Classify an event into the one recovery it warrants, or null. Budgets are
+ *  consumed by the caller after a successful classification. */
+function detectRecovery(event: { type: string; message?: unknown }, budgets: RetryBudgets): RecoveryKind {
+  if (isRecoverableStaleSession(event, budgets.stale)) return "stale";
+  if (isRecoverableBrokerNotReady(event, budgets.broker)) return "broker";
+  return null;
+}
+
+// Clear the stale `--resume` id and rebuild the turn from the local jsonl so the
+// replay carries context without the bad session id (#211). Returns the message
+// to replay; the caller drops the claude session id.
+async function recoverStaleSession(chatSessionId: string, decoratedMessage: string): Promise<string> {
+  log.warn("agent", "stale claude session id — retrying without --resume", { chatSessionId });
+  await clearClaudeId(chatSessionId);
+  const preamble = await readTranscriptPreamble(chatSessionId);
+  pushSessionEvent(chatSessionId, {
+    type: EVENT_TYPES.status,
+    message: "Previous session unavailable — continuing with local transcript.",
+  });
+  return preamble ? `${preamble}${decoratedMessage}` : decoratedMessage;
+}
+
+// Wait for the broker to connect, then let the caller replay the same turn
+// unchanged (#2057). Surfaces a status event so the pause isn't read as a hang.
+async function recoverBrokerNotReady(chatSessionId: string, abortSignal: AbortSignal): Promise<void> {
+  log.warn("agent", "mulmoclaude MCP broker not ready — retrying after a short wait", { chatSessionId });
+  pushSessionEvent(chatSessionId, {
+    type: EVENT_TYPES.status,
+    message: "Tools are still starting up — retrying…",
+  });
+  await abortableSleep(BROKER_RECONNECT_WAIT_MS, abortSignal);
+}
+
+// What the failover stream loop reads to (re)invoke `runAgent`. A
+// subset of `BackgroundRunParams` — the per-turn teardown fields
+// (resultsFilePath, requestStartedAt, toolArgsCache, origin) stay in
+// `runAgentInBackground`.
+interface FailoverStreamArgs {
+  decoratedMessage: string;
+  role: ReturnType<typeof getRole>;
+  chatSessionId: string;
+  claudeSessionId: string | undefined;
+  abortSignal: AbortSignal;
+  attachments: Attachment[] | undefined;
+  userTimezone: string | undefined;
+}
+
+// One pass of `runAgent`: handle every non-recovery event inline and return the
+// recovery the stream asked for (or null) plus whether a real error surfaced. A
+// recovery-triggering event is swallowed (the caller retries); its error is not
+// counted, so a recovered pass reports didError=false.
+async function streamOnce(
+  runArgs: Parameters<typeof runAgent>[0],
+  budgets: RetryBudgets,
+  eventCtx: EventContext,
+): Promise<{ recovery: RecoveryKind; didError: boolean }> {
+  let recovery: RecoveryKind = null;
+  let didError = false;
+  // A broker-not-ready replay is only safe when NOTHING executed — the failing
+  // first tool call is blocked at the permission check. Once ANY tool has
+  // completed successfully (an auto-approved Bash/Write, or a tool that ran
+  // before a later permission check failed), replaying would double-execute it,
+  // so downgrade the broker recovery to a plain error at that point (#2057).
+  let ranTool = false;
+  for await (const event of runAgent(runArgs)) {
+    if (event.type === EVENT_TYPES.toolCallResult && event.isError !== true) ranTool = true;
+    recovery = detectRecovery(event, budgets);
+    if (recovery === "broker" && ranTool) recovery = null;
+    // Swallow the error — the caller is about to recover. `break` abandons the
+    // generator; the event is only yielded after the CLI exited, so the
+    // subprocess is already dead and `for await`'s return() is the only cleanup.
+    if (recovery) break;
+    // A yielded error event (non-zero exit, missing binary, a tool surfacing an
+    // error) is a real failure even though the generator didn't throw.
+    if (event.type === EVENT_TYPES.error) didError = true;
+    await handleAgentEvent(event, eventCtx);
+  }
+  return { recovery, didError };
+}
+
+// A recovery-triggering error is swallowed before `handleAgentEvent`, so it
+// skips the boundary flush — the aborted pass's streamed text (and any pending
+// skill flag) would otherwise concatenate into the REPLAYED pass's consolidated
+// jsonl entry. Discard that partial state so each attempt persists cleanly.
+function discardAbortedPass(eventCtx: EventContext): void {
+  eventCtx.textAccumulator.length = 0;
+  eventCtx.pendingSkill = null;
+}
+
+// Drive `runAgent` for one turn, recovering once from a stale `--resume` id
+// (#211) and once from the transient broker startup race (#2057). Returns
+// whether a real error event was yielded, so the caller's `finally` can decide
+// hidden-worker cleanup. Split out of `runAgentInBackground` to keep that
+// function under the max-lines-per-function budget.
+async function runAgentStreamWithFailover(args: FailoverStreamArgs, eventCtx: EventContext): Promise<boolean> {
+  const { decoratedMessage, role, chatSessionId, claudeSessionId, abortSignal, attachments, userTimezone } = args;
+
+  // One retry each. Stale-`--resume` only applies when we entered with an id (a
+  // fresh session can't hit it); the broker race can hit a fresh session too.
+  // One max apiece so a looping CLI bug can't stack infinite replays.
+  const budgets: RetryBudgets = { stale: claudeSessionId ? 1 : 0, broker: 1 };
+  let currentMessage = decoratedMessage;
+  let currentClaudeSessionId = claudeSessionId;
+  let didError = false;
+
+  while (true) {
+    // A stop before the (re)spawn must not run another turn. Guards the first
+    // pass and both recovery replays — runAgent has no already-aborted guard of
+    // its own, and an already-aborted signal never fires the CLI abort handler.
+    if (abortSignal.aborted) break;
+    const runArgs = {
+      message: currentMessage,
+      role,
+      workspacePath,
+      sessionId: chatSessionId,
+      port: PORT,
+      claudeSessionId: currentClaudeSessionId,
+      abortSignal,
+      attachments,
+      userTimezone,
+    };
+    const pass = await streamOnce(runArgs, budgets, eventCtx);
+    didError = didError || pass.didError;
+    if (!pass.recovery) break;
+
+    discardAbortedPass(eventCtx);
+    if (pass.recovery === "stale") {
+      budgets.stale--;
+      currentMessage = await recoverStaleSession(chatSessionId, decoratedMessage);
+      currentClaudeSessionId = undefined;
+    } else {
+      budgets.broker--;
+      await recoverBrokerNotReady(chatSessionId, abortSignal);
+    }
+  }
+  return didError;
 }
 
 async function runAgentInBackground(params: BackgroundRunParams): Promise<void> {
@@ -949,69 +1159,13 @@ async function runAgentInBackground(params: BackgroundRunParams): Promise<void> 
     pendingSkill: null,
   };
 
-  // Retry budget for the stale `--resume` id fail-over (#211). Only
-  // meaningful when we entered with a `claudeSessionId`; a fresh
-  // session can't hit that error. One retry max so a looping CLI
-  // bug can't stack infinite replays of the transcript.
-  let failoverAttemptsRemaining = claudeSessionId ? 1 : 0;
-  let currentMessage = decoratedMessage;
-  let currentClaudeSessionId = claudeSessionId;
-  // Tracks whether this run threw, so the finally can decide whether a
-  // hidden worker session's files are safe to delete (success) or
-  // should be kept for inspection (error).
+  // Tracks whether this run threw or yielded an error event, so the
+  // finally can decide whether a hidden worker session's files are safe
+  // to delete (success) or should be kept for inspection (error).
   let didError = false;
 
   try {
-    while (true) {
-      let staleSessionDetected = false;
-      for await (const event of runAgent({
-        message: currentMessage,
-        role,
-        workspacePath,
-        sessionId: chatSessionId,
-        port: PORT,
-        claudeSessionId: currentClaudeSessionId,
-        abortSignal,
-        attachments,
-        userTimezone,
-      })) {
-        if (isRecoverableStaleSession(event, failoverAttemptsRemaining)) {
-          // Swallow the error — we're about to recover. `break`
-          // abandons the current generator; since the event is only
-          // yielded after the CLI has already exited non-zero, the
-          // subprocess is dead by this point and there's nothing to
-          // clean up beyond what `for await`'s return() already does.
-          staleSessionDetected = true;
-          failoverAttemptsRemaining--;
-          break;
-        }
-        // A yielded error event (non-zero Claude exit, missing binary, a tool
-        // surfacing an error) is a real failure even though the generator
-        // didn't throw — record it so `finalizeRun`'s hidden-worker cleanup and
-        // the agent-ingest completion hook see `didError`. The stale-session
-        // failover above returns earlier, so a recoverable id doesn't count.
-        if (event.type === EVENT_TYPES.error) didError = true;
-        await handleAgentEvent(event, eventCtx);
-      }
-      if (!staleSessionDetected) break;
-
-      // Stale `--resume` recovery: clear the bad id from meta so the
-      // next *external* read of this session doesn't see it, build a
-      // natural-language preamble from the jsonl we already have,
-      // and loop back to `runAgent` without `--resume`. Surface a
-      // status event so the UI pause doesn't look like a hang.
-      log.warn("agent", "stale claude session id — retrying without --resume", {
-        chatSessionId,
-      });
-      await clearClaudeId(chatSessionId);
-      const preamble = await readTranscriptPreamble(chatSessionId);
-      currentMessage = preamble ? `${preamble}${decoratedMessage}` : decoratedMessage;
-      currentClaudeSessionId = undefined;
-      pushSessionEvent(chatSessionId, {
-        type: EVENT_TYPES.status,
-        message: "Previous session unavailable — continuing with local transcript.",
-      });
-    }
+    didError = await runAgentStreamWithFailover({ decoratedMessage, role, chatSessionId, claudeSessionId, abortSignal, attachments, userTimezone }, eventCtx);
     // Flush any accumulated streaming text as a single consolidated
     // line in the jsonl. This prevents per-chunk lines that would
     // appear as separate cards on session reload.
@@ -1061,7 +1215,19 @@ async function finalizeRun(chatSessionId: string, origin: SessionOrigin | undefi
     return;
   }
 
+  // Visible sessions (scheduler / skill / user chats) may also register a
+  // one-shot completion hook — a scheduled run reconciles its recorded outcome
+  // against the turn's real result here (#2057). No-op when none is registered.
+  await runCompletionHook(chatSessionId, { didError }).catch(logBackgroundError("completion-hook"));
   runPostTurnSideEffects(chatSessionId, requestStartedAt);
+  // Web Push (#2086): ping the user's devices when a turn THEY started finishes —
+  // they asked a question, walked away, and want to know when the answer is ready.
+  // Only human-initiated turns qualify (scheduler / skill / bridge / plugin are
+  // excluded — those aren't the user waiting in the browser; missing origin means
+  // "human" by convention). No-op unless enabled AND RemoteHost is connected.
+  if (origin === undefined || origin === SESSION_ORIGINS.human) {
+    notifyTaskFinished(chatSessionId, didError).catch(logBackgroundError("web-push"));
+  }
 }
 
 // Fire-and-forget post-turn processing for a normal (user-facing) chat

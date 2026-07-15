@@ -20,7 +20,12 @@ export {
   applyScheduleOverride,
   getSchedulerLogs,
   getSchedulerTasks,
+  getSchedulerTaskState,
+  recordExternalRun,
   resetSchedulerForTesting,
   type SchedulerConfig,
   type SystemTaskDef,
 } from "./adapter.js";
+// Re-exported alongside `recordExternalRun` (its `trigger` argument) so hosts
+// registering skill/user tasks import the whole surface from one place.
+export { TASK_TRIGGERS, type TaskTrigger } from "@receptron/task-scheduler";

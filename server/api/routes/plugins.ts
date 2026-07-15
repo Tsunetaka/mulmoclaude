@@ -22,6 +22,7 @@ import { collectPluginMetaDiagnostics } from "../../plugins/diagnostics.js";
 import { log } from "../../system/logger/index.js";
 import { previewSnippet } from "../../utils/logPreview.js";
 import { publishFileChange } from "../../events/file-change.js";
+import { isAblated } from "../../system/env.js";
 
 const router = Router();
 
@@ -267,6 +268,7 @@ async function dispatchPresentCollection(req: Request<object, unknown, PresentCo
   const result = await executePresentCollection(null as never, req.body);
   const slug = result.data?.collectionSlug;
   if (!slug) return result; // error result (no slug) — nothing to validate
+  if (isAblated("validation")) return result; // evaluation-only: issue reporting ablated
   // Validation is best-effort: it must never turn a successful present into a
   // 500, so swallow its failures and just present without the warning.
   try {

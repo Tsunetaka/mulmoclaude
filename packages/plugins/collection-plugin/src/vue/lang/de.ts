@@ -105,6 +105,8 @@ const deMessages: CollectionMessages = {
     kanbanUncategorized: "Nicht kategorisiert",
     kanbanOpenCard: "{label} öffnen",
     addView: "Ansicht hinzufügen",
+    addViewDesktop: "Benutzerdefinierte Ansicht",
+    addViewMobile: "Smartphone-Ansicht",
     config: {
       open: "Sammlungseinstellungen",
       title: "{title} · Einstellungen",
@@ -117,6 +119,8 @@ const deMessages: CollectionMessages = {
     customViewError: "Diese Ansicht konnte nicht geladen werden: {error}",
     addViewPrompt:
       'Ich möchte der Sammlung {title} eine benutzerdefinierte Ansicht hinzufügen. Frag mich, was ich sehen oder bearbeiten möchte, erstelle dann die HTML-Ansichtsdatei unter {base}/views/your-view.html und registriere sie in {base}/schema.json unter `views[]` (capabilities ["read"] für eine schreibgeschützte Ansicht, ["read","write"] wenn sie Datensätze bearbeitet). Folge der custom-view-Hilfe für den Datenvertrag.',
+    addMobileViewPrompt:
+      'Ich möchte der Sammlung {title} eine benutzerdefinierte Ansicht für das Smartphone (Remote-App) hinzufügen. Frag mich, was ich sehen oder bearbeiten möchte, erstelle dann die HTML-Ansichtsdatei unter {base}/views/your-view.html und registriere sie in {base}/schema.json unter `views[]` mit `target: "mobile"` (standardmäßig schreibgeschützt; deklariere `editableFields` / `allowDelete` nur, wenn sie Datensätze bearbeitet). Folge der custom-view-remote-Hilfe für den postMessage-Datenvertrag — kein fetch jeglicher Art in der Ansicht.',
     repair: "Reparieren",
     dataIssuesDetected: "{count} Datensatzdatei(en) haben Datenprobleme und fehlen möglicherweise in dieser Ansicht.",
     repairPrompt:

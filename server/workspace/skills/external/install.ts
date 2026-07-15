@@ -221,19 +221,28 @@ async function existingCanonicalUrl(metadataPath: string): Promise<string | null
 }
 
 /** Install an external skill repo into the catalog. */
-export async function installExternalRepo(opts: InstallRepoOptions, deps: ExternalInstallOptions = {}): Promise<InstallExternalRepoResult> {
+// Validate + normalise the install inputs: derive the repoId slug and sanitise
+// the subpath BEFORE it reaches `path.join` / the git sparse-checkout pattern
+// (`path.join` collapses `..`, so an un-validated subpath could escape the
+// scratch cache dir). Pure — returns either the clean inputs or the early
+// error result. Exported for unit tests.
+export function resolveInstallInputs(
+  opts: InstallRepoOptions,
+): { ok: true; repoId: string; subpath?: string } | { ok: false; result: InstallExternalRepoResult } {
   const repoId = deriveRepoId(opts.url);
-  if (!repoId) return { kind: "invalid-url", url: opts.url };
-
-  // Sanitise the subpath BEFORE it reaches `path.join` / the git
-  // sparse-checkout pattern. `path.join` collapses `..`, so an
-  // un-validated subpath could escape the scratch cache dir.
-  let subpath: string | undefined;
+  if (!repoId) return { ok: false, result: { kind: "invalid-url", url: opts.url } };
   if (opts.subpath !== undefined) {
     const clean = sanitiseSubpath(opts.subpath);
-    if (clean === null) return { kind: "invalid-subpath", subpath: opts.subpath };
-    subpath = clean;
+    if (clean === null) return { ok: false, result: { kind: "invalid-subpath", subpath: opts.subpath } };
+    return { ok: true, repoId, subpath: clean };
   }
+  return { ok: true, repoId };
+}
+
+export async function installExternalRepo(opts: InstallRepoOptions, deps: ExternalInstallOptions = {}): Promise<InstallExternalRepoResult> {
+  const inputs = resolveInstallInputs(opts);
+  if (!inputs.ok) return inputs.result;
+  const { repoId, subpath } = inputs;
 
   const workspaceRoot = deps.workspaceRoot ?? workspacePath;
   let clone: CloneResult;

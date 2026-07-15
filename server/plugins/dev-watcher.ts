@@ -42,6 +42,19 @@ export interface DevPluginChangedPayload {
   serverSideChange: boolean;
 }
 
+/** Sort the debounced file set and flag whether the server entry
+ *  (`dist/index.js`) is among the changes. */
+export function summarizeChangedFiles(files: ReadonlySet<string>): DevPluginChangedPayload {
+  const changedFiles = Array.from(files).sort();
+  const serverSideChange = changedFiles.some(isServerEntry);
+  return { changedFiles, serverSideChange };
+}
+
+/** Binds a watcher to `absDistPath` and forwards each changed relative
+ *  path to `onChange`. Injectable so tests drive synthetic file events
+ *  without touching the real filesystem. */
+type WatcherFactory = (absDistPath: string, onChange: (relativePath: string) => void) => FSWatcher;
+
 export interface WatchDevPluginsOptions {
   /** Called once per debounce burst per plugin. */
   publish: (pluginName: string, payload: DevPluginChangedPayload) => void;
@@ -60,7 +73,7 @@ export interface WatchDevPluginsOptions {
   /** Override for testing. */
   debounceMs?: number;
   /** Override the watcher factory for tests. Default uses node:fs. */
-  watcherFactory?: (absDistPath: string, onChange: (relativePath: string) => void) => FSWatcher;
+  watcherFactory?: WatcherFactory;
 }
 
 export interface DevWatcherHandle {
@@ -76,6 +89,61 @@ function defaultWatcherFactory(absDistPath: string, onChange: (relativePath: str
   });
 }
 
+interface PluginWatchContext {
+  factory: WatcherFactory;
+  opts: WatchDevPluginsOptions;
+  debounceMs: number;
+  timers: Map<string, ReturnType<typeof setTimeout>>;
+  pendingFiles: Map<string, Set<string>>;
+}
+
+/** Watch one plugin's `dist/`, debouncing each burst of file writes
+ *  into a single publish. Mutates the shared `timers` / `pendingFiles`
+ *  maps keyed by plugin name so `close()` can cancel every plugin's
+ *  in-flight burst. */
+function createPluginWatcher(plugin: RuntimePlugin, ctx: PluginWatchContext): FSWatcher {
+  const { factory, opts, debounceMs, timers, pendingFiles } = ctx;
+  const absDistPath = path.join(plugin.cachePath, "dist");
+  const watcher = factory(absDistPath, (relativePath) => {
+    const buffer = pendingFiles.get(plugin.name) ?? new Set<string>();
+    buffer.add(relativePath);
+    pendingFiles.set(plugin.name, buffer);
+
+    const existing = timers.get(plugin.name);
+    if (existing) clearTimeout(existing);
+    timers.set(
+      plugin.name,
+      setTimeout(() => {
+        const files = pendingFiles.get(plugin.name);
+        pendingFiles.delete(plugin.name);
+        timers.delete(plugin.name);
+        if (!files || files.size === 0) return;
+        const summary = summarizeChangedFiles(files);
+        if (summary.serverSideChange) opts.warnServerSideChange?.(plugin.name);
+        opts.publish(plugin.name, summary);
+      }, debounceMs),
+    );
+  });
+  // Isolate each watcher's failure: log + close just this one instead
+  // of letting the unhandled `error` event terminate the whole server.
+  // Real-world trigger: `rm -rf dist && yarn build` emits ENOENT
+  // mid-watch (fs.watch surfaces it as an `error`, not a `change`).
+  // Production wires onWatcherError through the structured logger.
+  watcher.on("error", (err) => {
+    opts.onWatcherError?.(plugin.name, err);
+    try {
+      watcher.close();
+    } catch {
+      // Already torn down — nothing to do.
+    }
+    const pending = timers.get(plugin.name);
+    if (pending) clearTimeout(pending);
+    timers.delete(plugin.name);
+    pendingFiles.delete(plugin.name);
+  });
+  return watcher;
+}
+
 /** Attach a debounced watcher to each dev plugin's `dist/`. Returns a
  *  handle whose `close()` shuts every watcher down — call it from the
  *  graceful shutdown path. */
@@ -87,47 +155,7 @@ export function watchDevPlugins(plugins: readonly RuntimePlugin[], opts: WatchDe
   const pendingFiles = new Map<string, Set<string>>();
 
   for (const plugin of plugins) {
-    const absDistPath = path.join(plugin.cachePath, "dist");
-    const watcher = factory(absDistPath, (relativePath) => {
-      const buffer = pendingFiles.get(plugin.name) ?? new Set<string>();
-      buffer.add(relativePath);
-      pendingFiles.set(plugin.name, buffer);
-
-      const existing = timers.get(plugin.name);
-      if (existing) clearTimeout(existing);
-      timers.set(
-        plugin.name,
-        setTimeout(() => {
-          const files = pendingFiles.get(plugin.name);
-          pendingFiles.delete(plugin.name);
-          timers.delete(plugin.name);
-          if (!files || files.size === 0) return;
-          const changedFiles = Array.from(files).sort();
-          const serverSideChange = changedFiles.some(isServerEntry);
-          if (serverSideChange) opts.warnServerSideChange?.(plugin.name);
-          opts.publish(plugin.name, { changedFiles, serverSideChange });
-        }, debounceMs),
-      );
-    });
-    // Isolate each watcher's failure: log + close just this one
-    // instead of letting the unhandled `error` event terminate the
-    // whole server. Real-world trigger: `rm -rf dist && yarn build`
-    // emits ENOENT mid-watch (fs.watch surfaces it as an `error`,
-    // not a `change`). Production wires onWatcherError through the
-    // structured logger.
-    watcher.on("error", (err) => {
-      opts.onWatcherError?.(plugin.name, err);
-      try {
-        watcher.close();
-      } catch {
-        // Already torn down — nothing to do.
-      }
-      const pending = timers.get(plugin.name);
-      if (pending) clearTimeout(pending);
-      timers.delete(plugin.name);
-      pendingFiles.delete(plugin.name);
-    });
-    watchers.push(watcher);
+    watchers.push(createPluginWatcher(plugin, { factory, opts, debounceMs, timers, pendingFiles }));
   }
 
   let closed = false;

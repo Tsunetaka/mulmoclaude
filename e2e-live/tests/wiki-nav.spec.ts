@@ -75,6 +75,10 @@ test.describe("wiki navigation (real workspace)", () => {
       // Three-in-one wiki landing assertion (URL + body marker +
       // B-24 /chat sentinel) — see `expectWikiPageBody` docstring.
       await expectWikiPageBody(page, targetSlug, targetMarker);
+      // Explicit URL assertion — the linter's assertion detector
+      // doesn't recognise the custom helper as one even though it
+      // asserts internally.
+      expect(page.url()).toContain(targetSlug);
     } finally {
       await removeWikiPage(sourceSlug);
       await removeWikiPage(targetSlug);
@@ -131,6 +135,8 @@ test.describe("wiki navigation (real workspace)", () => {
       await navigateToWikiPage(page, sourceSlug);
       await page.locator(`.wiki-link[data-page="${targetSlug}"]`).first().click();
       await expectWikiPageBody(page, targetSlug, targetMarker);
+      // Explicit URL assertion for the linter (see L-14 note).
+      expect(page.url()).toContain(encodeURIComponent(targetSlug));
     } finally {
       await removeWikiPage(sourceSlug);
       await removeWikiPage(targetSlug);

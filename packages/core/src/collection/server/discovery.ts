@@ -245,6 +245,21 @@ const CustomViewSchema = z.object({
     )
     .optional(),
   capabilities: z.array(z.enum(["read", "write"])).optional(),
+  // Mobile-only write policy (plans/feat-remote-writable-view.md). Default-deny:
+  // a `target: "mobile"` view may patch ONLY these fields via
+  // `__MC_VIEW.updateItem`, and may delete only when `allowDelete` is true. The
+  // host re-derives + enforces both on every mutate — never trusting the client.
+  // Ignored for desktop views (they use the token-scoped `capabilities` above).
+  editableFields: z.array(z.string().trim().min(1)).optional(),
+  allowDelete: z.boolean().optional(),
+  // Mobile-only image inlining (plans/feat-remote-view-images.md). A
+  // `target: "mobile"` view can't reach the host's localhost, so an `image`-type
+  // field's workspace path is unrenderable on the phone; listing it here makes
+  // the host inline it as a downscaled `data:` URL thumbnail in getItems pages.
+  // Opt-in (absent ⇒ none), projection- and budget-bounded host-side. Ignored
+  // for desktop views (they resolve via /api/files/raw).
+  imageFields: z.array(z.string().trim().min(1)).optional(),
+  imageMaxEdge: z.number().int().min(1).optional(),
 });
 
 // Recurrence advance for `spawn.every`. `interval` is a positive integer
@@ -461,6 +476,62 @@ const AgentIngestZ = z.object({
 // discovered from `<workspace>/feeds/` are REQUIRED to carry it (gate below).
 const IngestSchemaZ = z.discriminatedUnion("kind", [DeclarativeIngestZ, AgentIngestZ]);
 
+// Data-driven launcher-icon override (see `CollectionSchema.dynamicIcon`).
+// `source.collection` may name ANY collection (self or cross-collection),
+// so — unlike `ref`/`embed`/`when.field` elsewhere in this file — its
+// shape is validated here without a cross-field refine against a specific
+// target schema (that collection may not even be loaded yet); a bad
+// `source.collection`/`orderBy`/condition `field` fails soft at compute
+// time instead (`computeCollectionIcon`), matching this feature's locked
+// design (see plans/feat-dynamic-collection-icons.md "Open questions").
+//
+// `where` is a richer AND-of-conditions predicate than the single-field
+// `WhenSchema` used elsewhere (fields/actions) — see `../core/where`.
+//
+// A condition's comparison value is either a literal `value` or a
+// `valueFrom` reference to another record's field (e.g. a `_config`
+// singleton's `defaultCity`, resolved at compute time against the source
+// collection's own records — see `server/dynamicIcon.ts`'s `recordsById`).
+// Exactly one of the two is required: neither (nothing to compare against)
+// and both (ambiguous which wins) are equally meaningless.
+// `record` omitted → the SAME record being matched (field-to-field compare,
+// e.g. `spent > budget`); set → another record by primaryKey (e.g. `_config`).
+const ValueRefZ = z.object({
+  record: z.string().trim().min(1).optional(),
+  field: z.string().trim().min(1),
+});
+const WhereCondZ = z
+  .object({
+    field: z.string().trim().min(1),
+    op: z.enum(["eq", "ne", "in", "gt", "gte", "lt", "lte", "contains"]),
+    value: z.union([z.string(), z.array(z.string())]).optional(),
+    valueFrom: ValueRefZ.optional(),
+  })
+  .refine((cond) => (cond.value !== undefined) !== (cond.valueFrom !== undefined), {
+    message: "a where condition must declare exactly one of `value` (a literal) or `valueFrom` (a reference to another record's field), never both or neither",
+    path: ["value"],
+  })
+  .refine((cond) => cond.value === undefined || (cond.op === "in") === Array.isArray(cond.value), {
+    message: "`in` requires an array `value` (the allowed set); every other op requires a single string `value`",
+    path: ["value"],
+  });
+const WhereZ = z.array(WhereCondZ);
+const DynamicIconSourceZ = z.object({
+  collection: z.string().trim().min(1),
+  from: z.enum(["latest", "first", "when"]).optional(),
+  orderBy: z.string().trim().min(1).optional(),
+  where: WhereZ.optional(),
+});
+const DynamicIconRuleZ = z.object({
+  where: WhereZ,
+  icon: z.string().trim().min(1),
+});
+const DynamicIconSpecZ = z.object({
+  source: DynamicIconSourceZ,
+  rules: z.array(DynamicIconRuleZ),
+  fallback: z.string().trim().min(1).optional(),
+});
+
 export const CollectionSchemaZ = z
   .object({
     title: z.string().min(1),
@@ -530,6 +601,9 @@ export const CollectionSchemaZ = z
     // the `<workspace>/feeds/` registry). Optional, so every existing
     // skill schema validates unchanged.
     ingest: IngestSchemaZ.optional(),
+    // Data-driven launcher-icon override. Optional, so every existing
+    // schema validates unchanged; `source` is required within it.
+    dynamicIcon: DynamicIconSpecZ.optional(),
   })
   // The singleton value becomes a record id (and thus a `<id>.json`
   // filename), so it must satisfy the SAME `safeRecordId` rule the

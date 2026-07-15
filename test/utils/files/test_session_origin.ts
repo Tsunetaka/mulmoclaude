@@ -63,7 +63,6 @@ describe("backfillOrigin", () => {
 
   it("no-ops on missing session", async () => {
     const root = tmpRoot();
-    await backfillOrigin("nonexistent", "bridge", root);
-    // should not throw
+    await assert.doesNotReject(backfillOrigin("nonexistent", "bridge", root));
   });
 });

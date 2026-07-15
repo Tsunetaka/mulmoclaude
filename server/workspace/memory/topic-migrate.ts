@@ -53,16 +53,34 @@ interface WrittenTopic {
 export async function clusterAtomicIntoStaging(workspaceRoot: string, clusterer: MemoryClusterer): Promise<TopicMigrationResult> {
   const entries = await loadAllMemoryEntries(workspaceRoot);
   const stagingPath = topicStagingPath(workspaceRoot);
-  if (entries.length === 0) {
-    return emptyResult(stagingPath);
-  }
+  if (entries.length === 0) return emptyResult(stagingPath);
   log.info("memory", "topic-migrate: clustering", { entryCount: entries.length });
-  // Wipe stale staging BEFORE the cluster call. If the clusterer
-  // returns null or throws, we leave the workspace with no staging
-  // dir at all — that's the correct "migration didn't complete"
-  // signal. The earlier flow only cleared on success and could
-  // leave a stale tree in place after a failed run, which a later
-  // swap would happily promote.
+
+  const map = await runClustererOrCleanup(entries, stagingPath, clusterer);
+  if (!map) return { ...emptyResult(stagingPath), inputCount: entries.length };
+
+  const topicCounts: Record<MemoryType, number> = { preference: 0, interest: 0, fact: 0, reference: 0 };
+  const written = await writeTopicsToStaging(stagingPath, map, topicCounts);
+  await writeStagingIndex(stagingPath, written);
+
+  const result: TopicMigrationResult = {
+    noop: false,
+    inputCount: entries.length,
+    topicCounts,
+    bulletsLost: countBulletsLost(entries, map),
+    stagingPath,
+  };
+  log.info("memory", "topic-migrate: staging ready", { stagingPath, topicCounts, bulletsLost: result.bulletsLost });
+  return result;
+}
+
+// Wipe stale staging BEFORE the cluster call. If the clusterer
+// returns null or throws, we leave the workspace with no staging
+// dir at all — that's the correct "migration didn't complete"
+// signal. The earlier flow only cleared on success and could leave
+// a stale tree in place after a failed run, which a later swap
+// would happily promote.
+async function runClustererOrCleanup(entries: MemoryEntry[], stagingPath: string, clusterer: MemoryClusterer): Promise<ClusterMap | null> {
   await resetStaging(stagingPath);
   let map: ClusterMap | null = null;
   let clustererThrew = false;
@@ -81,16 +99,15 @@ export async function clusterAtomicIntoStaging(workspaceRoot: string, clusterer:
     // failure modes (#1072 review).
     if (!clustererThrew) log.warn("memory", "topic-migrate: clusterer returned null");
     await rm(stagingPath, { recursive: true, force: true });
-    return { ...emptyResult(stagingPath), inputCount: entries.length };
+    return null;
   }
+  return map;
+}
 
-  const result: TopicMigrationResult = {
-    noop: false,
-    inputCount: entries.length,
-    topicCounts: { preference: 0, interest: 0, fact: 0, reference: 0 },
-    bulletsLost: countBulletsLost(entries, map),
-    stagingPath,
-  };
+// Write each topic file. Mutates `topicCounts` in place — the caller
+// uses the same object as the result's `topicCounts`, so extracting
+// this helper keeps a single source of truth for the running counts.
+async function writeTopicsToStaging(stagingPath: string, map: ClusterMap, topicCounts: Record<MemoryType, number>): Promise<WrittenTopic[]> {
   const written: WrittenTopic[] = [];
   for (const type of MEMORY_TYPES) {
     const usedSlugs = new Set<string>();
@@ -100,19 +117,13 @@ export async function clusterAtomicIntoStaging(workspaceRoot: string, clusterer:
         await writeTopicFileToStaging(stagingPath, type, topic, writtenSlug);
         usedSlugs.add(writtenSlug);
         written.push({ type, topic, writtenSlug });
-        result.topicCounts[type] += 1;
+        topicCounts[type] += 1;
       } catch (err) {
         log.warn("memory", "topic-migrate: write failed", { type, topic: topic.topic, writtenSlug, error: errorMessage(err) });
       }
     }
   }
-  await writeStagingIndex(stagingPath, written);
-  log.info("memory", "topic-migrate: staging ready", {
-    stagingPath,
-    topicCounts: result.topicCounts,
-    bulletsLost: result.bulletsLost,
-  });
-  return result;
+  return written;
 }
 
 // Pick a slug that hasn't been used yet within this type. The

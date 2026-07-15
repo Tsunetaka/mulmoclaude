@@ -15,6 +15,8 @@ import {
   type McpConfigFile,
   type McpServerEntry,
 } from "../../system/config.js";
+import { readCspExtraSync } from "../../utils/files/csp-io.js";
+import type { CspExtraHosts } from "../../../src/utils/html/previewCsp.js";
 import { badRequest, serverError } from "../../utils/httpError.js";
 import { errorMessage } from "../../utils/errors.js";
 import { isRecord } from "../../utils/types.js";
@@ -37,6 +39,10 @@ import { ONE_SECOND_MS } from "../../utils/time.js";
 export interface ConfigResponse {
   settings: AppSettings;
   mcp: { servers: McpServerEntry[] };
+  /** User-supplied CSP extension for sandboxed views (#1989), already
+   *  validated server-side. The client threads it into the custom-view /
+   *  file-preview CSP. Empty object ⇒ base policy only. */
+  csp: CspExtraHosts;
 }
 
 export interface ConfigErrorResponse {
@@ -49,6 +55,7 @@ function buildFullResponse(): ConfigResponse {
   return {
     settings: loadSettings(),
     mcp: { servers: toMcpEntries(loadMcpConfig()) },
+    csp: readCspExtraSync(),
   };
 }
 
@@ -163,6 +170,18 @@ router.put(API_ROUTES.config.settings, (req: Request<unknown, unknown, AppSettin
   const merged: AppSettings = { ...existing, ...normaliseAppSettingsPatch(body) };
   if (body.effortLevel === null) {
     delete merged.effortLevel;
+  }
+  // Chat-index null-sentinel (#1944): "off" is the documented default
+  // (chatIndexMode() maps undefined → "off"), so the tab sends `null`
+  // to drop the field entirely and keep settings.json free of default
+  // values. Without this delete, the previous on-disk value would
+  // leak through the spread and stay set.
+  if (body.chatIndex === null) {
+    delete merged.chatIndex;
+  }
+  // Journal null-sentinel — mirrors chatIndex / effortLevel.
+  if (body.journal === null) {
+    delete merged.journal;
   }
   if (!runSaveOrFail(res, () => saveSettings(merged), "saveSettings failed")) {
     return;

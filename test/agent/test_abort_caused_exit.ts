@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isAbortCausedExit, buildExitErrorEvent } from "../../server/agent/backend/claude-code.js";
+import { isAbortCausedExit, buildExitErrorEvent, brokerNotReadyErrorEvent } from "../../server/agent/backend/claude-code.js";
 
 // Regression coverage for the stop-button false-error fix (#1625).
 // readAgentEvents only suppresses the exit-error event when
@@ -53,4 +53,30 @@ test("buildExitErrorEvent: signal-only exit names the signal, never 'code null'"
   const errEvent = buildExitErrorEvent(null, "SIGSEGV", undefined, "");
   assert.equal(errEvent?.message, "claude terminated by signal SIGSEGV");
   assert.equal(buildExitErrorEvent(null, null, undefined, "")?.message, "claude terminated by signal unknown");
+});
+
+// #2057: the broker startup race can leave the CLI exiting 0 (the model gives up
+// after the first tool call fails). buildExitErrorEvent returns null on a clean
+// exit, so brokerNotReadyErrorEvent must recover the signal from stderr.
+test("brokerNotReadyErrorEvent: surfaces the permission-prompt-tool error from stderr", () => {
+  const stderr =
+    "Error: MCP tool mcp__mulmoclaude__handlePermission (passed via --permission-prompt-tool) not found. Available MCP tools: mcp__claude_ai_Gmail__x";
+  const event = brokerNotReadyErrorEvent(stderr);
+  assert.equal(event?.type, "error");
+  assert.equal(event?.message, stderr);
+});
+
+test("brokerNotReadyErrorEvent: returns null for unrelated stderr", () => {
+  assert.equal(brokerNotReadyErrorEvent(""), null);
+  assert.equal(brokerNotReadyErrorEvent("claude exited with code 1"), null);
+  assert.equal(brokerNotReadyErrorEvent("role 'x' not found"), null);
+});
+
+// A clean exit whose stderr carries the race phrase must still surface an error
+// (the fall-through path in readAgentEvents), while a truly clean run stays silent.
+test("brokerNotReadyErrorEvent complements buildExitErrorEvent on a clean exit", () => {
+  const raceStderr = "MCP tool mcp__mulmoclaude__handlePermission (passed via --permission-prompt-tool) not found.";
+  assert.equal(buildExitErrorEvent(0, null, undefined, raceStderr), null); // clean exit → no exit error
+  assert.equal(brokerNotReadyErrorEvent(raceStderr)?.message, raceStderr); // …but the race is still surfaced
+  assert.equal(brokerNotReadyErrorEvent("all good, no tools needed"), null);
 });

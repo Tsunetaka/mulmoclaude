@@ -82,6 +82,8 @@ schedule: daily 08:00
 Check unread Slack channels and list the important messages.
 ```
 
+> **⚠️ All times are UTC.** `daily 08:00` fires at 08:00 UTC — e.g. 17:00 JST (UTC+9). To run at 08:00 local JST, use `daily 23:00` (23:00 UTC the previous day = 08:00 JST).
+
 ---
 
 ## Creating Tasks

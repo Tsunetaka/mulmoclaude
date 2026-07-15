@@ -211,18 +211,46 @@
             <span class="material-icons text-sm">{{ cv.icon || (cv.target === "mobile" ? "smartphone" : "dashboard_customize") }}</span>
             <span>{{ cv.label }}</span>
           </button>
-          <!-- "+" — ask Claude to author a new custom view for this collection. -->
-          <button
-            v-if="canAddCustomView"
-            type="button"
-            class="h-8 w-8 flex items-center justify-center rounded bg-white text-slate-500 border border-slate-200 hover:bg-slate-50"
-            :title="t('collectionsView.addView')"
-            :aria-label="t('collectionsView.addView')"
-            data-testid="collection-view-add"
-            @click="addCustomView"
-          >
-            <span class="material-icons text-sm">add</span>
-          </button>
+          <!-- "+" — ask Claude to author a new custom view for this collection.
+               Opens a chooser (desktop vs phone target) when the host supports
+               remote views; otherwise seeds the desktop prompt directly. -->
+          <div v-if="canAddCustomView" ref="addMenuRef" class="relative">
+            <button
+              type="button"
+              class="h-8 w-8 flex items-center justify-center rounded bg-white text-slate-500 border border-slate-200 hover:bg-slate-50"
+              :title="t('collectionsView.addView')"
+              :aria-label="t('collectionsView.addView')"
+              :aria-expanded="addMenuOpen"
+              data-testid="collection-view-add"
+              @click="onAddViewClick"
+            >
+              <span class="material-icons text-sm">add</span>
+            </button>
+            <div
+              v-if="addMenuOpen"
+              class="absolute left-0 top-full mt-1 z-20 min-w-max rounded border border-slate-200 bg-white shadow-lg py-1"
+              data-testid="collection-view-add-menu"
+            >
+              <button
+                type="button"
+                class="w-full h-8 px-3 flex items-center gap-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                data-testid="collection-view-add-desktop"
+                @click="addCustomView('desktop')"
+              >
+                <span class="material-icons text-sm">dashboard_customize</span>
+                <span>{{ t("collectionsView.addViewDesktop") }}</span>
+              </button>
+              <button
+                type="button"
+                class="w-full h-8 px-3 flex items-center gap-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                data-testid="collection-view-add-mobile"
+                @click="addCustomView('mobile')"
+              >
+                <span class="material-icons text-sm">smartphone</span>
+                <span>{{ t("collectionsView.addViewMobile") }}</span>
+              </button>
+            </div>
+          </div>
           <!-- Gear — per-collection config (currently: manage/delete custom
                views). Standalone only, and only when there's a view to manage. -->
           <button
@@ -416,8 +444,6 @@
           v-if="activeCustomView.target === 'mobile'"
           :slug="collection.slug"
           :view="activeCustomView"
-          :schema="collection.schema"
-          :items="items"
           @start-chat="onCustomViewStartChat"
         />
         <CollectionCustomView v-else :slug="collection.slug" :view="activeCustomView" @open-item="onCustomViewOpenItem" @start-chat="onCustomViewStartChat" />
@@ -1371,9 +1397,14 @@ async function loadCollection(slug: string): Promise<void> {
   // A `?selected=<id>` deep link opens that record in read-only
   // mode once its items are available. Guard against a stale load:
   // only act if we're still on the slug that triggered this fetch.
+  // Deliberately DON'T force calendar view here: the earlier
+  // `maybeOpenCalendarForSelected` behaviour also wrote "calendar" to
+  // localStorage, permanently overriding the user's table/kanban
+  // preference for that collection. Deep-linked records open in the
+  // user's saved view; if they want the calendar day popup, they can
+  // switch to calendar from the header (#1675).
   if (collection.value?.slug === slug) {
     syncViewToSelected();
-    maybeOpenCalendarForSelected();
   }
   maybeAutoRefreshFeed(slug);
 }
@@ -1572,16 +1603,48 @@ function builtInViewOrTable(mode: CollectionViewMode): BuiltInViewMode {
  *  authored under feeds/<slug>/ and the seed prompt points there. */
 const canAddCustomView = computed<boolean>(() => Boolean(collection.value) && !embedded.value);
 
+// ── "+" add-view chooser (desktop vs phone target) ───────────────────
+const addMenuOpen = ref<boolean>(false);
+const addMenuRef = ref<HTMLElement | null>(null);
+
+/** Whether authoring a phone (remote app) view is worth offering — mirrors
+ *  the selector filter above: without the host's `fetchRemoteView` binding a
+ *  mobile view could be authored but never shown here. */
+const canAddMobileView = computed<boolean>(() => Boolean(cui.fetchRemoteView));
+
+/** "+" click: open the target chooser, or skip the one-item menu and seed
+ *  the desktop prompt directly when mobile views aren't available. */
+function onAddViewClick(): void {
+  if (!canAddMobileView.value) {
+    addCustomView("desktop");
+    return;
+  }
+  addMenuOpen.value = !addMenuOpen.value;
+}
+
+function closeAddMenuOnOutsideClick(event: MouseEvent): void {
+  if (!addMenuRef.value?.contains(event.target as Node)) addMenuOpen.value = false;
+}
+
+watch(addMenuOpen, (open) => {
+  if (open) document.addEventListener("mousedown", closeAddMenuOnOutsideClick);
+  else document.removeEventListener("mousedown", closeAddMenuOnOutsideClick);
+});
+
 /** Seed a chat asking Claude to author a new custom view for this collection.
  *  Reuses the same chat-seed path as collection actions — the host injects a
  *  templated prompt; Claude asks, authors the HTML, and registers it. The
  *  authoring base is source-aware: a feed lives under `feeds/<slug>/`, every
- *  other collection under the `data/skills/<slug>/` staging dir. */
-function addCustomView(): void {
+ *  other collection under the `data/skills/<slug>/` staging dir. The prompt
+ *  is target-aware: phone views follow the custom-view-remote contract and
+ *  register with `target: "mobile"`. */
+function addCustomView(target: "desktop" | "mobile"): void {
+  addMenuOpen.value = false;
   const current = collection.value;
   if (!current) return;
   const base = current.source === "feed" ? `feeds/${current.slug}` : `data/skills/${current.slug}`;
-  const prompt = t("collectionsView.addViewPrompt", { title: current.title, base });
+  const key = target === "mobile" ? "collectionsView.addMobileViewPrompt" : "collectionsView.addViewPrompt";
+  const prompt = t(key, { title: current.title, base });
   if (props.sendTextMessage) {
     props.sendTextMessage(prompt);
     return;
@@ -2145,18 +2208,6 @@ function onDayClose(): void {
   closeView();
 }
 
-/** Deep-link entry: a `?selected=<id>` link to a calendar-capable collection
- *  opens in calendar view with the popup focused on the record's day. Runs
- *  on load / slug change only (not on in-app selection), so table users
- *  aren't forced into the calendar. */
-function maybeOpenCalendarForSelected(): void {
-  if (embedded.value || !hasCalendar.value || !viewing.value) return;
-  const day = dayOfItem(viewing.value);
-  if (!day) return;
-  view.value = "calendar";
-  openDay.value = day;
-}
-
 /** Kanban card dropped in a column → set the record's group field to the
  *  column value (the empty string clears it for the Uncategorized column).
  *  Reuses the inline-edit path (optimistic write + PUT + rollback). */
@@ -2180,6 +2231,7 @@ watch(
       view.value = (slug && readCollectionViewMode(slug)) || "table";
       anchorOverride.value = null;
       kanbanOverride.value = null;
+      addMenuOpen.value = false;
       // A sort belongs to a collection's own schema, so don't carry it across —
       // restore the new collection's stored (shared) sort instead.
       sortState.value = storedSortFor(slug);
@@ -2262,6 +2314,7 @@ onUnmounted(() => {
   changeUnsub = null;
   clearLiveRefreshTimer();
   if (refreshNoteTimer !== undefined) clearTimeout(refreshNoteTimer);
+  document.removeEventListener("mousedown", closeAddMenuOnOutsideClick);
 });
 
 // Embedded mode: report view/anchor changes so the chat card persists them

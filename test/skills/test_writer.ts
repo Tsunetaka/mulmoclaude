@@ -188,19 +188,28 @@ describe("deleteProjectSkill", () => {
     assert.deepEqual(result, { kind: "invalid-slug", slug: "Bad/slug" });
   });
 
-  it("does not touch user-scope skills with the same name", async () => {
-    // We can't override discoverSkills' user scope without injecting
-    // a custom userDir, so this test simulates the user-skill case
-    // by writing a fake user-scope skill via the same mechanism that
-    // discovery uses. Skipped here because deleteProjectSkill calls
-    // `discoverSkills({ workspaceRoot })` which always uses the real
-    // ~/.claude/skills. We test the guard logic via the `not-found`
-    // path above and rely on the e2e + manual smoke for the
-    // user-scope-refusal case.
-    //
-    // (If discoverSkills grows a userDir override for the real
-    // function — currently only `collectSkillsFromDir` is testable —
-    // come back and add a real assertion here.)
+  it("refuses to delete when only a user-scope skill has that name, leaving the user file intact", async () => {
+    // Seed a user-scope skill named `user-only` under the temp userDir
+    // and NO project-scope skill by that name. deleteProjectSkill
+    // must return `user-scope` — its whole purpose is to refuse
+    // silently-deleting a user's `~/.claude/skills/<name>/` when the
+    // caller asked to remove a project skill. (When both scopes have
+    // the same name, `discoverSkills` resolves project-wins-over-user,
+    // so the guard doesn't apply — that's the intended shadowing
+    // model, verified separately by the discovery tests.)
+    const name = "user-only";
+    const userSkillDir = join(userDir, name);
+    const userSkillFile = join(userSkillDir, "SKILL.md");
+    await mkdir(userSkillDir, { recursive: true });
+    await writeFile(userSkillFile, "---\ndescription: user copy\n---\n\nUser body.\n");
+
+    const result = await deleteProjectSkill({ workspaceRoot: workspace, name, userDir });
+    assert.deepEqual(result, { kind: "user-scope", name });
+
+    // The guard is worthless if it says "refused" AFTER deleting.
+    // Assert the file is still readable and unchanged.
+    const after = await readFile(userSkillFile, "utf-8");
+    assert.match(after, /User body\./);
   });
 
   it("survives a leftover non-SKILL file in the skill dir", async () => {

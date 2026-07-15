@@ -4,7 +4,7 @@
 // fold of the overflow-y-auto pane.
 
 import { test, expect, type Page, type Route } from "@playwright/test";
-import { mockAllApis } from "../fixtures/api";
+import { mockAllApis, enableFilesShowSystem } from "../fixtures/api";
 
 // Build a tree wide enough that the target row sits well below the
 // pane's clientHeight. Two top-level dirs each with 40 files; the
@@ -117,6 +117,7 @@ async function expectSelectedRowInView(page: Page): Promise<void> {
 test.beforeEach(async ({ page }) => {
   await mockAllApis(page);
   await mockTree(page);
+  await enableFilesShowSystem(page);
 });
 
 test.describe("file tree auto-scroll to selection", () => {

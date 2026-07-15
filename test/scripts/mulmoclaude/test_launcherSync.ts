@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import nodeOs from "node:os";
 import * as sync from "../../../scripts/mulmoclaude/launcherSync.mjs";
 
@@ -320,7 +321,7 @@ describe("auditLauncherSync — invariant 5: gui-chat-protocol peer dep lockstep
 
 describe("auditLauncherSync — repo self-check", () => {
   it("finds no failing findings against the real repo (post PR #1921)", async () => {
-    const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..", "..");
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
     const findings = await sync.auditLauncherSync({ root: repoRoot });
     const failing = findings.filter((finding) => finding.kind !== "skipped");
     const rendered = failing.map((finding) => `  [${finding.kind}] ${finding.message}`).join("\n");

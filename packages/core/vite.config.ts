@@ -43,12 +43,17 @@ export default defineConfig({
         // Browser-safe remote custom-view contract (phase 3) — consumed by the
         // host server, the desktop phone-frame preview, and mulmoserver.
         "remote-view/index": "src/remote-view/index.ts",
+        // Remote-host transport: the browser-safe command-channel protocol
+        // (shared by host + mobile client) and the server-only host runner +
+        // connect lifecycle + Firebase init/auth. `firebase` is a peer (below).
+        "remote-host/index": "src/remote-host/index.ts",
+        "remote-host/server/index": "src/remote-host/server/index.ts",
       },
       formats: ["es", "cjs"],
       fileName: (format, entryName) => `${entryName}.${format === "es" ? "js" : "cjs"}`,
     },
     rollupOptions: {
-      external: [/^node:/, /^@receptron\//, "zod", "gui-chat-protocol", "fast-xml-parser", "js-yaml"],
+      external: [/^node:/, /^@receptron\//, /^firebase/, "zod", "gui-chat-protocol", "fast-xml-parser", "js-yaml"],
       output: { exports: "named" },
     },
     minify: false,

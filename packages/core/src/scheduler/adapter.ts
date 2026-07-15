@@ -178,7 +178,7 @@ export async function applyScheduleOverride(taskId: string, schedule: SystemTask
   task.schedule = schedule;
 
   // Recalculate next window so the UI reflects the new schedule
-  const nextScheduledAt = computeNextScheduled(task);
+  const nextScheduledAt = computeNextScheduledFor(task.schedule);
   await safeUpdateState(taskId, { nextScheduledAt });
 
   return true;
@@ -208,6 +208,43 @@ export function getSchedulerTasks(): {
   }));
 }
 
+/** Read the persisted execution state for any task id (system, user, or
+ *  skill). Returns an empty state when the id has never run — used by the API
+ *  route to attach last-run / next-run / history state to user + skill tasks
+ *  it lists from other sources. */
+export function getSchedulerTaskState(taskId: string): TaskExecutionState {
+  return stateMap.get(taskId) ?? emptyState(taskId);
+}
+
+/** Record a run of an EXTERNAL (skill / user) task — one registered directly
+ *  on the task-manager rather than through `initScheduler`. Persists a log
+ *  entry + updates state so these tasks get the same history / last-run /
+ *  next-run as system tasks. Because they are fire-and-forget (`startChat`
+ *  spawns an async chat), `errorMessage` reflects whether the *dispatch*
+ *  succeeded, not the chat's eventual outcome; `chatSessionId` links the run
+ *  to the spawned session. */
+export async function recordExternalRun(params: {
+  id: string;
+  name: string;
+  schedule: TaskDefinition["schedule"];
+  scheduledFor: string;
+  startedAt: string;
+  durationMs: number;
+  trigger: TaskTrigger;
+  errorMessage: string | null;
+  chatSessionId?: string;
+}): Promise<void> {
+  await persistRun({
+    meta: { id: params.id, name: params.name, schedule: params.schedule },
+    scheduledFor: params.scheduledFor,
+    startedAt: params.startedAt,
+    durationMs: params.durationMs,
+    trigger: params.trigger,
+    errMsg: params.errorMessage,
+    chatSessionId: params.chatSessionId,
+  });
+}
+
 /** Test-only: clear config + in-memory state. */
 export function resetSchedulerForTesting(): void {
   config = null;
@@ -231,26 +268,43 @@ async function executeAndLog(task: SystemTaskDef, scheduledFor: string, trigger:
   const durationMs = Date.now() - startMs;
   // Persistence is best-effort — never let disk failures propagate to the
   // tick loop or abort startup catch-up.
-  await safePersist(task, scheduledFor, startedAt, durationMs, trigger, errMsg);
+  await persistRun({ meta: { id: task.id, name: task.name, schedule: task.schedule }, scheduledFor, startedAt, durationMs, trigger, errMsg });
 }
 
-/** Best-effort persistence — state and log are independent. A failure in
- *  one does not block the other, and neither propagates upward. */
-async function safePersist(
-  task: SystemTaskDef,
-  scheduledFor: string,
-  startedAt: string,
-  durationMs: number,
-  trigger: TaskTrigger,
-  errMsg: string | null,
-): Promise<void> {
+/** The minimum a run needs to persist state + a log entry — shared by system
+ *  tasks (`executeAndLog`) and external skill/user runs (`recordExternalRun`). */
+interface TaskRunMeta {
+  id: string;
+  name: string;
+  schedule: TaskDefinition["schedule"];
+}
+
+interface RunRecord {
+  meta: TaskRunMeta;
+  scheduledFor: string;
+  startedAt: string;
+  durationMs: number;
+  trigger: TaskTrigger;
+  errMsg: string | null;
+  chatSessionId?: string;
+}
+
+/** Best-effort persistence — state and log are independent, so one failing
+ *  never blocks the other and neither propagates upward. */
+async function persistRun(run: RunRecord): Promise<void> {
+  await writeRunState(run);
+  await writeRunLog(run);
+}
+
+async function writeRunState(run: RunRecord): Promise<void> {
+  const { meta, scheduledFor, durationMs, errMsg } = run;
   const isSuccess = errMsg === null;
-  const currentState = stateMap.get(task.id);
+  const currentState = stateMap.get(meta.id);
   try {
     await updateAndSave(
       stateFilePath(),
       stateMap,
-      task.id,
+      meta.id,
       {
         lastRunAt: scheduledFor,
         lastRunResult: isSuccess ? TASK_RESULTS.success : TASK_RESULTS.error,
@@ -258,19 +312,24 @@ async function safePersist(
         lastErrorMessage: errMsg,
         consecutiveFailures: isSuccess ? 0 : (currentState?.consecutiveFailures ?? 0) + 1,
         totalRuns: (currentState?.totalRuns ?? 0) + 1,
-        nextScheduledAt: computeNextScheduled(task),
+        nextScheduledAt: computeNextScheduledFor(meta.schedule),
       },
       stateDeps(),
     );
   } catch (err) {
-    logger().warn("state persistence failed", { taskId: task.id, error: String(err) });
+    logger().warn("state persistence failed", { taskId: meta.id, error: String(err) });
   }
+}
+
+async function writeRunLog(run: RunRecord): Promise<void> {
+  const { meta, scheduledFor, startedAt, durationMs, trigger, errMsg, chatSessionId } = run;
+  const isSuccess = errMsg === null;
   try {
     await appendLogEntry(
       logsDir(),
       {
-        taskId: task.id,
-        taskName: task.name,
+        taskId: meta.id,
+        taskName: meta.name,
         scheduledFor,
         startedAt,
         completedAt: new Date().toISOString(),
@@ -278,11 +337,12 @@ async function safePersist(
         durationMs,
         trigger,
         ...(errMsg !== null && { errorMessage: errMsg }),
+        ...(chatSessionId !== undefined && { chatSessionId }),
       },
       logDeps,
     );
   } catch (err) {
-    logger().warn("log persistence failed", { taskId: task.id, error: String(err) });
+    logger().warn("log persistence failed", { taskId: meta.id, error: String(err) });
   }
 }
 
@@ -307,8 +367,8 @@ function computeCurrentWindow(task: SystemTaskDef): string {
   return windowMs !== null && windowMs <= nowMs ? new Date(windowMs).toISOString() : new Date(nowMs).toISOString();
 }
 
-function computeNextScheduled(task: SystemTaskDef): string | null {
-  const coreSchedule = toCoreSchedule(task.schedule);
+function computeNextScheduledFor(schedule: TaskDefinition["schedule"]): string | null {
+  const coreSchedule = toCoreSchedule(schedule);
   const next = nextWindowAfter(coreSchedule, Date.now() + 1);
   return next !== null ? new Date(next).toISOString() : null;
 }

@@ -9,6 +9,7 @@ import { onScopeDispose, ref, type Ref } from "vue";
 import { createVoiceCapture, localeToWhisperLanguage, type VoiceCaptureTransport } from "@mulmoclaude/core/whisper/client";
 import { API_ROUTES } from "../config/apiRoutes";
 import { apiGet, apiPost } from "../utils/api";
+import { deriveVoiceModelReadiness } from "./useVoiceInput.helpers";
 
 export interface VoiceModelStatus {
   name: string;
@@ -61,11 +62,7 @@ export function useVoiceInput(opts: UseVoiceInputOptions): UseVoiceInput {
     async getStatus() {
       const result = await apiGet<VoiceInputStatusResponse>(API_ROUTES.transcribe.model);
       if (!result.ok) throw new Error(result.error || "status failed");
-      const { capable, enabled, model } = result.data;
-      return {
-        ready: capable && enabled && model.state === "ready",
-        downloading: capable && enabled && model.state === "downloading",
-      };
+      return deriveVoiceModelReadiness(result.data);
     },
   };
 

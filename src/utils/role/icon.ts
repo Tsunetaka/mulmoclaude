@@ -10,9 +10,16 @@ import type { Role } from "../../config/roles";
 // don't render the literal text inside a Material Icons span.
 const MATERIAL_ICON_RE = /^[a-z_]+$/;
 
+// `smart_toy` (robot glyph) is used for both fallback cases —
+// "role not found" and "role icon isn't a valid Material Icon name".
+// Reserved specifically to avoid collision with `star`, which is the
+// PinToggle glyph for collection shortcuts; using `star` here would
+// make an unknown role look identical to a pinned collection (#1684).
+const FALLBACK_ICON = "smart_toy";
+
 export function roleIcon(roles: Role[], roleId: string): string {
-  const icon = roles.find((role) => role.id === roleId)?.icon ?? "star";
-  return MATERIAL_ICON_RE.test(icon) ? icon : "smart_toy";
+  const icon = roles.find((role) => role.id === roleId)?.icon ?? FALLBACK_ICON;
+  return MATERIAL_ICON_RE.test(icon) ? icon : FALLBACK_ICON;
 }
 
 export function roleName(roles: Role[], roleId: string): string {

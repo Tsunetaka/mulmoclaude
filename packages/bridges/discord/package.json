@@ -23,11 +23,11 @@
   "dependencies": {
     "@mulmobridge/client": "^0.1.4",
     "@mulmobridge/protocol": "^0.1.4",
-    "discord.js": "^14.26.4",
+    "discord.js": "^14.26.5",
     "dotenv": "^17.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0",
+    "@types/node": "^26.1.1",
     "typescript": "^6.0.3"
   }
 }

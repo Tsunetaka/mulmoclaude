@@ -21,6 +21,7 @@ import { mkdir } from "node:fs/promises";
 import { discoverCollections, loadCollection, type DiscoveryOptions, type LoadedCollection } from "../collection/server";
 import type { CollectionSchema } from "../collection";
 import { errMsg, log } from "./config.js";
+import { evalNow } from "./clock.js";
 import { reconcileAllItems, reconcileItem, sweepStaleActiveEntries } from "./reconciler.js";
 
 // Collections don't get added / removed rapidly; 30 s is a comfortable
@@ -161,7 +162,7 @@ export async function _tickTimeTriggersForTesting(now?: Date): Promise<void> {
  *  (recurrence whose successors come due over time). Collections with
  *  neither are skipped. Idempotent. The schema is parsed back from the
  *  watcher's cached `schemaJson` to avoid a per-tick disk read. */
-async function tickTimeTriggers(now: Date = new Date()): Promise<void> {
+async function tickTimeTriggers(now: Date = evalNow()): Promise<void> {
   for (const entry of watchers.values()) {
     let schema: CollectionSchema;
     try {

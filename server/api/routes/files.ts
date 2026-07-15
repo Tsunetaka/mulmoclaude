@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { ReadStream, Stats, createReadStream, readFileSync, realpathSync } from "fs";
+import { Dirent, ReadStream, Stats, createReadStream, readFileSync, realpathSync } from "fs";
 import { mkdir, realpath, writeFile } from "fs/promises";
 import path from "path";
 import { workspacePath } from "../../workspace/workspace.js";
@@ -14,6 +14,67 @@ import { classifyAsWikiPage, writeWikiPage } from "../../workspace/wiki-pages/io
 import { log } from "../../system/logger/index.js";
 import { previewSnippet } from "../../utils/logPreview.js";
 import { publishFileChange } from "../../events/file-change.js";
+import { spawn } from "node:child_process";
+
+// Cross-platform "open this file with the host's default handler" that
+// never lets the path travel through a shell parser. Windows earlier
+// used `cmd /c start "" <path>` — `cmd` DOES tokenise the arguments,
+// so a workspace filename with `&` / `|` / `^` / a leading `-` / etc.
+// could be reinterpreted as command syntax (Codex + CodeQL flagged
+// this on #1985). `explorer.exe <path>` is fed to CreateProcess as an
+// array argv (no shell parsing) and treats the argument as a
+// filesystem path.
+//
+// Returns a promise that settles based on `spawn` vs `error` events —
+// NOT process exit. We can't tell whether the associated app actually
+// opened a window (explorer.exe returns exit code 1 even on success),
+// but we CAN distinguish "spawn succeeded" from "command not found /
+// permission denied" (e.g. `xdg-open` missing on a headless Linux
+// host). Client-side error handling depends on this signal.
+function spawnDetachedOsCommand(command: string, args: readonly string[], label: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    let settled = false;
+    child.once("error", (err) => {
+      if (settled) return;
+      settled = true;
+      log.warn("files", `${label}: spawn error`, { platform: process.platform, error: err.message });
+      resolve(false);
+    });
+    child.once("spawn", () => {
+      if (settled) return;
+      settled = true;
+      child.unref();
+      resolve(true);
+    });
+  });
+}
+
+export function openInHostOs(absPath: string): Promise<boolean> {
+  const { platform } = process;
+  const [command, args] =
+    platform === "darwin" ? (["open", [absPath]] as const) : platform === "win32" ? (["explorer.exe", [absPath]] as const) : (["xdg-open", [absPath]] as const);
+  return spawnDetachedOsCommand(command, args, "open");
+}
+
+// Reveal the file in the host file manager. macOS `open -R` and
+// Windows `explorer /select,` open the containing folder with the
+// file selected; Linux `xdg-open <dir>` opens the folder only —
+// there's no portable "select this item" across the many Linux file
+// managers, and landing next to the file is enough for drag-and-drop
+// (#1985 follow-up). Same argv-array (no shell) discipline as
+// `openInHostOs` so a filename with shell metacharacters can never be
+// reinterpreted as command syntax.
+export function revealInHostOs(absPath: string): Promise<boolean> {
+  const { platform } = process;
+  const [command, args] =
+    platform === "darwin"
+      ? (["open", ["-R", absPath]] as const)
+      : platform === "win32"
+        ? (["explorer.exe", [`/select,${absPath}`]] as const)
+        : (["xdg-open", [path.dirname(absPath)]] as const);
+  return spawnDetachedOsCommand(command, args, "reveal");
+}
 
 const router = Router();
 
@@ -462,6 +523,40 @@ export async function buildTreeAsync(absPath: string, relPath: string, gitFilter
   };
 }
 
+// Map a single directory entry to a shallow TreeNode, applying the
+// same hidden/sensitive/symlink/gitignore filters as the recursive
+// walk. Returns null for entries that should not surface in the UI.
+async function dirEntryToNode(entry: Dirent, absPath: string, relPath: string, localFilter: GitignoreFilter | undefined): Promise<TreeNode | null> {
+  if (HIDDEN_DIRS.has(entry.name)) return null;
+  if (!entry.isDirectory() && isSensitivePath(entry.name)) return null;
+  if (entry.isSymbolicLink()) return null;
+  const childRel = relPath ? path.join(relPath, entry.name) : entry.name;
+  if (localFilter) {
+    const testPath = entry.isDirectory() ? `${childRel}/` : childRel;
+    if (localFilter.ignores(testPath)) return null;
+  }
+  const childAbs = path.join(absPath, entry.name);
+  const childStat = await statSafeAsync(childAbs);
+  if (!childStat) return null;
+  if (childStat.isDirectory()) {
+    return {
+      name: entry.name,
+      path: childRel,
+      type: "dir",
+      modifiedMs: childStat.mtimeMs,
+      // No `children` field — caller fetches via another
+      // /api/files/dir call on expand.
+    };
+  }
+  return {
+    name: entry.name,
+    path: childRel,
+    type: "file",
+    size: childStat.size,
+    modifiedMs: childStat.mtimeMs,
+  };
+}
+
 // Shallow variant: return the given directory's immediate children
 // only (no recursion). Used by the lazy-expand endpoint below — the
 // client fetches one level at a time as the user expands nodes,
@@ -484,36 +579,7 @@ export async function listDirShallow(absPath: string, relPath: string, gitFilter
   // root .gitignore (it's for git, not the UI). Pass a fresh empty
   // filter so children pick up THEIR .gitignore files.
   const localFilter = gitFilter ? gitFilter.childForDir(absPath) : new GitignoreFilter();
-  const childPromises: Promise<TreeNode | null>[] = entries.map(async (entry): Promise<TreeNode | null> => {
-    if (HIDDEN_DIRS.has(entry.name)) return null;
-    if (!entry.isDirectory() && isSensitivePath(entry.name)) return null;
-    if (entry.isSymbolicLink()) return null;
-    const childRel = relPath ? path.join(relPath, entry.name) : entry.name;
-    if (localFilter) {
-      const testPath = entry.isDirectory() ? `${childRel}/` : childRel;
-      if (localFilter.ignores(testPath)) return null;
-    }
-    const childAbs = path.join(absPath, entry.name);
-    const childStat = await statSafeAsync(childAbs);
-    if (!childStat) return null;
-    if (childStat.isDirectory()) {
-      return {
-        name: entry.name,
-        path: childRel,
-        type: "dir",
-        modifiedMs: childStat.mtimeMs,
-        // No `children` field — caller fetches via another
-        // /api/files/dir call on expand.
-      };
-    }
-    return {
-      name: entry.name,
-      path: childRel,
-      type: "file",
-      size: childStat.size,
-      modifiedMs: childStat.mtimeMs,
-    };
-  });
+  const childPromises = entries.map((entry) => dirEntryToNode(entry, absPath, relPath, localFilter));
   const resolved = await Promise.all(childPromises);
   const children = resolved.filter((childNode): childNode is TreeNode => childNode !== null);
   children.sort((leftChild, rightChild) => {
@@ -545,6 +611,21 @@ router.get(API_ROUTES.files.tree, async (_req: Request<object, unknown, unknown,
     serverError(res, "Failed to read workspace");
   }
 });
+
+// Build the gitignore filter chain for `absPath`. Start undefined at
+// the root (the workspace root's .gitignore is for git, not the UI).
+// Once we descend into a sub-dir, childForDir picks up local
+// .gitignore files. Exported for unit tests.
+export function buildGitignoreFilterChain(rootAbs: string, absPath: string): GitignoreFilter | undefined {
+  let filter: GitignoreFilter | undefined;
+  const segments = path.relative(rootAbs, absPath).split(path.sep).filter(Boolean);
+  let walkAbs = rootAbs;
+  for (const seg of segments) {
+    walkAbs = path.join(walkAbs, seg);
+    filter = filter ? filter.childForDir(walkAbs) : new GitignoreFilter().childForDir(walkAbs);
+  }
+  return filter;
+}
 
 // Lazy-expand endpoint. Returns one directory's immediate children
 // (no recursion) so the client can render the tree incrementally.
@@ -591,16 +672,7 @@ router.get(API_ROUTES.files.dir, async (req: Request<object, unknown, unknown, P
     return;
   }
   try {
-    // Build the gitignore filter chain. Start undefined at root
-    // (workspace root .gitignore is for git, not the UI). Once we
-    // descend into a sub-dir, childForDir picks up local .gitignore.
-    let filter: GitignoreFilter | undefined;
-    const segments = path.relative(workspaceReal, absPath).split(path.sep).filter(Boolean);
-    let walkAbs = workspaceReal;
-    for (const seg of segments) {
-      walkAbs = path.join(walkAbs, seg);
-      filter = filter ? filter.childForDir(walkAbs) : new GitignoreFilter().childForDir(walkAbs);
-    }
+    const filter = buildGitignoreFilterChain(workspaceReal, absPath);
     const listing = await listDirShallow(absPath, path.relative(workspaceReal, absPath), filter);
     res.json(listing);
   } catch (err) {
@@ -632,7 +704,10 @@ function resolveAndStatFile<T>(
   req: Request<object, unknown, unknown, PathQuery>,
   res: Response<T | ErrorResponse>,
 ): { relPath: string; absPath: string; stat: Stats } | null {
-  const relPath = getOptionalStringQuery(req, "path") ?? "";
+  return resolveAndStatFileByPath(getOptionalStringQuery(req, "path") ?? "", res);
+}
+
+function resolveAndStatFileByPath<T>(relPath: string, res: Response<T | ErrorResponse>): { relPath: string; absPath: string; stat: Stats } | null {
   if (!relPath) {
     badRequest(res, "path required");
     return null;
@@ -686,6 +761,45 @@ function resolveAndStatFile<T>(
   return { relPath, absPath, stat };
 }
 
+// Decide the metadata-only response for a resolved file based on its
+// classified kind and byte size — media/pdf/image return metadata,
+// oversized or binary files return a message, everything else returns
+// null so the caller reads and returns the file as text. Pure;
+// exported for unit tests.
+export function decideContentResponse(kind: ContentKind, meta: { path: string; size: number; modifiedMs: number }): FileContentMeta | null {
+  const { size } = meta;
+  // Audio/video stream via Range requests, so they get the looser
+  // MAX_MEDIA_BYTES cap. Everything else (images/PDFs/binary) is
+  // loaded whole by the browser and stays at MAX_RAW_BYTES.
+  const isStreamingMedia = kind === "audio" || kind === "video";
+  const sizeCap = isStreamingMedia ? MAX_MEDIA_BYTES : MAX_RAW_BYTES;
+  if (size > sizeCap) {
+    return {
+      kind: "too-large",
+      ...meta,
+      message: `File too large to preview (${size} bytes)`,
+    };
+  }
+  if (kind === "image" || kind === "pdf" || kind === "audio" || kind === "video") {
+    return { kind, ...meta };
+  }
+  if (kind === "binary") {
+    return {
+      kind: "binary",
+      ...meta,
+      message: "Binary file — preview not supported",
+    };
+  }
+  if (size > MAX_PREVIEW_BYTES) {
+    return {
+      kind: "too-large",
+      ...meta,
+      message: `Text file too large to preview (${size} bytes)`,
+    };
+  }
+  return null;
+}
+
 router.get(API_ROUTES.files.content, (req: Request<object, unknown, unknown, PathQuery>, res: Response<FileContentResponse | ErrorResponse>) => {
   const requestedPath = getOptionalStringQuery(req, "path") ?? "";
   log.info("files", "GET content: start", { pathPreview: previewSnippet(requestedPath) });
@@ -706,38 +820,9 @@ router.get(API_ROUTES.files.content, (req: Request<object, unknown, unknown, Pat
   };
 
   const kind = classify(absPath);
-  // Audio/video stream via Range requests, so they get the looser
-  // MAX_MEDIA_BYTES cap. Everything else (images/PDFs/binary) is
-  // loaded whole by the browser and stays at MAX_RAW_BYTES.
-  const isStreamingMedia = kind === "audio" || kind === "video";
-  const sizeCap = isStreamingMedia ? MAX_MEDIA_BYTES : MAX_RAW_BYTES;
-  if (stat.size > sizeCap) {
-    res.json({
-      kind: "too-large",
-      ...meta,
-      message: `File too large to preview (${stat.size} bytes)`,
-    });
-    return;
-  }
-
-  if (kind === "image" || kind === "pdf" || kind === "audio" || kind === "video") {
-    res.json({ kind, ...meta });
-    return;
-  }
-  if (kind === "binary") {
-    res.json({
-      kind: "binary",
-      ...meta,
-      message: "Binary file — preview not supported",
-    });
-    return;
-  }
-  if (stat.size > MAX_PREVIEW_BYTES) {
-    res.json({
-      kind: "too-large",
-      ...meta,
-      message: `Text file too large to preview (${stat.size} bytes)`,
-    });
+  const preview = decideContentResponse(kind, meta);
+  if (preview) {
+    res.json(preview);
     return;
   }
   let content: string;
@@ -925,6 +1010,56 @@ async function resolveNewFilePath(
   return { ok: true, absPath: finalAbs, workspaceRoot: rootAsync };
 }
 
+// Perform the exclusive create write for POST /files/create. Atomic
+// create via `wx` (POSIX O_EXCL) — fails with EEXIST if the target
+// already exists, closing the check-then-write TOCTOU that Codex
+// flagged on earlier iterations. Wiki pages route through
+// `writeWikiPage` with `exclusive: true` so the same exclusive
+// primitive applies after the frontmatter stamp. On failure this
+// writes the appropriate 4xx/5xx response and returns false; the
+// caller bails.
+async function performCreateWrite(
+  resolved: { absPath: string; workspaceRoot: string },
+  content: string,
+  relPath: string,
+  res: Response<WriteContentResponse | ErrorResponse>,
+): Promise<boolean> {
+  try {
+    // `resolved.workspaceRoot` is the async-realpath form, matching
+    // `resolved.absPath`'s form. Passing the sync-form `workspaceReal`
+    // would make `classifyAsWikiPage` fail to match the prefix on
+    // Windows (8.3 short-name vs. long-name) — we'd fall into the
+    // plain-file branch and skip the wiki frontmatter stamp.
+    const wikiClass = classifyAsWikiPage(resolved.absPath, { workspaceRoot: resolved.workspaceRoot });
+    if (wikiClass.wiki) {
+      await writeWikiPage(wikiClass.slug, content, { editor: "user" }, { workspaceRoot: resolved.workspaceRoot, exclusive: true });
+    } else {
+      await mkdir(path.dirname(resolved.absPath), { recursive: true });
+      await writeFile(resolved.absPath, content, { flag: "wx" });
+    }
+  } catch (err) {
+    const { code } = err as { code?: string };
+    if (code === "EEXIST") {
+      log.warn("files", "POST create: conflict", { pathPreview: previewSnippet(relPath) });
+      sendError(res, 409, "File already exists");
+      return false;
+    }
+    // EISDIR: the target path already exists as a directory. That's
+    // a client-visible conflict (you can't replace a dir with a
+    // file via this endpoint), not a server error. Maps to the same
+    // 409 lane so the inline UI shows the localised "exists" copy.
+    if (code === "EISDIR") {
+      log.warn("files", "POST create: target is a directory", { pathPreview: previewSnippet(relPath) });
+      sendError(res, 409, "Target is a directory");
+      return false;
+    }
+    log.error("files", "POST create: write threw", { pathPreview: previewSnippet(relPath), error: errorMessage(err) });
+    serverError(res, "Failed to create file");
+    return false;
+  }
+  return true;
+}
+
 // Create a new text file. Refuses to overwrite — that's PUT's job and
 // requires a separate explicit-overwrite UX. Used by the File
 // Explorer's "New file" context menu (#1598) where the client already
@@ -951,44 +1086,8 @@ router.post(API_ROUTES.files.create, async (req: Request<object, unknown, WriteC
     badRequest(res, jsonError);
     return;
   }
-  // Atomic create: `wx` (POSIX O_EXCL) — fails with EEXIST if the
-  // target already exists, closing the check-then-write TOCTOU that
-  // Codex flagged on earlier iterations. Wiki pages route through
-  // `writeWikiPage` with `exclusive: true` so the same exclusive
-  // primitive applies after the frontmatter stamp.
-  try {
-    // `resolved.workspaceRoot` is the async-realpath form, matching
-    // `resolved.absPath`'s form. Passing the sync-form `workspaceReal`
-    // would make `classifyAsWikiPage` fail to match the prefix on
-    // Windows (8.3 short-name vs. long-name) — we'd fall into the
-    // plain-file branch and skip the wiki frontmatter stamp.
-    const wikiClass = classifyAsWikiPage(resolved.absPath, { workspaceRoot: resolved.workspaceRoot });
-    if (wikiClass.wiki) {
-      await writeWikiPage(wikiClass.slug, content, { editor: "user" }, { workspaceRoot: resolved.workspaceRoot, exclusive: true });
-    } else {
-      await mkdir(path.dirname(resolved.absPath), { recursive: true });
-      await writeFile(resolved.absPath, content, { flag: "wx" });
-    }
-  } catch (err) {
-    const { code } = err as { code?: string };
-    if (code === "EEXIST") {
-      log.warn("files", "POST create: conflict", { pathPreview: previewSnippet(relPath) });
-      sendError(res, 409, "File already exists");
-      return;
-    }
-    // EISDIR: the target path already exists as a directory. That's
-    // a client-visible conflict (you can't replace a dir with a
-    // file via this endpoint), not a server error. Maps to the same
-    // 409 lane so the inline UI shows the localised "exists" copy.
-    if (code === "EISDIR") {
-      log.warn("files", "POST create: target is a directory", { pathPreview: previewSnippet(relPath) });
-      sendError(res, 409, "Target is a directory");
-      return;
-    }
-    log.error("files", "POST create: write threw", { pathPreview: previewSnippet(relPath), error: errorMessage(err) });
-    serverError(res, "Failed to create file");
-    return;
-  }
+  const created = await performCreateWrite(resolved, content, relPath, res);
+  if (!created) return;
   const fresh = await statSafeAsync(resolved.absPath);
   log.info("files", "POST create: ok", {
     pathPreview: previewSnippet(relPath),
@@ -1110,6 +1209,55 @@ router.get(API_ROUTES.files.raw, (req: Request<object, unknown, unknown, PathQue
 // Returns configured reference directories as top-level TreeNode[]
 // for the file explorer. Each node's path uses the @ref/<label>
 // prefix so subsequent /dir and /content requests route correctly.
+
+// POST /api/files/open — spawn the host OS's default handler for a
+// file. Backing the "Open in OS" button on the Files view's binary /
+// unsupported preview so a `.xlsx` / `.pptx` reachable via the file
+// tree can be viewed in Excel / Keynote when in-browser preview isn't
+// available (#1985). Cross-platform: macOS `open`, Linux `xdg-open`,
+// Windows `explorer.exe`. Workspace-scoped path validation same as
+// every other files route.
+interface OpenFileRequest {
+  path?: unknown;
+}
+
+// Shared by the /open and /reveal routes: validate the workspace-scoped
+// path, run the platform action, and map the spawn result to the JSON
+// contract. Accepts `path` from body OR query so a swallowed body
+// doesn't stop the button (belt + suspenders).
+async function handleOsFileAction(
+  req: Request<object, unknown, OpenFileRequest, PathQuery>,
+  res: Response<{ ok: boolean } | ErrorResponse>,
+  action: (absPath: string) => Promise<boolean>,
+  failureMessage: string,
+): Promise<void> {
+  const bodyPath = typeof req.body?.path === "string" ? req.body.path : "";
+  const queryPath = getOptionalStringQuery(req, "path") ?? "";
+  const requestedPath = bodyPath || queryPath;
+  if (!requestedPath) {
+    badRequest(res, "path required");
+    return;
+  }
+  const ctx = resolveAndStatFileByPath(requestedPath, res);
+  if (!ctx) return;
+  const spawned = await action(ctx.absPath);
+  if (!spawned) {
+    serverError(res, failureMessage);
+    return;
+  }
+  res.json({ ok: true });
+}
+
+router.post(API_ROUTES.files.open, (req: Request<object, unknown, OpenFileRequest, PathQuery>, res: Response<{ ok: boolean } | ErrorResponse>) =>
+  handleOsFileAction(req, res, openInHostOs, "Failed to launch OS file handler"),
+);
+
+// POST /api/files/reveal — open the file's containing folder in the
+// host file manager (file selected on macOS / Windows) so a generated
+// file can be dragged into another app (#1985 follow-up).
+router.post(API_ROUTES.files.reveal, (req: Request<object, unknown, OpenFileRequest, PathQuery>, res: Response<{ ok: boolean } | ErrorResponse>) =>
+  handleOsFileAction(req, res, revealInHostOs, "Failed to reveal file in OS file manager"),
+);
 
 router.get(API_ROUTES.files.refRoots, async (_req: Request, res: Response<TreeNode[]>) => {
   log.info("files", "GET ref-roots: start");

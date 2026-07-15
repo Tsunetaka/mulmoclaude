@@ -290,7 +290,7 @@ describe("makePluginRuntime — files.data and files.config", () => {
 
   it("files.unlink is a no-op when the file does not exist", async () => {
     const runtime = runtimeFor("@example/foo");
-    await runtime.files.data.unlink("missing.json"); // should not throw
+    await assert.doesNotReject(runtime.files.data.unlink("missing.json"));
   });
 
   it("files.readDir returns [] for a plugin that never wrote", async () => {

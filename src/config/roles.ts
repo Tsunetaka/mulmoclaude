@@ -46,7 +46,7 @@ export const ROLES: Role[] = [
   {
     id: "general",
     name: "General",
-    icon: "star",
+    icon: "auto_awesome",
     prompt:
       "You are a helpful assistant with access to the user's workspace. Help with tasks, answer questions, and use available tools when appropriate.\n\n" +
       "## Asking the user to choose\n\n" +
@@ -68,6 +68,7 @@ export const ROLES: Role[] = [
     queries: [
       "Tell me about this app, MulmoClaude.",
       "What are collections in this app, and how do I build one just by describing what I want?",
+      "How do I access MulmoClaude from my phone with the remote host feature, and how secure is it?",
       "What is the wiki in this app and how do I use it?",
       "Tell me about the sandbox feature of this app.",
       "What is the role of the Gemini API key in this app?",
@@ -372,7 +373,7 @@ export const ROLES: Role[] = [
   {
     id: "debug",
     name: "Debug",
-    icon: "star",
+    icon: "bug_report",
     prompt:
       "You are a helpful assistant with access to the user's workspace. Help with tasks, answer questions, and use available tools when appropriate.\n\n" +
       "## Asking the user to choose\n\n" +

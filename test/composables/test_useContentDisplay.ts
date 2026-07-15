@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { ref } from "vue";
 import { useContentDisplay, htmlPreviewUrlFor } from "../../src/composables/useContentDisplay.ts";
-import type { FileContent } from "../../src/composables/useFileSelection.ts";
+import type { FileContent } from "../../src/composables/useFileContentLoader.ts";
 
 function textContent(path: string, body: string): FileContent {
   return {

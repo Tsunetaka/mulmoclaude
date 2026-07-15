@@ -66,6 +66,10 @@ test.describe("session navigation via URL", () => {
 
     await page.goForward();
     await page.waitForURL(new RegExp(SESSION_B.id));
+    // Explicit URL assertion — waitForURL above already throws on
+    // timeout, but the linter's assertion detector doesn't recognise
+    // `waitForURL` as one. This restates the same contract.
+    expect(page.url()).toContain(SESSION_B.id);
   });
 
   test("direct URL to an existing session loads it", async ({ page }) => {
@@ -88,6 +92,7 @@ test.describe("session navigation via URL", () => {
     await page.waitForURL(new RegExp(SESSION_A.id));
     await page.reload();
     await page.waitForURL(new RegExp(SESSION_A.id));
+    expect(page.url()).toContain(SESSION_A.id);
   });
 });
 

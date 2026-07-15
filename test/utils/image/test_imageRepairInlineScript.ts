@@ -219,8 +219,7 @@ describe("repairImageErrorTarget — runtime behavior", () => {
   });
 
   it("returns no-op when target is null", () => {
-    // No throw, no error.
-    repairImageErrorTarget(null, IMAGE_REPAIR_PATTERN, IMAGE_REPAIR_PATTERN_ENCODED);
+    assert.doesNotThrow(() => repairImageErrorTarget(null, IMAGE_REPAIR_PATTERN, IMAGE_REPAIR_PATTERN_ENCODED));
   });
 
   it("rewrites a <source> element via getAttribute / setAttribute", () => {

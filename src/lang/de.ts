@@ -35,6 +35,8 @@ const deMessages = {
     placeholder: "Nachricht an Claude…",
     send: "Senden",
     stop: "Stoppen",
+    runningPlaceholder: "Läuft… Enter reiht die Nachricht ein",
+    removeBuffered: "Nachricht aus Warteschlange entfernen",
     attachFile: "Datei anhängen",
     fileTooLarge: "Datei zu groß ({sizeMB} MB). Das Maximum beträgt 30 MB.",
     unsupportedFileType: "Dateityp nicht unterstützt. Akzeptiert: Bilder, PDF, DOCX, XLSX, PPTX, Textdateien.",
@@ -48,6 +50,11 @@ const deMessages = {
       start: "Spracheingabe starten",
       stop: "Spracheingabe stoppen",
     },
+  },
+  cspViolation: {
+    notice:
+      "⚠ Eine Ansicht wollte {host} laden, aber die Content Security Policy hat es blockiert ({directive}). Zum Erlauben den Host in config/csp.json eintragen – nur wenn Sie ihm vertrauen.",
+    dismiss: "Schließen",
   },
   sessionHistoryPanel: {
     filters: {
@@ -136,6 +143,10 @@ const deMessages = {
     disconnectFailed: "Trennen fehlgeschlagen",
     signInFailed: "Google-Anmeldung fehlgeschlagen",
     statusFailed: "Status konnte nicht geladen werden",
+    description: "Mit Remote-Zugriff kann ein Mobilgerät auf die Sammlungen und Feeds dieser MulmoClaude-Instanz zugreifen.",
+    howTo: "Öffne auf deinem Smartphone {url} und melde dich mit demselben Google-Konto an.",
+    customViewHint: "Für eine mobiltaugliche Ansicht bitte Claude, statt einer normalen Custom View eine {keyword} zu bauen.",
+    qrHint: "Oder scanne diesen QR-Code mit der Handykamera.",
   },
   sidebarHeader: {
     home: "Zum neuesten Chat",
@@ -180,6 +191,9 @@ const deMessages = {
     // "RO" = Read-Only. Englische Abkürzung bleibt erhalten, um als
     // kompaktes Badge neben dem Label "Referenz" zu passen.
     readOnlyBadge: "RO",
+    showSystemFiles: "Systemdateien anzeigen",
+    showSystemFilesTitle:
+      "Zeigt agent-interne Top-Level-Verzeichnisse (conversations/, feeds/ usw.) zusätzlich zu den Nutzer-Daten (data/, artifacts/, config/) an.",
   },
   fileTree: {
     workspace: "(Arbeitsbereich)",
@@ -231,6 +245,9 @@ const deMessages = {
       photos: "Fotos",
       model: "Modell",
       voice: "Sprache",
+      chatIndex: "Chat-Index",
+      journal: "Journal",
+      notifications: "Web Push",
       skills: "Skills",
       roles: "Rollen",
     },
@@ -238,6 +255,7 @@ const deMessages = {
       llm: "LLM",
       servers: "Server",
       workspace: "Arbeitsbereich",
+      notifications: "Benachrichtigungen",
       plugins: "Plugins",
       management: "Verwaltung",
     },
@@ -266,6 +284,18 @@ const deMessages = {
       loadError: "Einstellungen konnten nicht geladen werden",
       saveError: "Speichern fehlgeschlagen",
     },
+    notificationsTab: {
+      description:
+        "Erhalte eine Push-Benachrichtigung auf deinen registrierten Geräten, wenn eine hier gestartete Aufgabe abgeschlossen ist — praktisch, wenn du etwas fragst, weggehst und wissen willst, sobald die Antwort fertig ist.",
+      enableLabel: "Web Push senden, wenn eine Aufgabe abgeschlossen ist",
+      enableHint: "Wird ausgelöst, wenn ein hier gestarteter Chat abgeschlossen ist. Geplante und Hintergrundaufgaben lösen es nicht aus.",
+      remoteHostNote:
+        "Erfordert die RemoteHost-Verbindung (sie liefert die Anmeldung) und mindestens ein registriertes Gerät. Fehlt eines davon, passiert nichts.",
+      statusOn: "Web Push ist AN",
+      statusOff: "Web Push ist AUS",
+      loadError: "Einstellungen konnten nicht geladen werden",
+      saveError: "Speichern fehlgeschlagen",
+    },
     modelTab: {
       description: "Steuert den Reasoning-Effort, den Claude Code pro Zug verwendet. Ohne Einstellung wird der Standard von Claude verwendet.",
       effortLabel: "Reasoning-Effort",
@@ -290,6 +320,43 @@ const deMessages = {
       ready: "Modell bereit",
       downloadError: "Modell-Download fehlgeschlagen.",
       retry: "Erneut versuchen",
+      loadError: "Einstellungen konnten nicht geladen werden",
+      saveError: "Speichern fehlgeschlagen",
+    },
+    chatIndexTab: {
+      description:
+        "Automatische KI-Titel und Zusammenfassungen für den Chat-Verlauf. Standardmäßig aus — Automatisierungs-Sessions (Scheduler / System-Worker) werden auch bei aktivierter Option immer übersprungen; menschliche Sessions kosten pro beendetem Turn genau einen Summarizer-Aufruf.",
+      modeLabel: "Chat-Index-Modell",
+      helperText: "Haiku ist günstiger; Sonnet liefert schärfere Titel bei langen, themenwechselnden Sessions.",
+      mode: {
+        off: "Aus",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "Indizierung ist AUS",
+        haiku: "Indizierung läuft mit Haiku",
+        sonnet: "Indizierung läuft mit Sonnet",
+      },
+      loadError: "Einstellungen konnten nicht geladen werden",
+      saveError: "Speichern fehlgeschlagen",
+    },
+    journalTab: {
+      description:
+        "Automatisiertes Tages-Journal — fasst kürzliche Chat-Sessions in journal/*.md zusammen und extrahiert dauerhafte Memory-Notizen. Standardmäßig aus. Automatisierungs-Sessions (Scheduler / System-Worker) werden unabhängig von dieser Einstellung immer ausgeschlossen.",
+      modeLabel: "Journal-Modell",
+      helperText:
+        "Haiku ist günstiger; Sonnet liefert reichhaltigere Tages- und Themen-Zusammenfassungen. Der stündliche Lauf startet nur, wenn dies gesetzt ist.",
+      mode: {
+        off: "Aus",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "Journal ist AUS",
+        haiku: "Journal läuft mit Haiku",
+        sonnet: "Journal läuft mit Sonnet",
+      },
       loadError: "Einstellungen konnten nicht geladen werden",
       saveError: "Speichern fehlgeschlagen",
     },
@@ -387,6 +454,8 @@ const deMessages = {
     rendered: "Gerendert",
     raw: "Roh",
     closeFile: "Datei schließen",
+    revealInOs: "Im Ordner anzeigen",
+    revealInOsFailed: "Ordner konnte nicht geöffnet werden",
   },
   fileContentRenderer: {
     download: "ZIP",
@@ -403,6 +472,9 @@ const deMessages = {
     redo: "Wiederholen",
     editMarp: "Folienquelle bearbeiten",
     marpEditorLabel: "Marp-Folienquelle",
+    openInOs: "Im Betriebssystem oeffnen",
+    openingInOs: "Wird geoeffnet…",
+    openInOsFailed: "Konnte nicht im Betriebssystem geoeffnet werden",
   },
   filesView: {
     chatPlaceholder: "Frage zu dieser Datei stellen…",
@@ -950,6 +1022,8 @@ const deMessages = {
     cancel: "Abbrechen",
     seededByPlugin: "von {pkg}",
     seededByPluginTooltip: "Diese Nachricht wurde vom Plugin {pkg} erstellt und nicht von Ihnen gesendet.",
+    truncatedForRender:
+      "Diese Nachricht ist ungewöhnlich lang (insgesamt {total} Zeichen). Nur der erste Teil wird angezeigt – {omitted} Zeichen ausgeblendet, damit der Tab reaktionsfähig bleibt. Nutze „Kopieren“ für den vollständigen Text.",
   },
   pluginSkill: {
     noDescription: "(keine Beschreibung)",

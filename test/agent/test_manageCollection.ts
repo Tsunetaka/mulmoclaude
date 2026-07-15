@@ -209,6 +209,23 @@ describe("manageCollection — putItems", () => {
     assert.ok(!existsSync(path.join(workdir, "data/portfolio/items/noname.json")), "rejected row must not be written");
   });
 
+  it("ablateValidation (evaluation-only) writes rows that validation would reject", async () => {
+    const ablated = makeManageCollectionTool({ workspaceRoot: workdir, userSkillsDir: emptyUserDir, ablateValidation: true });
+    const result = JSON.parse(
+      await ablated.handler({
+        action: "putItems",
+        slug: "portfolio",
+        items: [record("badenum-ablated", { status: "nope" })],
+      }),
+    ) as Record<string, unknown>;
+    assert.deepEqual(result.written, ["badenum-ablated"]);
+    assert.deepEqual(result.rejected, []);
+    assert.equal(stored("badenum-ablated").status, "nope", "out-of-enum value written verbatim under ablation");
+    // getItems under ablation stays silent about the bad stored record
+    const listed = JSON.parse(await ablated.handler({ action: "getItems", slug: "portfolio" })) as Record<string, unknown>;
+    assert.equal(listed.warning, undefined);
+  });
+
   it("rejects a row with no primaryKey value", async () => {
     const result = await runJson({ action: "putItems", slug: "portfolio", items: [{ name: "No Id", status: "open" }] });
     const [rejectedRow] = result.rejected as { id: string; problem: string }[];

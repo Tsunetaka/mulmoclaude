@@ -8,14 +8,11 @@ import securityPlugin from "eslint-plugin-security";
 import importPlugin from "eslint-plugin-import";
 import vuePlugin from "eslint-plugin-vue";
 import vueParser from "vue-eslint-parser";
-import vueI18n from "@intlify/eslint-plugin-vue-i18n"
+import vueI18n from "@intlify/eslint-plugin-vue-i18n";
 
 export default [
   {
-    files: [
-      "{src,test}/**/*.{js,ts,yaml,yml,vue}",
-      "assets/html/js/**/*.js",
-    ],
+    files: ["{src,test}/**/*.{js,ts,yaml,yml,vue}", "assets/html/js/**/*.js"],
   },
   {
     ignores: [
@@ -112,11 +109,7 @@ export default [
     },
   },
   {
-    files: [
-      "**/utils/html_render.ts",
-      "src/utils/dom/**/*.ts",
-      "src/composables/**/*.ts",
-    ],
+    files: ["**/utils/html_render.ts", "src/utils/dom/**/*.ts", "src/composables/**/*.ts"],
     languageOptions: {
       globals: {
         ...globals.browser,
@@ -147,12 +140,7 @@ export default [
           // Don't flag object property keys — external API payloads
           // legitimately use short keys like `id`, `to`, `n`, `e`.
           properties: "never",
-          exceptions: [
-            "_",
-            "i",
-            "j",
-            "ok"
-          ],
+          exceptions: ["_", "i", "j", "ok"],
         },
       ],
       // Catch TDZ-style `use-before-define` (e.g. accessing a `const`
@@ -259,6 +247,16 @@ export default [
       complexity: ["error", { max: 15 }],
       "max-depth": ["error", { max: 4 }],
       "max-params": ["error", { max: 6 }],
+      // Ratcheted to `error` so no NEW function can exceed the 50-line
+      // budget. Pre-existing violations that resist a behavior-preserving
+      // split are pinned to `warn` in the grandfather block at the end of
+      // this config (search "max-lines-per-function grandfather"). Drain
+      // then delete entries there; do NOT add new files to it — a new
+      // over-budget function must be split, not grandfathered.
+      // skipBlankLines + skipComments so heavily-documented small
+      // functions don't count as "long"; IIFEs kept in so top-level
+      // `(() => { … })()` blocks are measured too.
+      "max-lines-per-function": ["error", { max: 50, skipBlankLines: true, skipComments: true, IIFEs: true }],
       quotes: "off",
       "no-shadow": "error",
       "no-param-reassign": "error",
@@ -291,13 +289,13 @@ export default [
       // via PATH is normal operation, not a server-side injection risk.
       "sonarjs/no-os-command-from-path": "off",
       "sonarjs/cors": "off",
-      // Many of our `node:test` cases drive an observed side-effect
-      // (no throw / no log / DOM mutation watched elsewhere) and
-      // intentionally have no inline assert. The rule has no per-case
-      // opt-out, so blocking CI on each one creates churn without
-      // catching real "did we forget the assert?" bugs. Demoted to
-      // warn so reviewers still see it on new tests.
-      "sonarjs/assertions-in-tests": "warn",
+      // Every no-throw / side-effect-only test has been rewritten to
+      // wrap its target call in `assert.doesNotThrow(...)` /
+      // `assert.doesNotReject(...)` (batches #1999 + #2001), so the
+      // rule no longer creates churn. Promoted to `error` so a new
+      // assertion-less test can't slip in unnoticed — reviewers
+      // caught them by eye before, CI enforces it now.
+      "sonarjs/assertions-in-tests": "error",
       // ── eslint-plugin-security tuning ──────────────────────────
       // Three high-volume rules are disabled because they fire on
       // patterns that are normal in this codebase, drowning the
@@ -345,7 +343,7 @@ export default [
     // to just those categories so no-shadow / cognitive-complexity /
     // no-unused-vars / no-floating-promises etc. stay at `error`
     // across the whole repo — those *do* catch real bugs in tests.
-    files: ["test/**/*.{ts,js}", "e2e/**/*.{ts,js}", "packages/**/test/**/*.{ts,js}"],
+    files: ["test/**/*.{ts,js}", "e2e/**/*.{ts,js}", "e2e-live/**/*.{ts,js}", "packages/**/test/**/*.{ts,js}"],
     languageOptions: {
       globals: {
         ...globals.browser,
@@ -362,6 +360,12 @@ export default [
       // `no-explicit-any` at `error` in production code; demote to
       // warn inside tests.
       "@typescript-eslint/no-explicit-any": "warn",
+      // Test files (describe/it blocks, seed helpers, fixture
+      // builders) legitimately have long function bodies. The
+      // 20-line target CLAUDE.md sets is for production code
+      // readability — it doesn't map onto a describe() block that
+      // happens to hold ten it() cases.
+      "max-lines-per-function": "off",
     },
   },
   {
@@ -453,7 +457,8 @@ export default [
             },
             {
               group: ["**/tools/**"],
-              message: "Plugin code must not import value bindings from the host tool registry (`src/tools/*`). Type imports are allowed (`PluginRegistration`, `ToolPlugin`).",
+              message:
+                "Plugin code must not import value bindings from the host tool registry (`src/tools/*`). Type imports are allowed (`PluginRegistration`, `ToolPlugin`).",
               allowTypeImports: true,
             },
             {

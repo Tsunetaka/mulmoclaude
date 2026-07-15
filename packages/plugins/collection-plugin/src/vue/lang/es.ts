@@ -105,6 +105,8 @@ const esMessages: CollectionMessages = {
     kanbanUncategorized: "Sin categoría",
     kanbanOpenCard: "Abrir {label}",
     addView: "Añadir vista",
+    addViewDesktop: "Vista personalizada",
+    addViewMobile: "Vista móvil",
     config: {
       open: "Ajustes de la colección",
       title: "{title} · ajustes",
@@ -117,6 +119,8 @@ const esMessages: CollectionMessages = {
     customViewError: "No se pudo cargar esta vista: {error}",
     addViewPrompt:
       'Quiero añadir una vista personalizada a la colección «{title}». Pregúntame qué quiero ver o editar, luego crea el archivo HTML de la vista en {base}/views/your-view.html y regístralo en {base}/schema.json dentro de `views[]` (capabilities ["read"] para una vista de solo lectura, ["read","write"] si edita registros). Sigue la ayuda custom-view para el contrato de datos.',
+    addMobileViewPrompt:
+      'Quiero añadir una vista personalizada para el móvil (aplicación remota) a la colección «{title}». Pregúntame qué quiero ver o editar, luego crea el archivo HTML de la vista en {base}/views/your-view.html y regístralo en {base}/schema.json dentro de `views[]` con `target: "mobile"` (de solo lectura por defecto; declara `editableFields` / `allowDelete` solo si edita registros). Sigue la ayuda custom-view-remote para el contrato de datos por postMessage — nada de fetch en la vista.',
     repair: "Reparar",
     dataIssuesDetected: "{count} archivo(s) de registro tienen problemas de datos y podrían no aparecer en esta vista.",
     repairPrompt:

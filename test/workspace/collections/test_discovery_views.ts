@@ -65,4 +65,24 @@ describe("collection schema — custom views validation", () => {
     assert.equal(withViews([{ id: "year", label: "Year", file: "views/year.html", target: "desktop" }]).success, true);
     assert.equal(withViews([{ id: "tv", label: "TV", file: "views/tv.html", target: "tv" }]).success, false);
   });
+
+  it("accepts mobile editableFields / allowDelete, rejects wrong types", () => {
+    assert.equal(
+      withViews([{ id: "phone", label: "Phone", file: "views/phone.html", target: "mobile", editableFields: ["done"], allowDelete: true }]).success,
+      true,
+    );
+    assert.equal(withViews([{ id: "phone", label: "Phone", file: "views/phone.html", target: "mobile", editableFields: "done" }]).success, false);
+    assert.equal(withViews([{ id: "phone", label: "Phone", file: "views/phone.html", target: "mobile", editableFields: [""] }]).success, false);
+    assert.equal(withViews([{ id: "phone", label: "Phone", file: "views/phone.html", target: "mobile", allowDelete: "yes" }]).success, false);
+  });
+
+  it("accepts mobile imageFields / imageMaxEdge, rejects wrong types", () => {
+    const gallery = { id: "gallery", label: "Gallery", file: "views/gallery.html", target: "mobile" as const };
+    assert.equal(withViews([{ ...gallery, imageFields: ["photo"], imageMaxEdge: 384 }]).success, true);
+    assert.equal(withViews([{ ...gallery, imageFields: ["photo"] }]).success, true); // imageMaxEdge optional
+    assert.equal(withViews([{ ...gallery, imageFields: "photo" }]).success, false); // not an array
+    assert.equal(withViews([{ ...gallery, imageFields: [""] }]).success, false); // empty field name
+    assert.equal(withViews([{ ...gallery, imageMaxEdge: 384.5 }]).success, false); // not an int
+    assert.equal(withViews([{ ...gallery, imageMaxEdge: "384" }]).success, false); // not a number
+  });
 });

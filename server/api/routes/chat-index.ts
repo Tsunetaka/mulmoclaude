@@ -31,7 +31,11 @@ const router = Router();
 router.post(API_ROUTES.chatIndex.rebuild, async (_req: Request, res: Response<RebuildResponse | RebuildErrorResponse>) => {
   try {
     log.info("chat-index", "manual rebuild triggered");
-    const result = await backfillAllSessions();
+    // Manual rebuild = "regenerate every session's summary now",
+    // matching this endpoint's original semantics (the user hit it
+    // expecting a full rebuild, not the "changed only" default that
+    // the scheduler runs). See #1929.
+    const result = await backfillAllSessions({ force: true });
     log.info("chat-index", "rebuild complete", {
       indexed: result.indexed,
       total: result.total,

@@ -1,0 +1,316 @@
+name: docker sandbox (Windows junction repro)
+
+# Windows + Docker sandbox regression coverage for #1946 / #1982.
+#
+# The bug this catches only reproduces when a Windows host's NTFS
+# junctions in `node_modules/@mulmoclaude/*` are bind-mounted into a
+# Linux Docker container — they dangle inside the container and break
+# every module resolver that doesn't honour NODE_PATH.
+#
+# The workflow:
+#   1. `yarn install` on the Windows runner creates the workspace
+#      junctions.
+#   2. Docker Desktop switches to the Linux engine (WSL2 backend).
+#   3. A single `docker run node:22-slim` reproduces the production
+#      sandbox mount layout (primary node_modules read-only + the
+#      per-package `/app/pkg_modules` fallback + NODE_PATH).
+#   4. `test/sandbox-repro/probe.mjs` inline-implements both the buggy
+#      parent-walk-only resolver and the fixed `require.resolve.paths()`
+#      resolver, asserts the env reproduces the failure mode, and
+#      asserts the fix pattern finds every preset package.
+#
+# Triggers on `paths:` filter so ordinary PRs pay no Windows CI cost;
+# a daily schedule + manual `workflow_dispatch` catches drift in the
+# Docker-Desktop-on-windows-latest environment itself.
+
+on:
+  # Scheduled canary — catches upstream env drift (yarn switching from
+  # NTFS junctions to hardlinks, WSL2 changing how junctions surface,
+  # Docker changing bind-mount semantics). The resolver code itself is
+  # covered every PR by `test/plugins/test_preset_loader_node_path.ts`
+  # in the ubuntu/macos matrix, so we don't burn Windows CI minutes on
+  # every push. Manual re-run available via workflow_dispatch.
+  schedule:
+    - cron: "0 19 * * *" # Daily 19:00 UTC = 04:00 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-sandbox-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-junction-linux-container:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+
+      # Defender's realtime scan intermittently EPERMs the atomic renames
+      # yarn / tsc do on Windows. Same rationale as lint_test_windows.
+      - name: Disable Windows Defender realtime monitoring
+        shell: powershell
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
+      - name: yarn install (creates NTFS junctions in node_modules/@mulmoclaude/*)
+        run: yarn install --frozen-lockfile --network-timeout 120000
+
+      # Sanity: the workspace linker actually made a junction here. If not,
+      # the whole test is meaningless (some future yarn version might switch
+      # to hardlinks or copies — we want to fail loudly at that point).
+      - name: Confirm yarn created NTFS junctions for @mulmoclaude/*
+        shell: pwsh
+        run: |
+          $x = Get-Item node_modules/@mulmoclaude/x-plugin
+          Write-Host "LinkType: $($x.LinkType)"
+          Write-Host "Target:   $($x.Target)"
+          if ($x.LinkType -ne "Junction") {
+            throw "expected NTFS Junction, got '$($x.LinkType)' — probe assumption violated"
+          }
+
+      # The probe's ESM check actually LOADS `@mulmoclaude/x-plugin` through
+      # the resolver hook, so its built entry (`dist/index.js`, per the
+      # package's `exports` map) must exist in the mounted dev-workspace dir —
+      # production ships built dist, this repro must too. `yarn install`
+      # doesn't build it (no `prepare` script) and the plugin is a
+      # self-contained bundle (no `@mulmoclaude/core` or npm deps at load
+      # time, `vite build` inlines everything), so building just this one
+      # package is enough for the import to resolve.
+      - name: Build @mulmoclaude/x-plugin (probe imports its built ESM entry)
+        run: yarn workspace @mulmoclaude/x-plugin run build
+
+      # The #2052 end-to-end step boots the real mcp-server.ts, which imports
+      # @mulmoclaude/core, @mulmobridge/protocol, @mulmobridge/client and the
+      # preset plugins through their built `dist/`. Production ships built dist;
+      # this repro must too.
+      - name: Build every workspace package (the e2e MCP child imports their dist)
+        run: yarn build:packages:dev
+
+      # windows-latest ships Docker CLI + a Windows-only engine, no Docker
+      # Desktop. Docker Desktop in CI needs UI dialogs on first launch and
+      # is flake-prone. Instead we use the preinstalled WSL2 with Ubuntu +
+      # native `docker.io`, which is headless and reliable.
+      #
+      # The Windows workspace at `${{ github.workspace }}` (`C:\a\...`) is
+      # visible from WSL2 at `/mnt/c/a/...`. NTFS junctions on that FS
+      # surface as Linux symlinks whose targets are Windows-style absolute
+      # paths (`C:\Users\...`) that don't exist inside a Linux container's
+      # mount namespace — the exact dangling-junction failure #1946/#1982
+      # reproduces.
+      - name: Set up WSL2 (Ubuntu-22.04)
+        shell: pwsh
+        run: |
+          wsl --version
+          # Every subsequent step calls `wsl -d Ubuntu-22.04`, so we
+          # require that exact distro rather than any "Ubuntu"-family
+          # match. A runner that ships only `Ubuntu` (no `-22.04`) would
+          # otherwise skip install here and then error out on the
+          # `-d Ubuntu-22.04` calls below. Codex review on PR #1984.
+          $distros = @()
+          try { $distros = wsl --list --quiet 2>$null } catch { }
+          if (-not ($distros | Where-Object { $_.Trim() -eq "Ubuntu-22.04" })) {
+            wsl --install -d Ubuntu-22.04 --no-launch
+            Start-Sleep -Seconds 15
+          }
+          wsl -d Ubuntu-22.04 -u root -- uname -a
+
+      - name: Install docker.io inside WSL2
+        shell: pwsh
+        run: |
+          wsl -d Ubuntu-22.04 -u root -- bash -c "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io"
+
+      - name: Start dockerd in the background inside WSL2
+        shell: pwsh
+        run: |
+          # nohup + disown so dockerd survives the wsl -e exit.
+          # --iptables=false because WSL2's kernel lacks iptables_nat.
+          wsl -d Ubuntu-22.04 -u root -- bash -c "nohup dockerd --iptables=false --bridge=none > /var/log/dockerd.log 2>&1 &"
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            $null = wsl -d Ubuntu-22.04 -u root -- docker info 2>&1
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Start-Sleep -Seconds 2
+          }
+          if (-not $ok) {
+            Write-Host "dockerd log:"
+            wsl -d Ubuntu-22.04 -u root -- cat /var/log/dockerd.log
+            throw "dockerd did not become ready in 60s inside WSL2"
+          }
+          Write-Host "dockerd is up:"
+          wsl -d Ubuntu-22.04 -u root -- docker info --format "OSType: {{.OSType}}"
+
+      - name: Pull node:22-slim inside WSL2
+        shell: pwsh
+        run: wsl -d Ubuntu-22.04 -u root -- docker pull node:22-slim
+
+      # Path translation: PowerShell sees the workspace at `C:\a\<repo>\<repo>`;
+      # WSL2 exposes the same Windows FS at `/mnt/c/a/<repo>/<repo>`. The
+      # NTFS junctions in `node_modules/@mulmoclaude/*` surface there as
+      # Linux symlinks with dangling Windows-style targets — which is
+      # exactly the environment the probe wants to prove the fix survives.
+      #
+      # `server/plugins/resolvePresetRoot.ts` is bind-mounted to
+      # `/app/server-plugins/resolvePresetRoot.ts` so probe.ts imports the
+      # shipped code directly (no inline reimplementation). `tsx` is
+      # `npm install -g`'d in the container so it can load the .ts import.
+      - name: Run the sandbox regression probe (via WSL2 docker)
+        shell: pwsh
+        run: |
+          $wsWin = "${{ github.workspace }}"
+          $drive = $wsWin.Substring(0, 1).ToLower()
+          $rest = $wsWin.Substring(3) -replace '\\', '/'
+          $wsLinux = "/mnt/$drive/$rest"
+          Write-Host "Windows workspace: $wsWin"
+          Write-Host "WSL2 mount path:   $wsLinux"
+
+          # Bind each preset package's dev-workspace path to
+          # /app/pkg_modules/@mulmoclaude/<name>. `packages/plugins` is
+          # mounted whole; the container-side symlinks resolve to the
+          # individual package roots. `packages/core` is separate (it
+          # lives at packages/core, not packages/plugins/core). Keep in
+          # sync with server/plugins/preset-list.ts when a preset is
+          # added or removed — the probe iterates PRESET_PLUGINS and
+          # will fail if a mount is missing.
+          wsl -d Ubuntu-22.04 -u root -- docker run --rm `
+            -v "${wsLinux}/node_modules:/app/node_modules:ro" `
+            -v "${wsLinux}/packages/plugins/x-plugin:/app/pkg_modules/@mulmoclaude/x-plugin:ro" `
+            -v "${wsLinux}/packages/plugins/spotify-plugin:/app/pkg_modules/@mulmoclaude/spotify-plugin:ro" `
+            -v "${wsLinux}/packages/plugins/debug-plugin:/app/pkg_modules/@mulmoclaude/debug-plugin:ro" `
+            -v "${wsLinux}/packages/plugins/edgar-plugin:/app/pkg_modules/@mulmoclaude/edgar-plugin:ro" `
+            -v "${wsLinux}/packages/plugins/email-plugin:/app/pkg_modules/@mulmoclaude/email-plugin:ro" `
+            -v "${wsLinux}/packages/core:/app/pkg_modules/@mulmoclaude/core:ro" `
+            -v "${wsLinux}/server/plugins:/app/server-plugins:ro" `
+            -v "${wsLinux}/server/agent/mcp-esm-loader.mjs:/app/server/agent/mcp-esm-loader.mjs:ro" `
+            -v "${wsLinux}/server/agent/mcp-esm-bootstrap.mjs:/app/server/agent/mcp-esm-bootstrap.mjs:ro" `
+            -v "${wsLinux}/test/sandbox-repro:/repro:ro" `
+            -e NODE_PATH=/app/node_modules:/app/pkg_modules `
+            -w /app `
+            node:22-slim `
+            bash -c "npm install -g tsx --silent && tsx --import file:///app/server/agent/mcp-esm-bootstrap.mjs /repro/probe.ts"
+
+      # ── #2052 diagnostics ────────────────────────────────────────────
+      # The probe above runs from /repro, whose sibling package.json says
+      # `type: module` — so it exercises the ESM resolver hook. The real MCP
+      # child runs /app/server/agent/mcp-server.ts, and dockerBindMountArgs()
+      # never mounts a package.json under /app. These steps put the SAME
+      # diagnostic file in the production package scope and read off which
+      # module format Node actually picks, with and without a /app manifest.
+      #
+      # They REPORT; they do not gate the job. Reading the log is the point.
+
+      - name: "#2052 — diagnose: production layout (no /app/package.json)"
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $wsWin = "${{ github.workspace }}"
+          $drive = $wsWin.Substring(0, 1).ToLower()
+          $rest = $wsWin.Substring(3) -replace '\\', '/'
+          $wsLinux = "/mnt/$drive/$rest"
+
+          wsl -d Ubuntu-22.04 -u root -- docker run --rm `
+            -v "${wsLinux}/node_modules:/app/node_modules:ro" `
+            -v "${wsLinux}/packages/plugins/x-plugin:/app/pkg_modules/@mulmoclaude/x-plugin:ro" `
+            -v "${wsLinux}/server/agent/mcp-esm-loader.mjs:/app/server/agent/mcp-esm-loader.mjs:ro" `
+            -v "${wsLinux}/server/agent/mcp-esm-bootstrap.mjs:/app/server/agent/mcp-esm-bootstrap.mjs:ro" `
+            -v "${wsLinux}/test/sandbox-repro/diagnose-2052.ts:/app/server/agent/diagnose-2052.ts:ro" `
+            -e NODE_PATH=/app/node_modules:/app/pkg_modules `
+            -w /app `
+            node:22-slim `
+            bash -c "npm install -g tsx --silent && tsx --import file:///app/server/agent/mcp-esm-bootstrap.mjs /app/server/agent/diagnose-2052.ts"
+
+      - name: "#2052 — diagnose: same, but with a {type:module} /app/package.json"
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $wsWin = "${{ github.workspace }}"
+          $drive = $wsWin.Substring(0, 1).ToLower()
+          $rest = $wsWin.Substring(3) -replace '\\', '/'
+          $wsLinux = "/mnt/$drive/$rest"
+
+          # The candidate fix, expressed as one extra bind mount.
+          wsl -d Ubuntu-22.04 -u root -- docker run --rm `
+            -v "${wsLinux}/node_modules:/app/node_modules:ro" `
+            -v "${wsLinux}/packages/plugins/x-plugin:/app/pkg_modules/@mulmoclaude/x-plugin:ro" `
+            -v "${wsLinux}/server/agent/mcp-esm-loader.mjs:/app/server/agent/mcp-esm-loader.mjs:ro" `
+            -v "${wsLinux}/server/agent/mcp-esm-bootstrap.mjs:/app/server/agent/mcp-esm-bootstrap.mjs:ro" `
+            -v "${wsLinux}/test/sandbox-repro/package.json:/app/package.json:ro" `
+            -v "${wsLinux}/test/sandbox-repro/diagnose-2052.ts:/app/server/agent/diagnose-2052.ts:ro" `
+            -e NODE_PATH=/app/node_modules:/app/pkg_modules `
+            -w /app `
+            node:22-slim `
+            bash -c "npm install -g tsx --silent && tsx --import file:///app/server/agent/mcp-esm-bootstrap.mjs /app/server/agent/diagnose-2052.ts"
+
+      # ── #2052 end-to-end: the real MCP child, the shipped mounts ──────
+      # The regression this closes: `workspacePackageDirs()` only listed
+      # `@mulmoclaude/*`, so `@mulmobridge/protocol` (reached via
+      # src/types/events.ts) had no /app/pkg_modules fallback. Its junction
+      # dangled inside the container and mcp-server.ts died at load — every
+      # tool, `handlePermission` included, vanished from the agent registry.
+      #
+      # Mounts / env / argv come from the SHIPPED builders via
+      # print-mcp-container-spec.ts, so this can never drift the way the
+      # hardcoded smoke test did.
+      - name: "#2052 — end-to-end: real mcp-server.ts answers initialize + tools/list"
+        shell: pwsh
+        run: |
+          $wsWin = "${{ github.workspace }}"
+          $drive = $wsWin.Substring(0, 1).ToLower()
+          $rest = $wsWin.Substring(3) -replace '\\', '/'
+          $wsLinux = "/mnt/$drive/$rest"
+
+          $spec = & node_modules/.bin/tsx test/sandbox-repro/print-mcp-container-spec.ts | ConvertFrom-Json
+
+          $dockerArgs = @("run", "--rm", "-i")
+          $dockerArgs += @("-v", "${wsLinux}/node_modules:/app/node_modules:ro")
+          $dockerArgs += @("-v", "${wsLinux}/packages:/app/packages:ro")
+          $dockerArgs += @("-v", "${wsLinux}/server:/app/server:ro")
+          $dockerArgs += @("-v", "${wsLinux}/src:/app/src:ro")
+          $dockerArgs += @("-v", "${wsLinux}/test/sandbox-repro:/repro:ro")
+          foreach ($mount in $spec.pkgModuleMounts) { $dockerArgs += @("-v", $mount) }
+          foreach ($entry in $spec.env.PSObject.Properties) { $dockerArgs += @("-e", "$($entry.Name)=$($entry.Value)") }
+          $dockerArgs += @("-w", "/app", "node:22-slim", "bash", "-c",
+            "npm install -g tsx --silent && cat /repro/mcp-handshake.jsonl | $($spec.command) $($spec.args -join ' ')")
+
+          Write-Host "pkg_modules mounts: $($spec.pkgModuleMounts.Count)"
+          $out = wsl -d Ubuntu-22.04 -u root -- docker @dockerArgs 2>&1 | Out-String
+          Write-Host $out
+
+          if ($out -notmatch '"serverInfo"') {
+            throw "MCP server never answered initialize — the child died at load. See stderr above."
+          }
+          if ($out -notmatch '"name":"handlePermission"') {
+            throw "tools/list did not include handlePermission — this is the #2052 symptom."
+          }
+          Write-Host "OK: mcp-server.ts started and listed handlePermission under real NTFS junctions."
+
+      - name: "#2052 — reproduce the crash verbatim (static import, production layout)"
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $wsWin = "${{ github.workspace }}"
+          $drive = $wsWin.Substring(0, 1).ToLower()
+          $rest = $wsWin.Substring(3) -replace '\\', '/'
+          $wsLinux = "/mnt/$drive/$rest"
+
+          # Expected to exit non-zero BEFORE the fix, with the exact
+          # `Cannot find module '@mulmoclaude/x-plugin'` + `Require stack:`
+          # trace from the issue. That is the reproduction.
+          wsl -d Ubuntu-22.04 -u root -- docker run --rm `
+            -v "${wsLinux}/node_modules:/app/node_modules:ro" `
+            -v "${wsLinux}/packages/plugins/x-plugin:/app/pkg_modules/@mulmoclaude/x-plugin:ro" `
+            -v "${wsLinux}/server/agent/mcp-esm-loader.mjs:/app/server/agent/mcp-esm-loader.mjs:ro" `
+            -v "${wsLinux}/server/agent/mcp-esm-bootstrap.mjs:/app/server/agent/mcp-esm-bootstrap.mjs:ro" `
+            -v "${wsLinux}/test/sandbox-repro/static-import-2052.ts:/app/server/agent/static-import-2052.ts:ro" `
+            -e NODE_PATH=/app/node_modules:/app/pkg_modules `
+            -w /app `
+            node:22-slim `
+            bash -c "npm install -g tsx --silent && tsx --import file:///app/server/agent/mcp-esm-bootstrap.mjs /app/server/agent/static-import-2052.ts"

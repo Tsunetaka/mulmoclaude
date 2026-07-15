@@ -8,18 +8,16 @@
 //   GET    /api/scheduler/logs         — execution log (newest first)
 
 import { Router, type Request, type Response } from "express";
-import { getSchedulerTasks, getSchedulerLogs } from "../../events/scheduler-adapter.js";
+import { getSchedulerTasks, getSchedulerLogs, getSchedulerTaskState } from "../../events/scheduler-adapter.js";
 import type { TaskLogEntry } from "@receptron/task-scheduler";
 import { API_ROUTES } from "../../../src/config/apiRoutes.js";
 import { bindRoute } from "../../utils/router.js";
-import { SESSION_ORIGINS } from "../../../src/types/session.js";
-import { loadUserTasks, validateAndCreate, applyUpdate, withUserTaskLock } from "../../workspace/skills/user-tasks.js";
+import { loadUserTasks, validateAndCreate, applyUpdate, withUserTaskLock, runUserTaskNow, userTaskManagerId } from "../../workspace/skills/user-tasks.js";
+import { getScheduledSkills, runScheduledSkillNow } from "../../workspace/skills/scheduler.js";
 import { badRequest, notFound } from "../../utils/httpError.js";
 import { errorMessage } from "../../utils/errors.js";
 import { getOptionalStringQuery } from "../../utils/request.js";
 import { log } from "../../system/logger/index.js";
-import { startChat } from "./agent.js";
-import { makeUuid } from "../../utils/id.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 
 const router = Router();
@@ -31,14 +29,19 @@ bindRoute(
   API_ROUTES.scheduler.tasksList,
   asyncHandler("scheduler-tasks", "Failed to list tasks", async (_req, res) => {
     log.info("scheduler-tasks", "list: start");
-    // getSchedulerTasks() returns system-only tasks (registered via
-    // initScheduler at startup — journal, chat-index, sources, etc.).
-    // origin: "system" is correct, not an overwrite — these tasks
-    // have no origin field of their own.
+    // Three registration paths, unified here with an `origin` tag the client
+    // renders as a badge. System tasks carry their own state (they run through
+    // the adapter); user + skill tasks register directly on the task-manager,
+    // so we attach their execution state by their prefixed task-manager id.
     const systemTasks = getSchedulerTasks();
     const userTasks = loadUserTasks();
-    const all = [...systemTasks.map((task) => ({ ...task, origin: "system" as const })), ...userTasks.map((task) => ({ ...task, origin: "user" as const }))];
-    log.info("scheduler-tasks", "list: ok", { system: systemTasks.length, user: userTasks.length });
+    const skillTasks = getScheduledSkills();
+    const all = [
+      ...systemTasks.map((task) => ({ ...task, origin: "system" as const })),
+      ...userTasks.map((task) => ({ ...task, origin: "user" as const, state: getSchedulerTaskState(userTaskManagerId(task.id)) })),
+      ...skillTasks.map((task) => ({ ...task, origin: "skill" as const, state: getSchedulerTaskState(task.id) })),
+    ];
+    log.info("scheduler-tasks", "list: ok", { system: systemTasks.length, user: userTasks.length, skill: skillTasks.length });
     res.json({ tasks: all });
   }),
 );
@@ -129,45 +132,39 @@ bindRoute(
 
 // ── Manual trigger ──────────────────────────────────────────────
 
-bindRoute(router, API_ROUTES.scheduler.taskRun, async (req: Request<{ id: string }>, res: Response) => {
-  const { id: taskId } = req.params;
-  log.info("scheduler-tasks", "run: start", { taskId });
-  // Check user tasks first
-  const userTasks = loadUserTasks();
-  const userTask = userTasks.find((task) => task.id === taskId);
-  if (userTask) {
-    const chatSessionId = makeUuid();
-    log.info("scheduler-tasks", "run: user task triggered", {
-      taskId,
-      name: userTask.name,
-      chatSessionId,
-    });
-    startChat({
-      message: userTask.prompt,
-      roleId: userTask.roleId,
-      chatSessionId,
-      origin: SESSION_ORIGINS.scheduler,
-    }).catch((err) => {
-      log.error("scheduler-tasks", "run: startChat failed", {
-        taskId,
-        error: String(err),
-      });
-    });
-    res.json({ triggered: taskId, chatSessionId });
-    return;
-  }
-  // Not a user task — check system/skill tasks
-  const systemTasks = getSchedulerTasks();
-  const found = systemTasks.find((task) => task.id === taskId);
-  if (!found) {
+bindRoute(
+  router,
+  API_ROUTES.scheduler.taskRun,
+  asyncHandler<Request<{ id: string }>, Response>("scheduler-tasks", "Failed to run task", async (req, res) => {
+    const { id: taskId } = req.params;
+    log.info("scheduler-tasks", "run: start", { taskId });
+
+    // User task (unprefixed id) — dispatch its prompt + record the run.
+    const userChatSessionId = await runUserTaskNow(taskId);
+    if (userChatSessionId) {
+      log.info("scheduler-tasks", "run: user task triggered", { taskId, chatSessionId: userChatSessionId });
+      res.json({ triggered: taskId, chatSessionId: userChatSessionId });
+      return;
+    }
+
+    // Skill task (`skill.<name>` id) — dispatch `/skill-name` + record the run.
+    const skillChatSessionId = await runScheduledSkillNow(taskId);
+    if (skillChatSessionId) {
+      log.info("scheduler-tasks", "run: skill task triggered", { taskId, chatSessionId: skillChatSessionId });
+      res.json({ triggered: taskId, chatSessionId: skillChatSessionId });
+      return;
+    }
+
+    // System tasks have no prompt to dispatch; everything else is unknown.
+    if (getSchedulerTasks().some((task) => task.id === taskId)) {
+      log.warn("scheduler-tasks", "run: refused (system task)", { taskId });
+      badRequest(res, "manual run is only supported for user and skill tasks");
+      return;
+    }
     log.warn("scheduler-tasks", "run: not found", { taskId });
     notFound(res, `task not found: ${taskId}`);
-    return;
-  }
-  // System tasks don't have a prompt to startChat with — return 400
-  log.warn("scheduler-tasks", "run: refused (system task)", { taskId });
-  badRequest(res, "manual run is only supported for user tasks");
-});
+  }),
+);
 
 // ── Execution logs ──────────────────────────────────────────────
 

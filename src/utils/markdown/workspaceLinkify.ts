@@ -58,7 +58,14 @@ const defaultRenderer = new Renderer();
 function wrapAsWorkspaceLink(token: Tokens.Codespan): string {
   const codeHtml = defaultRenderer.codespan(token);
   const { text } = token;
-  return `<a href="${text}" class="workspace-link" data-workspace-path="${text}">${codeHtml}</a>`;
+  // `text` is ALWAYS workspace-root-relative (WORKSPACE_PATH_PATTERN
+  // requires an `artifacts/` or `data/` prefix), so emit the href with a
+  // leading slash. Without it, FilesView's `resolveWorkspaceLink` joins
+  // the href to the *current file's* dir and double-prefixes the path
+  // (#1548). The slash routes it through resolveWorkspaceLink's
+  // workspace-absolute branch instead; `classifyWorkspacePath` (chat /
+  // wiki) drops the leading empty segment, so it's unchanged there.
+  return `<a href="/${text}" class="workspace-link" data-workspace-path="${text}">${codeHtml}</a>`;
 }
 
 export const workspaceLinkifyExtension: MarkedExtension = {

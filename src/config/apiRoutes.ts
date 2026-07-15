@@ -115,6 +115,19 @@ const HOST_API_ROUTES = {
     create: "/api/files/create",
     raw: "/api/files/raw",
     refRoots: "/api/files/ref-roots",
+    /** POST { path } — spawn the host OS's default handler for the
+     *  file (`open` on macOS, `xdg-open` on Linux, `start` on
+     *  Windows). The Files view exposes this as an "Open in OS"
+     *  button on binary / unsupported previews so `.xlsx` / `.pptx`
+     *  can be viewed in the native app when in-browser preview
+     *  isn't available (#1985). */
+    open: "/api/files/open",
+    /** POST { path } — open the file's containing folder in the host
+     *  file manager (file selected on macOS `open -R` / Windows
+     *  `explorer /select,`; Linux opens the folder). Exposed as a
+     *  "Show in folder" button so a generated file can be dragged
+     *  into another app (#1985 follow-up). */
+    reveal: "/api/files/reveal",
   },
 
   // `html` group migrated to META — see `src/plugins/presentHtml/meta.ts`.
@@ -155,6 +168,7 @@ const HOST_API_ROUTES = {
   // plans/feat-remote-host-firestore-list-collections.md.
   remoteHost: {
     connect: "/api/remote-host/connect",
+    reconnect: "/api/remote-host/reconnect",
     disconnect: "/api/remote-host/disconnect",
     status: "/api/remote-host/status",
   },
@@ -299,6 +313,20 @@ const HOST_API_ROUTES = {
      *  `getRemoteView`, so the desktop phone-frame preview renders the exact
      *  artifact the phone receives (plans/feat-remote-custom-view.md). */
     remoteView: "/api/collections/:slug/remote-view",
+    /** POST { op: "update"|"delete", id, patch? } → apply one mutate on behalf
+     *  of a `target: "mobile"` view, authorized by that view's declared
+     *  editableFields / allowDelete and enforced host-side (global-bearer auth).
+     *  The desktop phone-frame preview's write channel — same builder the
+     *  command channel's `mutateRemoteViewItem` uses, so preview === phone
+     *  (plans/feat-remote-writable-view.md). */
+    remoteViewMutate: "/api/collections/:slug/remote-view/:viewId/mutate",
+    /** GET ?offset&limit&fields=<csv> → one page of a `target: "mobile"` view's
+     *  records with its declared `imageFields` inlined as `data:` URL thumbnails
+     *  (global-bearer auth) → { page, inlined, omitted }. Same builder as the
+     *  command channel's `getRemoteViewItems`, so the desktop phone-frame preview
+     *  pages the exact data (incl. real thumbnails) the phone will
+     *  (plans/feat-remote-view-images.md). */
+    remoteViewItems: "/api/collections/:slug/remote-view/:viewId/items",
     /** GET ?id=<viewId>&locale=<tag> → translation dict for one custom view
      *  (global-bearer auth) → { locale, dict }. `dict` is the host-picked
      *  flat map for the requested locale (fallback `"en"`, else `{}`); the

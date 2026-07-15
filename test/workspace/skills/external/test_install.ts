@@ -19,7 +19,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { installExternalRepo, uninstallExternalRepo, listInstalledRepos } from "../../../../server/workspace/skills/external/install.js";
+import { installExternalRepo, uninstallExternalRepo, listInstalledRepos, resolveInstallInputs } from "../../../../server/workspace/skills/external/install.js";
 import type { RunGit } from "../../../../server/workspace/skills/external/clone.js";
 import { urlCacheKey } from "../../../../server/workspace/skills/external/id.js";
 
@@ -429,5 +429,31 @@ describe("uninstallExternalRepo", () => {
     const result = await uninstallExternalRepo("foo-bar", { workspaceRoot: workdir, cacheRoot });
     assert.equal(result.kind, "uninstalled");
     assert.equal(existsSync(path.join(activeDir, "SKILL.md")), true);
+  });
+});
+
+describe("resolveInstallInputs", () => {
+  it("derives a repoId from a valid GitHub URL", () => {
+    const res = resolveInstallInputs({ url: "https://github.com/owner/repo" });
+    assert.equal(res.ok, true);
+    if (res.ok) assert.ok(res.repoId.length > 0);
+  });
+
+  it("rejects a non-GitHub / unparseable URL as invalid-url", () => {
+    const res = resolveInstallInputs({ url: "not a url" });
+    assert.equal(res.ok, false);
+    if (!res.ok) assert.equal(res.result.kind, "invalid-url");
+  });
+
+  it("rejects a subpath that escapes the cache dir as invalid-subpath", () => {
+    const res = resolveInstallInputs({ url: "https://github.com/owner/repo", subpath: "../../etc/passwd" });
+    assert.equal(res.ok, false);
+    if (!res.ok) assert.equal(res.result.kind, "invalid-subpath");
+  });
+
+  it("passes a clean subpath through", () => {
+    const res = resolveInstallInputs({ url: "https://github.com/owner/repo", subpath: "skills/foo" });
+    assert.equal(res.ok, true);
+    if (res.ok) assert.equal(res.subpath, "skills/foo");
   });
 });

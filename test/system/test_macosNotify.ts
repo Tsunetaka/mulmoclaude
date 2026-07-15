@@ -108,14 +108,14 @@ describe("pushToMacosReminderWithDeps — failure handling", () => {
     const { spawner, throwError } = makeSpawner();
     const promise = pushToMacosReminderWithDeps({ spawner, platform: "darwin", disabled: false }, "Hello");
     throwError(new Error("ENOENT"));
-    await promise; // does not reject
+    await assert.doesNotReject(promise);
   });
 
   it("resolves silently on non-zero exit", async () => {
     const { spawner, respond } = makeSpawner();
     const promise = pushToMacosReminderWithDeps({ spawner, platform: "darwin", disabled: false }, "Hello");
     respond(1, "Reminders.app is not authorised");
-    await promise; // does not reject
+    await assert.doesNotReject(promise);
   });
 
   it("resolves silently when spawn itself throws synchronously", async () => {

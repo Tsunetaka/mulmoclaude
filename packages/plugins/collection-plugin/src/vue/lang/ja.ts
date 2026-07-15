@@ -104,6 +104,8 @@ const jaMessages: CollectionMessages = {
     kanbanUncategorized: "未分類",
     kanbanOpenCard: "{label} を開く",
     addView: "ビューを追加",
+    addViewDesktop: "カスタムビュー",
+    addViewMobile: "スマホビュー",
     config: {
       open: "コレクション設定",
       title: "{title} · 設定",
@@ -116,6 +118,8 @@ const jaMessages: CollectionMessages = {
     customViewError: "このビューを読み込めませんでした: {error}",
     addViewPrompt:
       '「{title}」コレクションにカスタムビューを追加したい。何を見たい／編集したいか質問してから、HTML ビューファイルを {base}/views/your-view.html に作成し、{base}/schema.json の `views[]` に登録して（読み取り専用なら capabilities ["read"]、レコードを編集するなら ["read","write"]）。データ契約は custom-view ヘルプに従ってください。',
+    addMobileViewPrompt:
+      '「{title}」コレクションにスマホ（リモートアプリ）用カスタムビューを追加したい。何を見たい／編集したいか質問してから、HTML ビューファイルを {base}/views/your-view.html に作成し、{base}/schema.json の `views[]` に `target: "mobile"` 付きで登録して（デフォルトは読み取り専用。レコードを編集する場合のみ `editableFields` / `allowDelete` を宣言）。データ契約は custom-view-remote ヘルプに従ってください — ビュー内での fetch は一切禁止です。',
     repair: "修復",
     dataIssuesDetected: "{count} 件のレコードファイルにデータの問題があり、この表示に出てこない可能性があります。",
     repairPrompt:

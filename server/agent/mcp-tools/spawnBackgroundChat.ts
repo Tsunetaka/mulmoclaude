@@ -46,6 +46,45 @@ export interface SpawnBackgroundChatDeps {
   readSessionOrigin: ReadSessionOriginFn;
 }
 
+// The tool's runtime behavior. Extracted from the factory's returned object so
+// `makeSpawnBackgroundChatTool` stays under the max-lines threshold; `deps` is
+// threaded in explicitly. Behavior is unchanged — covered by
+// test/agent/test_spawnBackgroundChat.ts.
+async function spawnBackgroundChatHandler(deps: SpawnBackgroundChatDeps, args: Record<string, unknown>, ctx?: McpToolContext): Promise<string> {
+  const message = typeof args.message === "string" ? args.message.trim() : "";
+  if (!message) return "spawnBackgroundChat: `message` is required (non-empty string).";
+  const role = typeof args.role === "string" ? args.role.trim() : "";
+  if (!role) return "spawnBackgroundChat: `role` is required (non-empty string — the role id the worker runs in).";
+  const { hidden } = args;
+  if (typeof hidden !== "boolean") return "spawnBackgroundChat: `hidden` is required (boolean).";
+
+  // No nesting: a hidden worker session must not fan out further hidden
+  // workers. Only enforced when we know the caller's session.
+  if (ctx?.sessionId) {
+    const parentOrigin = await deps.readSessionOrigin(ctx.sessionId);
+    if (parentOrigin === SESSION_ORIGINS.system) {
+      return "spawnBackgroundChat: refused — a background worker session cannot spawn further background sessions. Do the work inline instead.";
+    }
+  }
+
+  const origin: SessionOrigin = hidden ? SESSION_ORIGINS.system : SESSION_ORIGINS.skill;
+  const chatId = randomUUID();
+
+  // Runaway guard: reserve the slot ATOMICALLY and BEFORE launching so
+  // concurrent calls can't all pass a check-then-reserve split and over-spawn.
+  // Released in runAgentInBackground's finally, or rolled back here on failure.
+  if (hidden && !tryReserveBackgroundSession(chatId)) {
+    return `spawnBackgroundChat: refused — too many background sessions already in flight (max ${MAX_BACKGROUND_SESSIONS}). Do the work inline instead.`;
+  }
+
+  const result = await deps.startChat({ message, roleId: role, chatSessionId: chatId, origin });
+  if (result.kind === "error") {
+    if (hidden) releaseBackgroundSession(chatId); // roll back the reservation
+    return `spawnBackgroundChat: failed to start chat: ${result.error}`;
+  }
+  return JSON.stringify({ chatId, hidden });
+}
+
 export function makeSpawnBackgroundChatTool(deps: SpawnBackgroundChatDeps) {
   return {
     definition: {
@@ -83,43 +122,7 @@ export function makeSpawnBackgroundChatTool(deps: SpawnBackgroundChatDeps) {
       "Set `hidden: true` for invisible background work (the session never appears in the user's history); `hidden: false` only when the user should be able to open the spawned chat themselves. " +
       "The `message` must be fully self-contained — the worker shares NONE of this chat's context — and should instruct the worker to write its output to disk and stop without presenting anything (no one is viewing its canvas). It returns right away with a `chatId`; it does NOT wait for the worker to finish, so always keep a graceful fallback (do the work inline) in case the worker hasn't finished by the time its output is needed.",
 
-    async handler(args: Record<string, unknown>, ctx?: McpToolContext): Promise<string> {
-      const message = typeof args.message === "string" ? args.message.trim() : "";
-      if (!message) return "spawnBackgroundChat: `message` is required (non-empty string).";
-      const role = typeof args.role === "string" ? args.role.trim() : "";
-      if (!role) return "spawnBackgroundChat: `role` is required (non-empty string — the role id the worker runs in).";
-      const { hidden } = args;
-      if (typeof hidden !== "boolean") return "spawnBackgroundChat: `hidden` is required (boolean).";
-
-      // No nesting: a hidden worker session must not fan out further
-      // hidden workers. Only enforced when we know the caller's session.
-      if (ctx?.sessionId) {
-        const parentOrigin = await deps.readSessionOrigin(ctx.sessionId);
-        if (parentOrigin === SESSION_ORIGINS.system) {
-          return "spawnBackgroundChat: refused — a background worker session cannot spawn further background sessions. Do the work inline instead.";
-        }
-      }
-
-      const origin: SessionOrigin = hidden ? SESSION_ORIGINS.system : SESSION_ORIGINS.skill;
-      const chatId = randomUUID();
-
-      // Runaway guard: cap concurrent hidden workers. Reserve the slot
-      // ATOMICALLY and BEFORE launching — a check-then-reserve split
-      // around the `await startChat` below would let concurrent calls
-      // all pass the check and over-spawn. Released in
-      // `runAgentInBackground`'s finally, or rolled back here if the
-      // launch fails.
-      if (hidden && !tryReserveBackgroundSession(chatId)) {
-        return `spawnBackgroundChat: refused — too many background sessions already in flight (max ${MAX_BACKGROUND_SESSIONS}). Do the work inline instead.`;
-      }
-
-      const result = await deps.startChat({ message, roleId: role, chatSessionId: chatId, origin });
-      if (result.kind === "error") {
-        if (hidden) releaseBackgroundSession(chatId); // roll back the reservation
-        return `spawnBackgroundChat: failed to start chat: ${result.error}`;
-      }
-      return JSON.stringify({ chatId, hidden });
-    },
+    handler: (args: Record<string, unknown>, ctx?: McpToolContext): Promise<string> => spawnBackgroundChatHandler(deps, args, ctx),
   };
 }
 

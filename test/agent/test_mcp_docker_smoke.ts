@@ -6,6 +6,16 @@
 //   - package.json exports issues (e.g. missing "require" condition)
 //   - Module resolution failures in the container's Node.js version
 //
+// The container command, args and env come from the SHIPPED
+// `buildMulmoclaudeServer()`, and the junction-fallback mounts from the
+// SHIPPED `workspaceModuleMounts()`. Do not hand-copy them here again.
+// This file used to hardcode both, so it silently kept reproducing the
+// pre-#1974 layout: no `/app/pkg_modules` mounts, `NODE_PATH` without
+// the fallback root, and no `--import` bootstrap. Two fixes shipped that
+// the smoke test could not see, and a Windows user re-reported the old
+// error as if nothing had changed (#2052). A test that cannot see the
+// fix cannot verify the fix.
+//
 // NOT run in CI (Docker unavailable). Run locally after:
 //   - Adding/changing workspace package exports
 //   - Modifying Docker volume mounts in server/agent/config.ts
@@ -18,6 +28,7 @@ import assert from "node:assert/strict";
 import { execSync, spawn } from "node:child_process";
 import path from "node:path";
 
+import { buildMulmoclaudeServer, workspaceModuleMounts, type Platform } from "../../server/agent/config.ts";
 import { ONE_SECOND_MS } from "../../server/utils/time.ts";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../..");
@@ -52,11 +63,32 @@ interface JsonRpcResponse {
   };
 }
 
+const ACTIVE_PLUGINS = ["manageSkills", "presentMulmoScript"];
+
+// `process.platform` is NodeJS.Platform; the repo's `Platform` union lists the
+// same members. Narrow through the union rather than casting.
+function hostPlatform(): Platform {
+  const platforms: Platform[] = ["aix", "android", "darwin", "freebsd", "haiku", "linux", "openbsd", "sunos", "win32", "cygwin", "netbsd"];
+  const found = platforms.find((candidate) => candidate === process.platform);
+  if (!found) throw new Error(`unrecognised platform: ${process.platform}`);
+  return found;
+}
+
 const canRunDocker = isDockerAvailable() && isSandboxImageAvailable();
 
 describe("MCP server Docker smoke test", { skip: !canRunDocker }, () => {
   it("responds to initialize + tools/list inside Docker container", async () => {
     const toDockerPath = (filePath: string): string => filePath.replace(/\\/g, "/");
+
+    // The exact spec Claude Code would spawn: `tsx --import <bootstrap>
+    // /app/server/agent/mcp-server.ts` with NODE_PATH carrying the
+    // `/app/pkg_modules` fallback root.
+    const server = buildMulmoclaudeServer({
+      chatSessionId: "docker-smoke-test",
+      port: 9999,
+      activePlugins: ACTIVE_PLUGINS,
+      useDocker: true,
+    });
 
     const dockerArgs = [
       "run",
@@ -70,17 +102,12 @@ describe("MCP server Docker smoke test", { skip: !canRunDocker }, () => {
       `${toDockerPath(PROJECT_ROOT)}/server:/app/server:ro`,
       "-v",
       `${toDockerPath(PROJECT_ROOT)}/src:/app/src:ro`,
-      "-e",
-      "NODE_PATH=/app/node_modules",
-      "-e",
-      "SESSION_ID=docker-smoke-test",
-      "-e",
-      "PORT=9999",
-      "-e",
-      "PLUGIN_NAMES=manageSkills,presentMulmoScript",
+      // Windows-only junction fallback (#1974). Empty elsewhere.
+      ...workspaceModuleMounts(PROJECT_ROOT, hostPlatform(), toDockerPath),
+      ...Object.entries(server.env).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
       "mulmoclaude-sandbox",
-      "tsx",
-      "/app/server/agent/mcp-server.ts",
+      server.command,
+      ...server.args,
     ];
 
     const responses = await new Promise<JsonRpcResponse[]>((resolve, reject) => {

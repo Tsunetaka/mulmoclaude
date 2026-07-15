@@ -12,6 +12,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { API_ROUTES } from "../../../src/config/apiRoutes.js";
 import { actionVisible } from "@mulmoclaude/core/collection";
 import {
+  computeCollectionIcon,
   discoverCollections,
   generateItemId,
   deleteCollection,
@@ -42,7 +43,18 @@ import type {
   LoadedCollection,
   RecordIssue,
 } from "../../workspace/collections/index.js";
-import { buildRemoteView, remoteViewFailureMessage, type RemoteViewBuildResult } from "../../workspace/collections/remoteView.js";
+import {
+  buildRemoteView,
+  mutateRemoteView,
+  mutateRemoteViewFailureMessage,
+  remoteViewFailureMessage,
+  remoteViewItems,
+  remoteViewItemsFailureMessage,
+  type MutateRemoteViewResult,
+  type RemoteViewBuildResult,
+  type RemoteViewItemsResult,
+} from "../../workspace/collections/remoteView.js";
+import { clampLimit, clampOffset, normalizeFields, normalizeMutate } from "@mulmoclaude/core/remote-view";
 import { badRequest, notFound, conflict, forbidden, serverError } from "../../utils/httpError.js";
 import { errorMessage } from "../../utils/errors.js";
 import { log } from "../../system/logger/index.js";
@@ -96,10 +108,24 @@ interface ActionSeedResponse {
   role: string;
 }
 
+// Client-list summary: the static `toSummary` plus, for a collection that
+// declares `dynamicIcon`, the computed icon + the source slug(s) a live
+// view should watch (see `useDynamicShortcutIcons`). Collections without
+// `dynamicIcon` take the fast path (no record read) — only this endpoint
+// pays the compute cost; `toDetail`/`toSummary` elsewhere stay static.
+async function toClientSummary(collection: LoadedCollection): Promise<CollectionSummary> {
+  const summary = toSummary(collection);
+  const spec = collection.schema.dynamicIcon;
+  if (!spec) return summary;
+  const icon = await computeCollectionIcon(collection);
+  return { ...summary, icon, iconSources: [spec.source.collection] };
+}
+
 router.get(API_ROUTES.collections.list, async (_req: Request, res: Response<CollectionsListResponse>) => {
   try {
     const collections = await discoverCollections();
-    res.json({ collections: collections.map(toSummary) });
+    const summaries = await Promise.all(collections.map(toClientSummary));
+    res.json({ collections: summaries });
   } catch (err) {
     log.warn("collections", "list failed", { error: errorMessage(err) });
     serverError(res, errorMessage(err));
@@ -515,6 +541,95 @@ router.get(API_ROUTES.collections.remoteView, async (req: Request<{ slug: string
     res.json({ view: result.view, srcdoc: result.srcdoc, bytes: result.bytes });
   } catch (err) {
     log.warn("collections", "remote-view build failed", { slug: req.params.slug, error: errorMessage(err) });
+    serverError(res, errorMessage(err));
+  }
+});
+
+/** Map a non-ok mutate to its HTTP error (message shared with the channel
+ *  handler via `mutateRemoteViewFailureMessage`). */
+function sendMutateRemoteViewFailure(res: Response, result: Exclude<MutateRemoteViewResult, { kind: "ok" }>, slug: string): void {
+  const message = mutateRemoteViewFailureMessage(result, slug);
+  if (result.kind === "view-not-found" || result.kind === "item-not-found") notFound(res, message);
+  else if (result.kind === "not-writable" || result.kind === "delete-not-allowed" || result.kind === "field-not-editable" || result.kind === "path-escape")
+    forbidden(res, message);
+  else badRequest(res, message);
+}
+
+// Apply one update/delete on behalf of a mobile view — the desktop phone-frame
+// preview's write channel. Behind the global bearer. Same builder + policy as
+// the command channel's `mutateRemoteViewItem`, so a preview mutation runs the
+// EXACT enforcement the phone will (plans/feat-remote-writable-view.md).
+router.post(API_ROUTES.collections.remoteViewMutate, async (req: Request<{ slug: string; viewId: string }>, res: Response) => {
+  try {
+    const { slug, viewId } = req.params;
+    const body = (req.body ?? {}) as { op?: unknown; id?: unknown; patch?: unknown };
+    const request = normalizeMutate(body);
+    if (!request) {
+      badRequest(res, "invalid mutate request — expected { op: 'update'|'delete', id, patch? }");
+      return;
+    }
+    const collection = await loadCollection(slug);
+    if (!collection) {
+      notFound(res, `collection '${slug}' not found`);
+      return;
+    }
+    const result = await mutateRemoteView(collection, viewId, request);
+    if (result.kind !== "ok") {
+      sendMutateRemoteViewFailure(res, result, slug);
+      return;
+    }
+    log.info("collections", "remote-view mutate", { slug, viewId, op: result.op });
+    res.json(result.op === "delete" ? { op: "delete", id: result.id } : { op: "update", item: result.item });
+  } catch (err) {
+    log.warn("collections", "remote-view mutate failed", { slug: req.params.slug, viewId: req.params.viewId, error: errorMessage(err) });
+    serverError(res, errorMessage(err));
+  }
+});
+
+/** A `fields` projection arrives as a CSV query string (`?fields=title,photo`)
+ *  or repeated params; hand `normalizeFields` an array either way. */
+function csvParam(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) return value.map((entry) => String(entry));
+  if (typeof value === "string" && value.length > 0) return value.split(",");
+  return undefined;
+}
+
+/** Map a non-ok item-page build to its HTTP error (message shared with the
+ *  channel handler via `remoteViewItemsFailureMessage`). */
+function sendRemoteViewItemsFailure(res: Response, result: Exclude<RemoteViewItemsResult, { kind: "ok" }>, slug: string): void {
+  const message = remoteViewItemsFailureMessage(result, slug);
+  if (result.kind === "view-not-found") notFound(res, message);
+  else badRequest(res, message);
+}
+
+// One page of a mobile view's records with its declared `imageFields` inlined as
+// `data:` URL thumbnails — the desktop phone-frame preview's paging source.
+// Behind the global bearer. Same builder as the command channel's
+// `getRemoteViewItems`, so the preview pages the exact data (real thumbnails)
+// the phone will (plans/feat-remote-view-images.md).
+router.get(API_ROUTES.collections.remoteViewItems, async (req: Request<{ slug: string; viewId: string }>, res: Response) => {
+  try {
+    const { slug, viewId } = req.params;
+    const request = { offset: clampOffset(req.query.offset), limit: clampLimit(req.query.limit), fields: normalizeFields(csvParam(req.query.fields)) };
+    const collection = await loadCollection(slug);
+    if (!collection) {
+      notFound(res, `collection '${slug}' not found`);
+      return;
+    }
+    const result = await remoteViewItems(collection, viewId, request);
+    if (result.kind !== "ok") {
+      sendRemoteViewItemsFailure(res, result, slug);
+      return;
+    }
+    res.json({ page: result.page, inlined: result.inlined, omitted: result.omitted });
+  } catch (err) {
+    // Strip CR/LF from request-derived params before logging (log-injection
+    // resistance, same convention as the view-i18n handler below).
+    log.warn("collections", "remote-view items failed", {
+      slug: req.params.slug.replace(/[\r\n]/g, " "),
+      viewId: req.params.viewId.replace(/[\r\n]/g, " "),
+      error: errorMessage(err),
+    });
     serverError(res, errorMessage(err));
   }
 });

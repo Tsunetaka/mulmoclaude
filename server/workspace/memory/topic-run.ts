@@ -32,7 +32,7 @@ import path from "node:path";
 import { runClaudeCli, ClaudeCliNotFoundError, type Summarize } from "../journal/archivist-cli.js";
 import { WORKSPACE_DIRS, WORKSPACE_FILES } from "../paths.js";
 import { loadAllMemoryEntries } from "./io.js";
-import { makeLlmMemoryClusterer } from "./topic-cluster.js";
+import { makeLlmMemoryClusterer, type MemoryClusterer } from "./topic-cluster.js";
 import { clusterAtomicIntoStaging, topicStagingPath } from "./topic-migrate.js";
 import { swapStagingIntoMemory } from "./topic-swap.js";
 import { MEMORY_TYPES } from "./types.js";
@@ -80,40 +80,8 @@ export async function runTopicMigrationOnce(workspaceRoot: string, deps: RunTopi
     await runSwap(workspaceRoot);
     return;
   }
-  // Don't trip over an in-progress legacy `memory.md` migration from
-  // #1029 PR-B. We mirror the conditions under which
-  // `runMemoryMigrationOnce` would actually run — legacy file
-  // present, past the placeholder threshold, AND `.backup` absent.
-  // The `.backup` check is load-bearing: when both `memory.md` and
-  // `.backup` exist, the legacy runner refuses to re-process (the
-  // backup signals "already done; user re-introduced the file"),
-  // and without this clause the topic runner would defer
-  // indefinitely waiting for a migration that's never going to
-  // happen.
-  //
-  // One guarded `statSync` (no `existsSync` first): the legacy
-  // migration runs in parallel and can rename / delete `memory.md`
-  // between an `existsSync` check and a follow-up `statSync`,
-  // turning the race into an unhandled rejection because this whole
-  // function is invoked as a floating promise on startup. ENOENT
-  // means the legacy file isn't there (or just got renamed away),
-  // so there's nothing to defer for; any other error is swallowed
-  // and the runner proceeds — a permission glitch should never block
-  // the topic restructure.
-  const legacyPath = path.join(workspaceRoot, WORKSPACE_FILES.memory);
-  let legacyStat: ReturnType<typeof statSync> | null;
-  try {
-    legacyStat = statSync(legacyPath);
-  } catch {
-    legacyStat = null;
-  }
-  if (legacyStat && legacyStat.size >= 64) {
-    const backupPath = `${legacyPath}.backup`;
-    if (!existsSync(backupPath)) {
-      log.debug("memory", "topic-run: legacy memory.md still in flight, deferring", { legacyPath });
-      return;
-    }
-  }
+  if (shouldDeferForLegacyMigration(workspaceRoot)) return;
+
   const entries = await loadAllMemoryEntries(workspaceRoot);
   if (entries.length === 0) {
     log.debug("memory", "topic-run: no atomic entries to migrate, skipping");
@@ -122,6 +90,43 @@ export async function runTopicMigrationOnce(workspaceRoot: string, deps: RunTopi
   const summarize = deps.summarize ?? runClaudeCli;
   const clusterer = makeLlmMemoryClusterer({ summarize });
   log.info("memory", "topic-run: starting", { entryCount: entries.length });
+  await clusterAndSwap(workspaceRoot, clusterer);
+}
+
+// Don't trip over an in-progress legacy `memory.md` migration from
+// #1029 PR-B. Mirrors the conditions under which
+// `runMemoryMigrationOnce` would actually run — legacy file present,
+// past the placeholder threshold, AND `.backup` absent. The
+// `.backup` check is load-bearing: when both `memory.md` and
+// `.backup` exist, the legacy runner refuses to re-process (the
+// backup signals "already done; user re-introduced the file"), and
+// without this clause the topic runner would defer indefinitely.
+//
+// One guarded `statSync` (no `existsSync` first): the legacy
+// migration runs in parallel and can rename / delete `memory.md`
+// between an `existsSync` check and a follow-up `statSync`, turning
+// the race into an unhandled rejection because this whole function
+// is invoked as a floating promise on startup. ENOENT means the
+// legacy file isn't there (or just got renamed away), so there's
+// nothing to defer for; any other error is swallowed and the runner
+// proceeds — a permission glitch should never block the topic
+// restructure.
+function shouldDeferForLegacyMigration(workspaceRoot: string): boolean {
+  const legacyPath = path.join(workspaceRoot, WORKSPACE_FILES.memory);
+  let legacyStat: ReturnType<typeof statSync> | null;
+  try {
+    legacyStat = statSync(legacyPath);
+  } catch {
+    legacyStat = null;
+  }
+  if (legacyStat && legacyStat.size >= 64 && !existsSync(`${legacyPath}.backup`)) {
+    log.debug("memory", "topic-run: legacy memory.md still in flight, deferring", { legacyPath });
+    return true;
+  }
+  return false;
+}
+
+async function clusterAndSwap(workspaceRoot: string, clusterer: MemoryClusterer): Promise<void> {
   try {
     const result = await clusterAtomicIntoStaging(workspaceRoot, clusterer);
     if (result.noop) {

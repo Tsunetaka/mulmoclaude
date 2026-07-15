@@ -105,9 +105,12 @@ function defaultSleep(delayMs) {
 
 // Build the throwaway package.json for the install directory. Pure
 // function so tests can lock in the shape without spinning up a
-// filesystem.
-export function buildInstallerPackageJson({ tarballName } = {}) {
-  return {
+// filesystem. `overrides` (npm `overrides`) redirects the launcher's
+// first-party workspace deps to local `file:` tarballs so the install
+// resolves them from the just-built workspace instead of the public
+// registry — see packWorkspaceOverrides / plans/feat-smoke-local-registry.md.
+export function buildInstallerPackageJson({ tarballName, overrides } = {}) {
+  const pkg = {
     name: "mulmoclaude-smoke-installer",
     version: "0.0.0",
     private: true,
@@ -118,6 +121,116 @@ export function buildInstallerPackageJson({ tarballName } = {}) {
     description: "Throwaway install root for mulmoclaude CI smoke. Not for publish.",
     dependencies: tarballName ? { mulmoclaude: `file:${tarballName}` } : {},
   };
+  if (overrides && Object.keys(overrides).length > 0) {
+    pkg.overrides = overrides;
+  }
+  return pkg;
+}
+
+// The launcher package's own name — it is installed via its tarball, never
+// overridden, and is the root of the first-party dependency closure.
+const LAUNCHER_NAME = "mulmoclaude";
+
+// Read every workspace package (name, dir, first-party-relevant dep names) by
+// expanding the root package.json `workspaces` globs. All globs are `<dir>/*`,
+// so a single readdir per parent suffices — no glob library needed. Injectable
+// fs impls keep it unit-testable. `deps` folds dependencies + peerDependencies +
+// optionalDependencies since any of them can pull a first-party package into the
+// install tree.
+export async function enumerateWorkspacePackages(root, { readFileImpl = readFile, readdirImpl = readdir } = {}) {
+  const rootPkg = JSON.parse(await readFileImpl(path.join(root, "package.json"), "utf8"));
+  const globs = rootPkg.workspaces ?? [];
+  const packages = [];
+  for (const glob of globs) {
+    const parent = glob.replace(/\/\*$/, "");
+    let entries;
+    try {
+      entries = await readdirImpl(path.join(root, parent), { withFileTypes: true });
+    } catch {
+      continue; // a globbed parent dir may not exist in every checkout
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(root, parent, entry.name);
+      let pj;
+      try {
+        pj = JSON.parse(await readFileImpl(path.join(dir, "package.json"), "utf8"));
+      } catch {
+        continue; // a `<dir>/*` parent (e.g. packages/plugins) has no package.json of its own
+      }
+      const deps = [...Object.keys(pj.dependencies ?? {}), ...Object.keys(pj.peerDependencies ?? {}), ...Object.keys(pj.optionalDependencies ?? {})];
+      packages.push({ name: pj.name, dir, private: pj.private === true, deps });
+    }
+  }
+  return packages;
+}
+
+// Pure BFS: the set of first-party (workspace) package names reachable from
+// `rootName`'s deps, excluding the root itself. "First-party" = present in the
+// packages list, so third-party deps (@mulmochat-plugin/*, @mulmocast/types, …)
+// are naturally excluded and left to resolve from the public registry.
+export function computeFirstPartyClosure(packages, rootName) {
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
+  const firstParty = new Set(byName.keys());
+  const root = byName.get(rootName);
+  if (!root) return new Set();
+  const closure = new Set();
+  const queue = root.deps.filter((dep) => firstParty.has(dep));
+  while (queue.length > 0) {
+    const name = queue.shift();
+    if (closure.has(name) || name === rootName) continue;
+    closure.add(name);
+    const pkg = byName.get(name);
+    if (pkg) {
+      for (const dep of pkg.deps) {
+        if (firstParty.has(dep) && !closure.has(dep)) queue.push(dep);
+      }
+    }
+  }
+  return closure;
+}
+
+// `npm pack` one workspace package into `destDir` with --ignore-scripts (dist is
+// already built by the CI build step, so we archive it as-is rather than paying a
+// prepack rebuild per package). Returns the absolute tarball path.
+async function packOneWorkspacePackage({ packageDir, destDir, runCommandImpl = runCommand, packTimeoutMs }) {
+  const result = await runCommandImpl("npm", ["pack", packageDir, "--ignore-scripts", "--pack-destination", destDir, "--json"], {
+    timeoutMs: packTimeoutMs ?? DEFAULT_PACK_TIMEOUT_MS,
+  });
+  if (result.code !== 0 || result.timedOut) {
+    throw new Error(`npm pack failed for ${packageDir} (code=${result.code}, timedOut=${result.timedOut})\n${result.stderr}`);
+  }
+  const parsed = JSON.parse(result.stdout);
+  const filename = Array.isArray(parsed) ? parsed[0]?.filename : parsed?.filename;
+  if (!filename) throw new Error(`npm pack produced no filename for ${packageDir}`);
+  return path.join(destDir, filename);
+}
+
+// npm reads a `file:` specifier as a URL-ish path, where `\` is not a separator.
+// `path.join` emits `\` on Windows, so normalise to `/` — Windows filesystem APIs
+// accept forward slashes. `sep` is injectable so the Windows shape is testable on
+// any host; on POSIX it defaults to `/`, leaving a literal `\` in a filename alone.
+export function toFileSpecifier(tarballPath, sep = path.sep) {
+  return `file:${tarballPath.split(sep).join("/")}`;
+}
+
+// Pack the launcher's first-party workspace dependency closure into `packDir` and
+// return an npm `overrides` map { name: "file:<abs tarball>" }. This is what lets
+// the smoke install a launcher pinned to a bumped-but-unpublished shared package
+// (e.g. @mulmoclaude/core@0.12.0) without that version existing on public npm —
+// see plans/feat-smoke-local-registry.md.
+export async function packWorkspaceOverrides({ root, packDir, runCommandImpl = runCommand, enumerateImpl = enumerateWorkspacePackages, packTimeoutMs } = {}) {
+  const packages = await enumerateImpl(root);
+  const closure = computeFirstPartyClosure(packages, LAUNCHER_NAME);
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
+  const overrides = {};
+  for (const name of closure) {
+    const pkg = byName.get(name);
+    if (!pkg) continue;
+    const tarballPath = await packOneWorkspacePackage({ packageDir: pkg.dir, destDir: packDir, runCommandImpl, packTimeoutMs });
+    overrides[name] = toFileSpecifier(tarballPath);
+  }
+  return overrides;
 }
 
 // Spawn a child process, collect stdout/stderr as strings, enforce a
@@ -365,9 +478,16 @@ export async function verifySandboxFiles({ workDir, files = REQUIRED_SANDBOX_FIL
   return { ok: missing.length === 0, missing, checkedDir: installedPkgDir };
 }
 
-// Lay out a throwaway install dir and `npm install` the tarball.
-async function installTarball({ workDir, tarballAbsolutePath, installTimeoutMs }) {
-  const pkg = buildInstallerPackageJson({ tarballName: path.basename(tarballAbsolutePath) });
+// Lay out a throwaway install dir and `npm install` the tarball. First-party
+// workspace deps are packed to local tarballs and pinned via `overrides` so the
+// install resolves them from the just-built workspace, not the public registry —
+// otherwise a launcher pinned to a bumped-but-unpublished shared package would
+// fail with ETARGET (plans/feat-smoke-local-registry.md).
+async function installTarball({ workDir, tarballAbsolutePath, installTimeoutMs, root, packTimeoutMs }) {
+  const packDir = path.join(workDir, "local-deps");
+  await mkdir(packDir, { recursive: true });
+  const overrides = await packWorkspaceOverrides({ root, packDir, packTimeoutMs });
+  const pkg = buildInstallerPackageJson({ tarballName: path.basename(tarballAbsolutePath), overrides });
   await writeFile(path.join(workDir, "package.json"), JSON.stringify(pkg, null, 2), "utf8");
   const result = await runCommand("npm", ["install", tarballAbsolutePath, "--no-audit", "--no-fund"], {
     cwd: workDir,
@@ -485,7 +605,7 @@ export async function runTarballSmoke({
   let succeeded = false;
   try {
     tarballPath = await packTarball({ root, packTimeoutMs });
-    await installTarball({ workDir: runDir, tarballAbsolutePath: tarballPath, installTimeoutMs });
+    await installTarball({ workDir: runDir, tarballAbsolutePath: tarballPath, installTimeoutMs, root, packTimeoutMs });
     const sandboxCheck = await verifySandboxFiles({ workDir: runDir });
     if (!sandboxCheck.ok) {
       throw new Error(`sandbox build context missing from tarball: ${sandboxCheck.missing.join(", ")} (under ${sandboxCheck.checkedDir})`);

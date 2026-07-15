@@ -23,9 +23,11 @@ const workspace = path.join(path.sep, "tmp", "ws");
 
 // The chat dir is sourced from WORKSPACE_DIRS.chat so the layout
 // move in #284 (`chat/` → `conversations/chat/`) can't silently
-// drift again. `CHAT_REL` reflects the current on-disk relative
-// path used by every joined-path expectation below.
-const CHAT_REL = path.join("conversations", "chat");
+// drift again. Keep this the POSIX `/` literal (as WORKSPACE_DIRS
+// stores it) rather than `path.join`, so the direct `CHAT_DIR`
+// equality below holds on Windows too; the joined expectations feed
+// it through `path.join`, which normalises the separator per platform.
+const CHAT_REL = "conversations/chat";
 
 describe("constants", () => {
   it("exports expected directory and file name constants", () => {

@@ -542,69 +542,66 @@ bindRoute(router, API_ROUTES.mulmoScript.beatAudio, async (req: Request<object, 
   );
 });
 
+interface GenerateBeatAudioBody {
+  filePath: string;
+  beatIndex: number;
+  force?: boolean;
+  chatSessionId?: string;
+}
+
+async function handleGenerateBeatAudio(req: Request<object, object, GenerateBeatAudioBody>, res: Response<GenerateBeatAudioResponse>): Promise<void> {
+  const { filePath, beatIndex, force, chatSessionId } = req.body;
+
+  if (!filePath || beatIndex === undefined) {
+    badRequest(res, "filePath and beatIndex are required");
+    return;
+  }
+
+  const key = String(beatIndex);
+  publishGeneration(chatSessionId, GENERATION_KINDS.beatAudio, filePath, key, false);
+  let genError: string | undefined;
+  try {
+    await withStoryContext(res, filePath, { force, operation: "generate-beat-audio" }, async ({ context }) => {
+      try {
+        await generateBeatAudio(beatIndex, context, {
+          settings: process.env as Record<string, string>,
+        } as Parameters<typeof generateBeatAudio>[2]);
+
+        const beat = context.studio.script.beats[beatIndex];
+        const audioPath = context.studio.beats[beatIndex]?.audioFile ?? getBeatAudioPathOrUrl(beat.text ?? "", context, beat, context.lang);
+
+        if (!audioPath || !existsSync(audioPath)) {
+          // Logic-flow failure (not an exception) — emit a targeted
+          // log. Don't write raw `beat.text` into persistent logs —
+          // it's free-form user content and can contain sensitive
+          // data.
+          log.error("generate-beat-audio", "audio was not generated", {
+            beatIndex,
+            audioPath,
+            exists: audioPath ? existsSync(audioPath) : false,
+            beatTextLength: typeof beat?.text === "string" ? beat.text.length : 0,
+            audioFilePresent: Boolean(context.studio.beats[beatIndex]?.audioFile),
+          });
+          genError = "Audio was not generated";
+          serverError(res, genError);
+          return;
+        }
+
+        res.json({ audio: fileToDataUri(audioPath, "audio/mpeg") });
+      } catch (err) {
+        genError = errorMessage(err);
+        throw err;
+      }
+    });
+  } finally {
+    publishGeneration(chatSessionId, GENERATION_KINDS.beatAudio, filePath, key, true, genError);
+  }
+}
+
 bindRoute(
   router,
   API_ROUTES.mulmoScript.generateBeatAudio,
-  async (
-    req: Request<
-      object,
-      object,
-      {
-        filePath: string;
-        beatIndex: number;
-        force?: boolean;
-        chatSessionId?: string;
-      }
-    >,
-    res: Response<GenerateBeatAudioResponse>,
-  ) => {
-    const { filePath, beatIndex, force, chatSessionId } = req.body;
-
-    if (!filePath || beatIndex === undefined) {
-      badRequest(res, "filePath and beatIndex are required");
-      return;
-    }
-
-    const key = String(beatIndex);
-    publishGeneration(chatSessionId, GENERATION_KINDS.beatAudio, filePath, key, false);
-    let genError: string | undefined;
-    try {
-      await withStoryContext(res, filePath, { force, operation: "generate-beat-audio" }, async ({ context }) => {
-        try {
-          await generateBeatAudio(beatIndex, context, {
-            settings: process.env as Record<string, string>,
-          } as Parameters<typeof generateBeatAudio>[2]);
-
-          const beat = context.studio.script.beats[beatIndex];
-          const audioPath = context.studio.beats[beatIndex]?.audioFile ?? getBeatAudioPathOrUrl(beat.text ?? "", context, beat, context.lang);
-
-          if (!audioPath || !existsSync(audioPath)) {
-            // Logic-flow failure (not an exception) — emit a targeted
-            // log. Don't write raw `beat.text` into persistent logs —
-            // it's free-form user content and can contain sensitive
-            // data.
-            log.error("generate-beat-audio", "audio was not generated", {
-              beatIndex,
-              audioPath,
-              exists: audioPath ? existsSync(audioPath) : false,
-              beatTextLength: typeof beat?.text === "string" ? beat.text.length : 0,
-              audioFilePresent: Boolean(context.studio.beats[beatIndex]?.audioFile),
-            });
-            genError = "Audio was not generated";
-            serverError(res, genError);
-            return;
-          }
-
-          res.json({ audio: fileToDataUri(audioPath, "audio/mpeg") });
-        } catch (err) {
-          genError = errorMessage(err);
-          throw err;
-        }
-      });
-    } finally {
-      publishGeneration(chatSessionId, GENERATION_KINDS.beatAudio, filePath, key, true, genError);
-    }
-  },
+  async (req: Request<object, object, GenerateBeatAudioBody>, res: Response<GenerateBeatAudioResponse>) => handleGenerateBeatAudio(req, res),
 );
 
 bindRoute(router, API_ROUTES.mulmoScript.renderBeat, async (req: Request<object, object, RenderBeatBody>, res: Response) => {
@@ -655,6 +652,19 @@ interface MovieProgressEvent {
   beatIndex: number;
 }
 
+// Map each beat to its array index, keyed by beat.id (falling back to
+// a synthetic `__index__<n>` for id-less beats). Shared by the movie
+// and PDF pipelines to translate mulmocast's per-beat progress events
+// (which carry the beat id) back into an index the UI can address.
+export function buildBeatIdIndex(beats: MulmoBeat[]): Map<string, number> {
+  const idToIndex = new Map<string, number>();
+  beats.forEach((beat, index) => {
+    const key = beat.id ?? `__index__${index}`;
+    idToIndex.set(key, index);
+  });
+  return idToIndex;
+}
+
 // Shared core for both the SSE-streaming `generateMovie` route and the
 // fire-and-forget background path triggered by `autoGenerateMovie`.
 // Builds the mulmo context, runs images→audio→movie, and reports
@@ -665,11 +675,7 @@ async function runMovieGeneration(absoluteFilePath: string, onProgressEvent: (ev
   const context = await buildContext(absoluteFilePath);
   if (!context) return { ok: false, error: "Failed to initialize mulmo context" };
 
-  const idToIndex = new Map<string, number>();
-  (context.studio.script.beats as MulmoBeat[]).forEach((beat, index) => {
-    const key = beat.id ?? `__index__${index}`;
-    idToIndex.set(key, index);
-  });
+  const idToIndex = buildBeatIdIndex(context.studio.script.beats as MulmoBeat[]);
 
   // Known limitation: addSessionProgressCallback is global, so when two
   // movie generations for *different* scripts run concurrently, both
@@ -1027,7 +1033,36 @@ bindRoute(
   },
 );
 
-bindRoute(router, API_ROUTES.mulmoScript.generatePdf, async (req: Request<object, object, { filePath: string; chatSessionId?: string }>, res: Response) => {
+type PdfGenerationResult = { ok: true; outputPath: string } | { ok: false; error: string };
+
+// Shared core for the SSE-streaming `generatePdf` route. Mirrors the
+// movie pipeline's per-beat progress reporting so the UI's
+// pendingGenerations watcher can light spinners during the image
+// pass; the PDF action itself doesn't emit progress events, so only
+// image events are forwarded. Returns a structured failure when the
+// pipeline completes but the output file is missing.
+async function runPdfGeneration(context: StoryContext, onImageBeatDone: (beatIndex: number) => void): Promise<PdfGenerationResult> {
+  const idToIndex = buildBeatIdIndex(context.studio.script.beats as MulmoBeat[]);
+  const onProgress = (event: { kind: string; sessionType: string; id?: string; inSession: boolean }) => {
+    if (event.kind !== "beat" || event.inSession || event.id === undefined) return;
+    const beatIndex = idToIndex.get(event.id);
+    if (beatIndex === undefined) return;
+    if (event.sessionType !== "image") return;
+    onImageBeatDone(beatIndex);
+  };
+  addSessionProgressCallback(onProgress);
+  try {
+    const imagesContext = await images(context);
+    await pdf(imagesContext, PDF_MODE, PDF_SIZE);
+    const outputPath = pdfFilePath(imagesContext, PDF_MODE);
+    if (!existsSync(outputPath)) return { ok: false, error: "PDF was not generated" };
+    return { ok: true, outputPath };
+  } finally {
+    removeSessionProgressCallback(onProgress);
+  }
+}
+
+async function handleGeneratePdf(req: Request<object, object, { filePath: string; chatSessionId?: string }>, res: Response): Promise<void> {
   const { filePath, chatSessionId } = req.body;
   if (!filePath) {
     badRequest(res, "filePath is required");
@@ -1058,35 +1093,13 @@ bindRoute(router, API_ROUTES.mulmoScript.generatePdf, async (req: Request<object
       send({ type: "error", message: genError });
       return;
     }
-    // Mirror the movie pipeline's per-beat progress reporting so the
-    // UI's pendingGenerations watcher can light spinners during the
-    // image pass. The PDF action itself doesn't emit progress events.
-    const idToIndex = new Map<string, number>();
-    (context.studio.script.beats as MulmoBeat[]).forEach((beat, index) => {
-      const key = beat.id ?? `__index__${index}`;
-      idToIndex.set(key, index);
-    });
-    const onProgress = (event: { kind: string; sessionType: string; id?: string; inSession: boolean }) => {
-      if (event.kind !== "beat" || event.inSession || event.id === undefined) return;
-      const beatIndex = idToIndex.get(event.id);
-      if (beatIndex === undefined) return;
-      if (event.sessionType !== "image") return;
-      send({ type: "beat_image_done", beatIndex });
-    };
-    addSessionProgressCallback(onProgress);
-    try {
-      const imagesContext = await images(context);
-      await pdf(imagesContext, PDF_MODE, PDF_SIZE);
-      const outputPath = pdfFilePath(imagesContext, PDF_MODE);
-      if (!existsSync(outputPath)) {
-        genError = "PDF was not generated";
-        send({ type: "error", message: genError });
-        return;
-      }
-      send({ type: "done", pdfPath: toStoryRef(outputPath) });
-    } finally {
-      removeSessionProgressCallback(onProgress);
+    const result = await runPdfGeneration(context, (beatIndex) => send({ type: "beat_image_done", beatIndex }));
+    if (!result.ok) {
+      genError = result.error;
+      send({ type: "error", message: genError });
+      return;
     }
+    send({ type: "done", pdfPath: toStoryRef(result.outputPath) });
   } catch (err) {
     genError = errorMessage(err);
     send({ type: "error", message: genError });
@@ -1095,7 +1108,11 @@ bindRoute(router, API_ROUTES.mulmoScript.generatePdf, async (req: Request<object
     publishGeneration(chatSessionId, GENERATION_KINDS.pdf, filePath, "", true, genError);
     res.end();
   }
-});
+}
+
+bindRoute(router, API_ROUTES.mulmoScript.generatePdf, async (req: Request<object, object, { filePath: string; chatSessionId?: string }>, res: Response) =>
+  handleGeneratePdf(req, res),
+);
 
 bindRoute(router, API_ROUTES.mulmoScript.downloadPdf, (req: Request, res: Response) => {
   const pdfPath = getOptionalStringQuery(req, "pdfPath");

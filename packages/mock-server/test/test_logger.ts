@@ -48,9 +48,10 @@ describe("createLogger", () => {
 
   it("works without logFile (no crash)", () => {
     const log = createLogger(false);
-    log.info("no file");
-    log.verbose("no file verbose");
-    log.raw("no file raw");
-    // No assertion needed — just verify it doesn't throw
+    assert.doesNotThrow(() => {
+      log.info("no file");
+      log.verbose("no file verbose");
+      log.raw("no file raw");
+    });
   });
 });

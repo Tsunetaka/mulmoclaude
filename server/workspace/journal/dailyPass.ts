@@ -74,17 +74,24 @@ export async function buildDailyPassPlan(state: JournalState, deps: DailyPassDep
   const { dirty } = findDirtySessions(eligible, state.processedSessions);
   if (dirty.length === 0) return null;
 
-  const perSessionExcerpts = await loadDirtySessionExcerpts(chatDir, dirty, workspaceRoot);
+  const dirtyMetaById = new Map(eligible.map((sessionMeta) => [sessionMeta.id, sessionMeta]));
+  const { journalDirty, silentlyProcessed } = await partitionDirtyByOrigin(dirty, dirtyMetaById, workspaceRoot);
+
+  const perSessionExcerpts = await loadDirtySessionExcerpts(chatDir, journalDirty, workspaceRoot);
   const { dayBuckets, sessionToDays } = buildDayBuckets(perSessionExcerpts);
 
   const existingTopics = await readAllTopics(workspaceRoot);
   const newTopicsSeen = new Set<string>(state.knownTopics);
   // Do NOT bump lastDailyRunAt here — outer runner does it after optimization, so partial progress isn't a complete pass.
+  // Silently mark origin-filtered dirty sessions as processed at their current
+  // mtime so they don't reappear as dirty on every pass. Without this, a
+  // workspace with many automation sessions pays an O(N) meta re-read on
+  // every hourly run.
   const initialNextState: JournalState = {
     ...state,
+    processedSessions: applyProcessed(state.processedSessions, silentlyProcessed),
     knownTopics: [...newTopicsSeen].sort(),
   };
-  const dirtyMetaById = new Map(eligible.map((sessionMeta) => [sessionMeta.id, sessionMeta]));
   const orderedDays = [...dayBuckets.keys()].sort();
 
   return {
@@ -422,6 +429,49 @@ export function advanceJournalState(prev: JournalState, justCompleted: readonly 
 }
 
 // Malformed sessions are logged and skipped so one bad jsonl can't crash the pass.
+// Origins the journal pass intentionally skips (mirror of the chat-index
+// filter added in #1944). `system` sessions are hidden host workers
+// (thumbnail generation, background exports); `scheduler` sessions are
+// automation-driven with prompts the user did not author. Neither
+// surfaces content worth summarising into a personal daily journal.
+const NON_INDEXED_ORIGINS: ReadonlySet<string> = new Set(["system", "scheduler"]);
+
+async function isEligibleForJournalByOrigin(sessionId: string, workspaceRoot: string): Promise<boolean> {
+  try {
+    const meta = await readSessionMetaIO(sessionId, workspaceRoot);
+    if (meta && typeof meta.origin === "string" && NON_INDEXED_ORIGINS.has(meta.origin)) return false;
+  } catch {
+    // meta unreadable → treat as eligible; the excerpt loader will
+    // still bail if the jsonl itself is malformed.
+  }
+  return true;
+}
+
+interface DirtyPartition {
+  journalDirty: string[];
+  // origin-filtered dirty sessions — marked processed at their current mtime
+  // so the next pass doesn't re-inspect them.
+  silentlyProcessed: SessionFileMeta[];
+}
+
+async function partitionDirtyByOrigin(
+  dirty: readonly string[],
+  dirtyMetaById: ReadonlyMap<string, SessionFileMeta>,
+  workspaceRoot: string,
+): Promise<DirtyPartition> {
+  const journalDirty: string[] = [];
+  const silentlyProcessed: SessionFileMeta[] = [];
+  for (const sessionId of dirty) {
+    if (await isEligibleForJournalByOrigin(sessionId, workspaceRoot)) {
+      journalDirty.push(sessionId);
+      continue;
+    }
+    const meta = dirtyMetaById.get(sessionId);
+    if (meta) silentlyProcessed.push(meta);
+  }
+  return { journalDirty, silentlyProcessed };
+}
+
 async function loadDirtySessionExcerpts(chatDir: string, dirty: readonly string[], workspaceRoot: string): Promise<Map<string, Map<string, SessionExcerpt>>> {
   const perSession = new Map<string, Map<string, SessionExcerpt>>();
   for (const sessionId of dirty) {

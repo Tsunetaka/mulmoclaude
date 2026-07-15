@@ -251,6 +251,25 @@ async function handleSaveAction(
   res.json(response);
 }
 
+// Extracted from the POST switch (mirrors handleSaveAction) so the
+// route handler stays under the max-lines-per-function limit.
+// Resolves the page, logs the missing / ok distinction, and writes
+// the canvas response envelope.
+async function handlePageAction(res: Response<WikiResponse | ErrorResponse>, action: string, pageName: string | undefined): Promise<void> {
+  if (!pageName) {
+    log.warn("wiki", "POST page: missing pageName");
+    badRequest(res, "pageName required for page action");
+    return;
+  }
+  const response = await buildPageResponse(action, pageName);
+  if (!response.data.pageExists) {
+    log.warn("wiki", "POST page: not found", { pageNamePreview: previewSnippet(pageName) });
+  } else {
+    log.info("wiki", "POST page: ok", { pageNamePreview: previewSnippet(pageName), bytes: response.data.content.length });
+  }
+  res.json(response);
+}
+
 async function buildLintReportResponse(action: string): Promise<WikiResponse> {
   const issues = await collectLintIssues(workspacePath);
   const report = formatLintReport(issues);
@@ -264,7 +283,7 @@ async function buildLintReportResponse(action: string): Promise<WikiResponse> {
   };
 }
 
-router.post(API_ROUTES.wiki.base, async (req: Request<object, unknown, WikiBody>, res: Response<WikiResponse | ErrorResponse>) => {
+async function handleWikiPost(req: Request<object, unknown, WikiBody>, res: Response<WikiResponse | ErrorResponse>): Promise<void> {
   const { action, pageName } = req.body;
   log.info("wiki", "POST: start", { action, pageNamePreview: pageName ? previewSnippet(pageName) : undefined });
   try {
@@ -276,18 +295,7 @@ router.post(API_ROUTES.wiki.base, async (req: Request<object, unknown, WikiBody>
         return;
       }
       case "page": {
-        if (!pageName) {
-          log.warn("wiki", "POST page: missing pageName");
-          badRequest(res, "pageName required for page action");
-          return;
-        }
-        const response = await buildPageResponse(action, pageName);
-        if (!response.data.pageExists) {
-          log.warn("wiki", "POST page: not found", { pageNamePreview: previewSnippet(pageName) });
-        } else {
-          log.info("wiki", "POST page: ok", { pageNamePreview: previewSnippet(pageName), bytes: response.data.content.length });
-        }
-        res.json(response);
+        await handlePageAction(res, action, pageName);
         return;
       }
       case "log": {
@@ -326,6 +334,8 @@ router.post(API_ROUTES.wiki.base, async (req: Request<object, unknown, WikiBody>
     log.error("wiki", "POST: threw", { action, pageNamePreview: pageName ? previewSnippet(pageName) : undefined, error: formatError(err) });
     throw err;
   }
-});
+}
+
+router.post(API_ROUTES.wiki.base, async (req: Request<object, unknown, WikiBody>, res: Response<WikiResponse | ErrorResponse>) => handleWikiPost(req, res));
 
 export default router;

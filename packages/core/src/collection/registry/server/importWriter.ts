@@ -59,12 +59,33 @@ async function statType(target: string): Promise<"dir" | "other" | "absent"> {
   try {
     return (await stat(target)).isDirectory() ? "dir" : "other";
   } catch (err) {
-    // Only a genuinely missing path is "absent". ENOTDIR (an ancestor is a file),
-    // EACCES, etc. are path-shape conflicts that mkdir would later throw on, so
-    // surface them as "other" for deterministic 409 handling.
-    if (isRecord(err) && err.code === "ENOENT") return "absent";
-    return "other";
+    // EACCES etc. are path-shape conflicts mkdir would later throw on → "other".
+    // A file ancestor surfaces as ENOTDIR on POSIX but ENOENT on Windows (which
+    // reports the whole path as missing), so ENOENT can't be trusted as "absent"
+    // until we've confirmed no existing ancestor is a non-directory file.
+    if (!(isRecord(err) && err.code === "ENOENT")) return "other";
+    return (await hasNonDirAncestor(target)) ? "other" : "absent";
   }
+}
+
+// Walk up from `target` to the nearest ancestor that exists: a non-directory
+// file there means `target` can never be mkdir'd (a path-shape conflict → 409),
+// whichever errno the platform's `stat(target)` chose. An all-absent-or-directory
+// chain up to the filesystem root is a genuine "absent".
+async function hasNonDirAncestor(target: string): Promise<boolean> {
+  let current = path.dirname(target);
+  while (current !== path.dirname(current)) {
+    try {
+      return !(await stat(current)).isDirectory();
+    } catch (err) {
+      if (isRecord(err) && err.code === "ENOENT") {
+        current = path.dirname(current);
+        continue;
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 async function isEmptyOrAbsentDir(target: string): Promise<boolean> {
@@ -368,4 +389,4 @@ export async function performImport(author: string, slug: string, workspaceRoot:
 
 // Exported for downstream code that wants the path conventions without
 // importing skill-bridge directly.
-export { claudeSkillDir, dataSkillDir };
+export { claudeSkillDir, dataSkillDir, hasNonDirAncestor };

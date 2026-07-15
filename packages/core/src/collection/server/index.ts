@@ -23,6 +23,7 @@ export * from "./io";
 export * from "./validate";
 export * from "./discovery";
 export * from "./derive";
+export * from "./dynamicIcon";
 export * from "./spawn";
 export * from "./delete";
 export * from "./views";

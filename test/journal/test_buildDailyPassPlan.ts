@@ -141,4 +141,39 @@ describe("buildDailyPassPlan", () => {
     // anything downstream could (in principle) mark it processed.
     assert.ok(plan.dirtyMetaById.has(sessionId), "metadata-only session is still tracked as dirty");
   });
+
+  it("silently marks origin-filtered dirty sessions as processed at their current mtime (Codex iter-1)", async () => {
+    // A dirty session with meta.origin === "scheduler" must not be
+    // summarised, but MUST be recorded in processedSessions at its
+    // current mtime — otherwise it stays dirty forever and every
+    // subsequent pass re-reads its meta (O(N) per pass in workspaces
+    // with many automation sessions).
+    const sessionId = "33333333-3333-3333-3333-333333333333";
+    const chatDir = path.join(workspaceRoot, "conversations", "chat");
+    const sessionFile = path.join(chatDir, `${sessionId}.jsonl`);
+    const metaFile = path.join(chatDir, `${sessionId}.json`);
+    await mkdir(chatDir, { recursive: true });
+    const event = {
+      type: "user_message",
+      timestamp: "2026-04-25T01:00:00Z",
+      message: "scheduled ping",
+    };
+    await writeFile(sessionFile, `${JSON.stringify(event)}\n`);
+    await writeFile(metaFile, JSON.stringify({ origin: "scheduler", roleId: "general" }));
+
+    const plan = await buildDailyPassPlan(defaultState(), {
+      workspaceRoot,
+      summarize: noopSummarize,
+      activeSessionIds: new Set(),
+    });
+
+    assert.ok(plan, "plan should be non-null when there's a dirty scheduler session");
+    assert.equal(plan.perSessionExcerpts.has(sessionId), false, "scheduler session excerpts must be dropped");
+    assert.equal(plan.dayBuckets.size, 0, "no day buckets for origin-filtered dirty session");
+    assert.ok(
+      plan.initialNextState.processedSessions[sessionId],
+      "origin-filtered dirty session must be recorded in processedSessions to prevent per-pass rescan",
+    );
+    assert.ok(plan.initialNextState.processedSessions[sessionId].lastMtimeMs > 0, "lastMtimeMs must reflect the current file mtime");
+  });
 });

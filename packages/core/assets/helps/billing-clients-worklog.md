@@ -26,8 +26,10 @@ user opens it at `/collections/<slug>`). **Do not use the `mc-` prefix.**
 > mimic other collections in the workspace. The whole point is a reproducible
 > billing suite. (If the user wants a *custom* collection instead, that's a
 > different task — use `config/helps/collection-skills.md`.) Existing records
-> under `data/clients/items` / `data/worklog/items` already match these schemas
-> and will render as-is once you author the skill — no data edits needed.
+> under `data/clients/items` / `data/worklog/items` will render as-is **only
+> when `worklog.clientId` values are already slugs AND a matching client
+> record exists for each of them**. If either invariant is violated, the
+> `ref` link breaks — the reconcile step below (§3) fixes both.
 
 ## Slug contract (do not change these)
 
@@ -206,10 +208,76 @@ If the user gives a clear "log N hours for X today", just write it. Use
 
 ---
 
+## 3. Reconcile pre-existing worklog data (MANDATORY before "Done")
+
+Both skills are now authored. Before telling the user setup is complete,
+audit any records that were already on disk under `data/worklog/items/` —
+they may have been written before the `clients` collection existed, so
+`clientId` values can be either display names (`"Singularity Society"`) or
+missing-slug references. Both break the `ref` link at render time.
+
+Run this reconcile every time — even when the setup looks fine — because
+"looks fine" from the LLM side (schemas written, files present) is
+distinct from "the ref actually resolves" (clientId is a valid slug AND
+`data/clients/items/<slug>.json` exists).
+
+**Steps** (idempotent; safe to re-run):
+
+1. **Inventory the existing worklog.** List `data/worklog/items/`. Read
+   every record and collect the distinct `clientId` values seen.
+   *Skip this step only when the directory does not exist at all.*
+2. **For each distinct `clientId` value**, classify it:
+   - **valid slug + matching client file exists** → no action.
+   - **valid slug but no matching `data/clients/items/<slug>.json`** →
+     create a stub client record: `id: <slug>`, `name` derived by
+     title-casing the slug (`acme-corp` → "Acme Corp"), other fields blank
+     so the user can fill them in later.
+   - **not a valid slug** (contains uppercase, spaces, `&`, `.`, etc.) →
+     (a) generate the slug (lowercase, spaces → `-`, drop punctuation,
+     collapse repeat hyphens, strip leading/trailing hyphens); (b)
+     **validate the generated slug against the `clients.id` contract**
+     (see § 1 record shape: `[a-z0-9-]`, 1–48 chars): if it is empty
+     (punctuation-only or all-whitespace input like `"!!!"`), or longer
+     than 48 chars, **stop and ask the user** for a valid slug rather
+     than writing an invalid filename. If it is >48 chars but has
+     meaningful prefix content, propose truncation at 48 (dropping any
+     trailing hyphen) and confirm with the user before proceeding; (c)
+     **check for slug collisions BEFORE writing anything**: if
+     `data/clients/items/<slug>.json` already exists AND its `name`
+     field does not match the display value being reconciled, stop and
+     disambiguate — either append a numeric suffix (`acme-corp-2`)
+     after confirming the new client is genuinely distinct, or ask the
+     user which client the worklog entries belong to. Do **not**
+     silently overwrite an existing client. Also stop when two
+     different display values in the current inventory slugify to the
+     same slug (e.g. `"ACME Corp"` and `"Acme Corp."`); ask the user
+     whether they're the same client (merge to one slug) or distinct
+     (assign each a suffixed slug); (d) create
+     `data/clients/items/<slug>.json` with `id: <slug>`, `name:
+     <original display value>`, other fields blank; (e) rewrite the raw
+     display value inside every affected `data/worklog/items/*.json`
+     to the new slug in the `clientId` field (preserve every other
+     field untouched).
+3. **Report** what changed: how many client records were created and how
+   many worklog `clientId` values were rewritten. Do not summarise the
+   raw records — point at `/collections/clients` and `/collections/worklog`.
+
+If the worklog directory did not exist yet (fresh setup, no pre-existing
+data), this step is a no-op and you can proceed straight to "Done".
+
+**Don't skip this step because the LLM output says "existing records will
+render as-is."** That claim only holds when both invariants (slug format
++ matching client file) are already true; the reconcile confirms them.
+
+---
+
 ## Done
 
 Tell the user the two collections are ready at `/collections/clients` and
 `/collections/worklog`. The bridge mirrors the files and re-scans, so they appear
-without a restart. If invoicing is the goal, point them at the next step: run
-*"Set up invoicing for my business"* (the `config/helps/billing-invoice.md`
-recipe, which references these `clients` and pulls hours from this `worklog`).
+without a restart. If the reconcile in §3 created client stubs or rewrote
+`clientId` values, mention the counts so the user knows to fill in the
+stubs' contact info. If invoicing is the goal, point them at the next
+step: run *"Set up invoicing for my business"* (the
+`config/helps/billing-invoice.md` recipe, which references these
+`clients` and pulls hours from this `worklog`).

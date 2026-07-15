@@ -1,12 +1,14 @@
 # How AI-Native Applications Should Be Built
 
-The idea that AI will reshape software is no longer controversial. But naming a thing is not the same as designing it. If you sit down today to build an AI-native application, the literature has remarkably little to say about what the architecture should look like, how the user should experience it, what the contract between the agent and the screen should be — or, for that matter, what kind of software people will still pay for once any of this lands. MulmoClaude is an attempt to answer those questions in code.
+An AI assistant that knows everything about you and supports you around the clock is not sold anywhere. You cannot buy one; you can only nurture one. That is the vision behind MulmoClaude — and it is an architectural claim, not a slogan. The substance of an assistant is not the model; the model is just the engine. Its substance is what accumulates around it: your conversations, your data, and the applications that grow up around your life. Something that accumulates for years must belong to the person it describes — otherwise the accumulation itself becomes the lock-in.
+
+The idea that AI will reshape software is no longer controversial. But naming a thing is not the same as designing it. If you sit down today to build an AI-native application — or the environment an assistant grows in — the literature has remarkably little to say about what the architecture should look like, how the user should experience it, what the contract between the agent and the screen should be, or who ends up owning what accumulates. MulmoClaude is an attempt to answer those questions in code.
 
 It was built from scratch on a specific set of architectural commitments, not as a thought experiment. The code is open-source under MIT, it runs on your laptop, and you can install it with one command. What follows is the design, and the reasoning behind it.
 
-## Three commitments
+## Four commitments
 
-An AI-native application is built on three commitments. They are independent — any one of them can be adopted alone — but they reinforce each other. Take all three seriously and the resulting software does not look or feel like SaaS at all.
+An AI-native application is built on four commitments. They are independent — any one of them can be adopted alone — but they reinforce each other. Take all four seriously and the resulting software does not look or feel like SaaS at all.
 
 ### 1. The agent is a universal controller
 
@@ -40,6 +42,18 @@ What tool calls and MCP do **not** cover is what happens when a tool's result is
 
 Three classes of consumer already implement against the protocol today: MulmoClaude's built-in plugins; third-party runtime plugins distributed as npm packages (`@mulmoclaude/*-plugin`); and, in principle, any future agent host that chooses to support these plugins. The protocol is small enough to read in one sitting and ambitious enough to outlive any one implementation — because it sits on top of MCP, not next to it.
 
+### 4. The accumulation belongs to the user
+
+The first three commitments describe how the software works. The fourth describes where it lives — and it is the one the other three exist to serve.
+
+Every AI vendor has realized that the value of an assistant is determined not by how smart the model is, but by how much it knows about you. That is why hosted assistants keep growing memory features, and why the companies that already hold your mail, your calendar, and your social graph have joined the same race. But an accumulation that lives inside someone else's service is a lock-in that compounds: the longer you use it, the more it knows, and the harder it becomes to leave.
+
+MulmoClaude commits to the opposite arrangement. Everything the assistant accumulates — memories, records, schemas, documents, the wiki it maintains — lives as plain files in a workspace on the user's own machine. There is no server-side database. The wiki is markdown; a collection is a schema and a folder of records; configuration is JSON you can copy to another machine. Plain files are not a nostalgic choice. They are what makes the accumulation portable (copy the directory), inspectable (read it), durable (there is no service to shut down), and legible to the agent itself, which navigates it with the same read/grep/write tools it uses for everything else.
+
+Remote access does not weaken the commitment. When a phone or a messaging bridge reaches the assistant, a relay carries messages in transit and nothing more; the data and the applications never leave the computer. And because the software is MIT-licensed, the final escape hatch is real: the environment your assistant grows in cannot be discontinued, repriced, or acquired out from under you.
+
+This is the commitment that turns the other three from a product architecture into something a person can safely pour years of their life into. A universal controller composing over an accumulation you do not own is a better SaaS. The same controller composing over an accumulation you do own is an assistant you nurture.
+
 ## Three patterns, proven
 
 Architectural commitments are easy to state and hard to honor. The real test is whether the same primitives carry you through unrelated problem domains. MulmoClaude ships a registry of plugins specifically to demonstrate that they do. Three patterns emerge — two illustrated by individual plugins (accounting and collections), and a third that emerges from putting many plugins in a registry together.
@@ -52,11 +66,19 @@ What's different is the consumption model. The same API is consumed by *two* cli
 
 And a third capability falls out of this architecture for free. Because the agent's input is multi-modal — text, images, audio, attached files — the user can drop a photo of a paper receipt into chat, and the agent reads the amount, vendor, and date directly from the image and calls the same accounting API a typed entry would have called. In a traditional accounting SaaS, "receipt scanning" is a premium-tier feature: an OCR pipeline, a vendor contract, an extraction model, integration code, an error-handling UI. In an AI-native architecture, it is not a feature at all. It is what the agent does by default. Any plugin that consumes natural-language input automatically inherits an image-input modality, an audio-input modality, and any other modality the underlying LLM acquires next. The agent does not just *join* the UI as a second controller — it brings capabilities the original controller could not have on its own.
 
-### Pattern B: Natural language → DSL → engine
+### Pattern B: Applications become data
 
-**Collections demonstrate a different pattern, and a more interesting architectural lesson.** A collection is a small declarative schema — a domain-specific language describing a data model: its fields, the relationships between them, which value marks a record done, when to raise a reminder, and how a record recurs. Declare one, and the host renders it, validates every record against it, and runs the reconciler that fires notifications and advances recurring items. The schema is the substantive thing. The LLM is the *translator*: the user describes what they want to track in natural language, the agent produces the schema — and the records inside it — and the host executes it.
+**Collections demonstrate a different pattern, and the most consequential lesson in the system.** A collection is a small declarative schema — a domain-specific language describing a data model: its fields, the relationships between them, which value marks a record done, when to raise a reminder, and how a record recurs. Declare one, and the host renders it (as a table, a kanban board, or a calendar, chosen from the schema), validates every record against it, and runs the reconciler that fires notifications and advances recurring items. The schema is the substantive thing. The LLM is the *translator*: the user describes what they want to track in natural language, the agent produces the schema — and the records inside it — and the host executes it.
 
-This is the pattern for any application whose core is a precise, structured artifact — a query, a config, a workflow, a contract. The LLM is not the engine. The LLM is the natural-language interface to the engine. A great deal of knowledge-work software is going to look like this, because precise artifacts are how businesses actually express what they do, and natural language is how humans actually want to author them.
+Notice what did not happen. The user picked no vendor. Nothing was installed, no database was provisioned, nothing was deployed. And nobody wrote this application in advance — what appeared on disk is a schema file and a folder of records; the third ingredient is the model that reads both. A traditional application is four systems: a database to hold the records, an ORM to translate them, a UI framework to put them on screen, and a workflow engine to make things happen. In a collection, the database became plain files, the ORM vanished, the UI is rendered from the schema itself, and the workflow split between strict host rules and plain prose. **The records are data. The schema is the application. The model is the runtime.**
+
+That equation changes the economics. A restaurant list, an invoice tracker, a vocabulary drill — no software company would ever build these, because the market for each is one person. For fifty years that made them impossible: building software was expensive, so the rational move was to spread the cost over as many users as possible, and everyone got the average. When the agent authors the schema in a minute of conversation, the arithmetic flips — you build for exactly this person. The code, what little of it exists, is disposable; the intent and the data are the asset. When the app stops fitting, the user says the sentence again, and a new version replaces the old.
+
+The schema is also what makes conversational app-building trustworthy. A generated application comes from a system that is sometimes confidently wrong, on behalf of a user who cannot read a schema. So the invariants live in the host: everything the model authors is validated before it runs — an invalid application never executes — and the views, the reconciler, and the recurrence rules are engine code that never guesses. Keep the declarative layer small, extend it only where it beats the agent, and the result is durable in a way a one-off generated app is not.
+
+And because the application *is* data, it travels. An installed collection can be published to a public registry and imported by someone else with one click — sharing an application is a pull request containing a schema, not a listing in an app store. Software for an audience of one turns out to compose into a commons.
+
+This is the pattern for any application whose core is a precise, structured artifact — a query, a config, a workflow, a contract. The LLM is not the engine. The LLM is the natural-language interface to the engine. A great deal of knowledge-work software is going to look like this, because precise artifacts are how people actually express what they need, and natural language is how they want to author them.
 
 ### Pattern C: Premium features, for free
 
@@ -70,9 +92,9 @@ This is not a property of any individual plugin. It is a property of the registr
 
 ## An invitation
 
-MulmoClaude is MIT-licensed and open-source. Installation instructions are in the [README](README.md). If you have been waiting for someone to publish a working blueprint of an AI-native application before you commit to building one — this is the blueprint.
+MulmoClaude is MIT-licensed and open-source. Installation instructions are in the [README](README.md). If you have been waiting for someone to publish a working blueprint of an AI-native application before you commit to building one — this is the blueprint. And if what you want is not to build the platform but to begin on it — to nurture an assistant whose accumulation lives on your own machine, in files you own — the same install command is the way in.
 
-The thing to take away is not "use MulmoClaude." Most readers won't, and that is fine. The thing to take away is: this design is real, it works, and the three commitments above are achievable today. If you are building business software in 2026, you are going to have to decide whether your application is a traditional one with AI features bolted on, or a genuinely AI-native one. That decision has architectural consequences. The earlier you make it, the easier the rest of the design becomes.
+The thing to take away is not "use MulmoClaude." Most readers won't, and that is fine. The thing to take away is: this design is real, it works, and the four commitments above are achievable today. If you are building software in 2026, you are going to have to decide whether your application is a traditional one with AI features bolted on, or a genuinely AI-native one — and whether what it accumulates belongs to you, or to your users. Those decisions have architectural consequences. The earlier you make them, the easier the rest of the design becomes.
 
 AI will not eliminate software. It will reorganize it. The interesting work is at the architecture review.
 

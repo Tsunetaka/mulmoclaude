@@ -1,30 +1,42 @@
 <template>
   <div class="w-72 flex-shrink-0 border-r border-gray-200 overflow-y-auto p-2 bg-gray-50">
-    <div class="flex justify-end items-center gap-2 pb-1 text-xs">
-      <span class="text-gray-400">{{ t("fileTreePane.sort") }}</span>
-      <div class="flex border border-gray-300 rounded overflow-hidden">
-        <button
-          type="button"
-          class="h-8 px-2.5 flex items-center gap-1 transition-colors"
-          :class="sortMode === 'name' ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-white text-gray-500 hover:bg-gray-50'"
-          :aria-pressed="sortMode === 'name'"
-          :title="t('fileTreePane.sortByName')"
-          data-testid="file-sort-name"
-          @click="emit('update:sortMode', 'name')"
-        >
-          {{ t("fileTreePane.name") }}
-        </button>
-        <button
-          type="button"
-          class="h-8 px-2.5 flex items-center gap-1 transition-colors"
-          :class="sortMode === 'recent' ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-white text-gray-500 hover:bg-gray-50'"
-          :aria-pressed="sortMode === 'recent'"
-          :title="t('fileTreePane.sortByRecent')"
-          data-testid="file-sort-recent"
-          @click="emit('update:sortMode', 'recent')"
-        >
-          {{ t("fileTreePane.recent") }}
-        </button>
+    <div class="flex flex-wrap justify-end items-center gap-x-3 gap-y-1 pb-1 text-xs">
+      <label class="flex items-center gap-1 text-gray-500 cursor-pointer select-none" :title="t('fileTreePane.showSystemFilesTitle')">
+        <input
+          type="checkbox"
+          class="h-3.5 w-3.5"
+          data-testid="file-tree-show-system-toggle"
+          :checked="showHiddenSystem"
+          @change="(e) => emit('update:showHiddenSystem', (e.target as HTMLInputElement).checked)"
+        />
+        {{ t("fileTreePane.showSystemFiles") }}
+      </label>
+      <div class="flex items-center gap-2">
+        <span class="text-gray-400">{{ t("fileTreePane.sort") }}</span>
+        <div class="flex border border-gray-300 rounded overflow-hidden">
+          <button
+            type="button"
+            class="h-8 px-2.5 flex items-center gap-1 transition-colors"
+            :class="sortMode === 'name' ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-white text-gray-500 hover:bg-gray-50'"
+            :aria-pressed="sortMode === 'name'"
+            :title="t('fileTreePane.sortByName')"
+            data-testid="file-sort-name"
+            @click="emit('update:sortMode', 'name')"
+          >
+            {{ t("fileTreePane.name") }}
+          </button>
+          <button
+            type="button"
+            class="h-8 px-2.5 flex items-center gap-1 transition-colors"
+            :class="sortMode === 'recent' ? 'bg-blue-50 text-blue-700 font-medium' : 'bg-white text-gray-500 hover:bg-gray-50'"
+            :aria-pressed="sortMode === 'recent'"
+            :title="t('fileTreePane.sortByRecent')"
+            data-testid="file-sort-recent"
+            @click="emit('update:sortMode', 'recent')"
+          >
+            {{ t("fileTreePane.recent") }}
+          </button>
+        </div>
       </div>
     </div>
     <div v-if="treeError" class="p-2 text-xs text-red-600">
@@ -38,6 +50,7 @@
       :recent-paths="recentPaths"
       :children-by-path="childrenByPath"
       :sort-mode="sortMode"
+      :show-hidden-system="showHiddenSystem"
       @select="emit('select', $event)"
       @load-children="emit('loadChildren', $event)"
       @create-file="emit('createFile', $event)"
@@ -55,6 +68,7 @@
         :recent-paths="emptySet"
         :children-by-path="childrenByPath"
         :sort-mode="sortMode"
+        show-hidden-system
         @select="emit('select', $event)"
         @load-children="emit('loadChildren', $event)"
       />
@@ -78,12 +92,14 @@ defineProps<{
   selectedPath: string | null;
   recentPaths: Set<string>;
   sortMode: FileSortMode;
+  showHiddenSystem: boolean;
 }>();
 
 const emit = defineEmits<{
   select: [path: string];
   loadChildren: [path: string];
   "update:sortMode": [mode: FileSortMode];
+  "update:showHiddenSystem": [next: boolean];
   createFile: [args: { folder: string; filename: string; resolve: (ok: boolean, error?: string) => void }];
 }>();
 

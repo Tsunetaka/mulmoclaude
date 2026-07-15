@@ -66,6 +66,7 @@ import { createJournalRouter } from "./api/routes/journal.js";
 import { createTranslationRouter } from "./api/routes/translation.js";
 import { announcePluginMetaDiagnostics } from "./plugins/diagnostics.js";
 import { announceOptionalDeps } from "./system/announceOptionalDeps.js";
+import { announceGeminiKey } from "./system/announceGeminiKey.js";
 import { migrateLegacyBillingPresets } from "./workspace/billing-migration.js";
 import { APP_VERSION } from "./system/appVersion.js";
 import { createChatService } from "@mulmobridge/chat-service";
@@ -88,7 +89,7 @@ import { initWorkspace, workspacePath } from "./workspace/workspace.js";
 import { runMemoryMigrationOnce } from "./workspace/memory/run.js";
 import { runTopicMigrationOnce } from "./workspace/memory/topic-run.js";
 import { migrateCookingRecipesFromPlugin } from "./workspace/cooking-recipes/migrate.js";
-import { env, isGeminiAvailable } from "./system/env.js";
+import { env, isAblated, isGeminiAvailable } from "./system/env.js";
 import { buildSandboxStatus } from "./api/sandboxStatus.js";
 import { existsSync, readFileSync } from "fs";
 import { realpath as fsRealpath } from "fs/promises";
@@ -121,6 +122,7 @@ import { API_ROUTES } from "../src/config/apiRoutes.js";
 import { EVENT_TYPES } from "../src/types/events.js";
 import { SESSION_ORIGINS } from "../src/types/session.js";
 import { buildHtmlPreviewCsp } from "../src/utils/html/previewCsp.js";
+import { readCspExtraSync, warnIfCspExtended } from "./utils/files/csp-io.js";
 import { readAndInjectHtmlArtifact } from "./utils/html/htmlArtifactSplicer.js";
 import { ONE_SECOND_MS, ONE_MINUTE_MS, ONE_HOUR_MS, STARTUP_FAILURE_FORCE_EXIT_MS, FATAL_LOG_FLUSH_MS } from "./utils/time.js";
 import { isPortFree, findAvailablePort, MAX_PORT_PROBES } from "./utils/port.mjs";
@@ -174,6 +176,7 @@ if (process.env.MULMOCLAUDE_FAKE_AGENT === "1") {
 }
 
 initWorkspace();
+warnIfCspExtended();
 
 // Fire-and-forget memory migrations: legacy `memory.md` → atomic
 // (#1029), then atomic → topic-format staging (#1070). Chained so
@@ -509,7 +512,7 @@ app.use(
     }
     if (HTML_DOCUMENT_EXT_RE.test(req.path)) {
       const origin = browserVisibleOrigin(req);
-      res.setHeader("Content-Security-Policy", buildHtmlPreviewCsp(origin));
+      res.setHeader("Content-Security-Policy", buildHtmlPreviewCsp(origin, undefined, readCspExtraSync()));
       res.setHeader("X-Content-Type-Options", "nosniff");
       const spliced = await readAndInjectHtmlArtifact(root, relPath);
       if (spliced === null) {
@@ -940,7 +943,10 @@ function maybeForceChatIndexBackfill(): void {
   // debugging the indexer itself.
   if (!env.chatIndexForceRunOnStartup) return;
   log.info("chat-index", "CHAT_INDEX_FORCE_RUN_ON_STARTUP=1 — running now");
-  backfillAllSessions()
+  // The startup switch is opt-in and its whole point is "regenerate
+  // every summary now"; pass `force: true` so it doesn't silently
+  // become a no-op after #1929's content-changed gate lands.
+  backfillAllSessions({ force: true })
     .then((result) => {
       log.info("chat-index", "startup backfill complete", {
         indexed: result.indexed,
@@ -951,19 +957,7 @@ function maybeForceChatIndexBackfill(): void {
     .catch(logBackgroundError("chat-index", "forced startup backfill failed"));
 }
 
-async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, port: number, pubsub: IPubSub): Promise<void> {
-  log.info("server", "listening", { port });
-
-  // The notifier engine + its pubsub are now wired in the listen
-  // callback (see PR-#1196 follow-up) so requests arriving before
-  // this function runs hit a fully-initialized engine. The pubsub
-  // is forwarded in here so the rest of `startRuntimeServices` can
-  // share the same instance.
-
-  // macOS Reminder adapter wiring lives in the `app.listen` callback,
-  // alongside `initNotifier`, so it's subscribed before the first
-  // await opens a publish-can-fire-but-no-one's-listening window.
-
+async function initBootDiagnostics(): Promise<void> {
   // --- Plugin META aggregator diagnostics ---
   // After the notifier engine is initialized so the wrapper has a
   // working sink. Surfaces any host/plugin or plugin/plugin key
@@ -976,6 +970,9 @@ async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, p
   // missing one so a feature degrading is visible instead of a
   // later opaque crash. Never throws.
   await announceOptionalDeps();
+
+  // --- Gemini key presence (#2081) ---
+  announceGeminiKey();
 
   // --- Voice input sidecar warm-up ---
   // If local voice input is enabled and its model is already on disk,
@@ -999,10 +996,16 @@ async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, p
   // first to catch up changes that landed while the server was down.
   // Errors are logged inside; fire-and-forget so a slow scan doesn't
   // hold up the rest of boot.
-  startCollectionWatchers().catch((err: unknown) => {
-    log.warn("collections", "watcher boot failed", { error: String(err) });
-  });
+  if (isAblated("reconciler")) {
+    log.warn("collections", "ABLATION ACTIVE: reconciler disabled — no watchers, bells, or spawn recurrence (evaluation only)");
+  } else {
+    startCollectionWatchers().catch((err: unknown) => {
+      log.warn("collections", "watcher boot failed", { error: String(err) });
+    });
+  }
+}
 
+function attachTransports(httpServer: ReturnType<typeof app.listen>, pubsub: IPubSub): void {
   // --- Chat socket transport (Phase A of #268) ---
   chatService.attachSocket(httpServer);
 
@@ -1018,113 +1021,101 @@ async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, p
 
   // --- Session Store ---
   initSessionStore(pubsub);
+}
 
-  // --- Task Manager ---
-  // Created BEFORE the runtime plugins block so plugin runtimes
-  // (which receive `taskManager` via `MakePluginRuntimeDeps`) can
-  // close over it. The `void (async () => ...)()` IIFE below would
-  // also work via async-yield ordering, but the lint rule forbids
-  // closing over a variable declared later in the same scope.
-  const taskManager = createTaskManager({
-    tickMs: debugMode ? ONE_SECOND_MS : ONE_MINUTE_MS,
-  });
-
-  if (debugMode) {
-    registerDebugTasks(taskManager, pubsub);
-  }
-
-  // --- Runtime plugins (#1043 C-2 + #1110) ---
-  // Two sources of plugins, same RuntimePlugin shape:
-  //   1. Presets — server/plugins/preset-list.ts (loaded from node_modules)
-  //   2. User-installed — ~/mulmoclaude/plugins/plugins.json ledger
-  //
-  // Presets are merged FIRST so they win runtime-vs-runtime collision
-  // (first-loaded wins; static MCP built-ins still win over both via
-  // MCP_PLUGIN_NAMES).
-  //
-  // Factory-shape plugins (`export default definePlugin(...)`) receive a
-  // runtime constructed by `makePluginRuntime(...)` which closes over the
-  // live pubsub. Legacy `(context, args)` plugins are loaded unchanged.
-  //
-  // Failures don't abort boot — bad plugins are skipped, healthy ones
-  // still load.
-  void (async () => {
-    try {
-      const runtimeFactory = (pkgName: string) =>
-        makePluginRuntime({
-          pkgName,
-          pubsub,
-          // v1: server-side locale is a static snapshot. The frontend
-          // BrowserPluginRuntime carries the reactive ref. Future
-          // enhancement: per-request locale from Accept-Language.
-          locale: process.env.LANG?.split(/[._]/)[0] || "en",
-          // `taskManager` is created synchronously below (see "Task
-          // Manager" block) before this async IIFE awaits and yields.
-          // By the time `runtimeFactory(pkgName)` is invoked from
-          // inside `loadPresetPlugins` / `loadRuntimePlugins` /
-          // `loadDevPlugins`, the synchronous initialisation has
-          // completed and `taskManager` is ready. Backs
-          // `runtime.tasks.register()` (Phase 1 of the Encore plan).
-          taskManager,
-        });
-      const [presets, userInstalled, devLoad] = await Promise.all([
-        loadPresetPlugins({ runtimeFactory }),
-        loadRuntimePlugins({ runtimeFactory }),
-        loadDevPlugins(parseDevPluginsEnv(process.env.MULMOCLAUDE_DEV_PLUGINS, process.cwd()), { runtimeFactory }),
-      ]);
-      // Dev plugin failures (missing dist/index.js, broken package.json,
-      // …) are a setup error the dev needs to see and fix. Hard-exit
-      // so the developer can't accidentally trial-and-error against a
-      // server that silently dropped their plugin. Same policy for
-      // collisions per #1159 PR2 spec.
-      const devGate = evaluateDevPluginGate(devLoad, [...presets, ...userInstalled]);
-      if (!devGate.ok) {
-        for (const message of devGate.fatalMessages) log.error("plugins/dev", message);
-        process.exit(1);
-      }
-      // Auto-reload (#1159 PR3): watch each dev plugin's dist/ and
-      // publish on debounced change so the browser refreshes without
-      // ⌘R. Server-side `dist/index.js` cannot be hot-replaced (Node
-      // ESM cache), so the watcher logs an explicit hint when that
-      // file is in the changed set.
-      if (devLoad.plugins.length > 0) {
-        const handle = watchDevPlugins(devLoad.plugins, {
-          publish: (name, payload) =>
-            pubsub.publish(PUBSUB_CHANNELS.devPluginChanged, {
-              name,
-              changedFiles: payload.changedFiles,
-              serverSideChange: payload.serverSideChange,
-            }),
-          warnServerSideChange: (name) => log.warn("plugins/dev", `${name}: dist/index.js changed — restart mulmoclaude to pick up server-side changes`),
-          onWatcherError: (name, error) =>
-            log.warn("plugins/dev", `${name}: watcher error — auto-reload disabled for this plugin until restart`, { error: String(error) }),
-        });
-        registerShutdownHook(() => handle.close());
-      }
-      // Pass the full static-tool set (MCP plugins + ENABLED MCP tools
-      // like readXPost / searchX) as the collision policy so the floor
-      // matches the standalone mcp-server's STATIC_TOOL_NAMES exactly
-      // (#1077 / #1116 review). Filter via `isMcpToolEnabled` so the
-      // child process's `mcpToolDefs` (only enabled tools) and the
-      // parent's reservation set agree — otherwise a runtime plugin
-      // colliding with a disabled tool would be rejected here but
-      // accepted by the child, and the child's `/dispatch` would 404
-      // because the parent never registered a route for it.
-      const staticToolNames = new Set([...MCP_PLUGIN_NAMES, ...mcpTools.filter(isMcpToolEnabled).map((tool) => tool.definition.name)]);
-      const result = registerRuntimePlugins(staticToolNames, [...presets, ...userInstalled, ...devLoad.plugins]);
-      log.info("plugins/runtime", "registered runtime plugins", {
-        presets: presets.length,
-        userInstalled: userInstalled.length,
-        dev: devLoad.plugins.length,
-        registered: result.registered.length,
-        collisions: result.collisions.length,
-        oauthAliasCollisions: result.oauthAliasCollisions.length,
+// --- Runtime plugins (#1043 C-2 + #1110) ---
+// Two sources of plugins, same RuntimePlugin shape:
+//   1. Presets — server/plugins/preset-list.ts (loaded from node_modules)
+//   2. User-installed — ~/mulmoclaude/plugins/plugins.json ledger
+//
+// Presets are merged FIRST so they win runtime-vs-runtime collision
+// (first-loaded wins; static MCP built-ins still win over both via
+// MCP_PLUGIN_NAMES).
+//
+// Factory-shape plugins (`export default definePlugin(...)`) receive a
+// runtime constructed by `makePluginRuntime(...)` which closes over the
+// live pubsub. Legacy `(context, args)` plugins are loaded unchanged.
+//
+// Failures don't abort boot — bad plugins are skipped, healthy ones
+// still load.
+async function loadRuntimePluginsFor(pubsub: IPubSub, taskManager: ITaskManager): Promise<void> {
+  try {
+    const runtimeFactory = (pkgName: string) =>
+      makePluginRuntime({
+        pkgName,
+        pubsub,
+        // v1: server-side locale is a static snapshot. The frontend
+        // BrowserPluginRuntime carries the reactive ref. Future
+        // enhancement: per-request locale from Accept-Language.
+        locale: process.env.LANG?.split(/[._]/)[0] || "en",
+        // `taskManager` is created synchronously below (see "Task
+        // Manager" block) before this async IIFE awaits and yields.
+        // By the time `runtimeFactory(pkgName)` is invoked from
+        // inside `loadPresetPlugins` / `loadRuntimePlugins` /
+        // `loadDevPlugins`, the synchronous initialisation has
+        // completed and `taskManager` is ready. Backs
+        // `runtime.tasks.register()` (Phase 1 of the Encore plan).
+        taskManager,
       });
-    } catch (err) {
-      log.error("plugins/runtime", "registry init failed; runtime plugins disabled this session", { error: String(err) });
+    const [presets, userInstalled, devLoad] = await Promise.all([
+      loadPresetPlugins({ runtimeFactory }),
+      loadRuntimePlugins({ runtimeFactory }),
+      loadDevPlugins(parseDevPluginsEnv(process.env.MULMOCLAUDE_DEV_PLUGINS, process.cwd()), { runtimeFactory }),
+    ]);
+    // Dev plugin failures (missing dist/index.js, broken package.json,
+    // …) are a setup error the dev needs to see and fix. Hard-exit
+    // so the developer can't accidentally trial-and-error against a
+    // server that silently dropped their plugin. Same policy for
+    // collisions per #1159 PR2 spec.
+    const devGate = evaluateDevPluginGate(devLoad, [...presets, ...userInstalled]);
+    if (!devGate.ok) {
+      for (const message of devGate.fatalMessages) log.error("plugins/dev", message);
+      process.exit(1);
     }
-  })();
+    // Auto-reload (#1159 PR3): watch each dev plugin's dist/ and
+    // publish on debounced change so the browser refreshes without
+    // ⌘R. Server-side `dist/index.js` cannot be hot-replaced (Node
+    // ESM cache), so the watcher logs an explicit hint when that
+    // file is in the changed set.
+    if (devLoad.plugins.length > 0) {
+      const handle = watchDevPlugins(devLoad.plugins, {
+        publish: (name, payload) =>
+          pubsub.publish(PUBSUB_CHANNELS.devPluginChanged, {
+            name,
+            changedFiles: payload.changedFiles,
+            serverSideChange: payload.serverSideChange,
+          }),
+        warnServerSideChange: (name) => log.warn("plugins/dev", `${name}: dist/index.js changed — restart mulmoclaude to pick up server-side changes`),
+        onWatcherError: (name, error) =>
+          log.warn("plugins/dev", `${name}: watcher error — auto-reload disabled for this plugin until restart`, { error: String(error) }),
+      });
+      registerShutdownHook(() => handle.close());
+    }
+    // Pass the full static-tool set (MCP plugins + ENABLED MCP tools
+    // like readXPost / searchX) as the collision policy so the floor
+    // matches the standalone mcp-server's STATIC_TOOL_NAMES exactly
+    // (#1077 / #1116 review). Filter via `isMcpToolEnabled` so the
+    // child process's `mcpToolDefs` (only enabled tools) and the
+    // parent's reservation set agree — otherwise a runtime plugin
+    // colliding with a disabled tool would be rejected here but
+    // accepted by the child, and the child's `/dispatch` would 404
+    // because the parent never registered a route for it.
+    const staticToolNames = new Set([...MCP_PLUGIN_NAMES, ...mcpTools.filter(isMcpToolEnabled).map((tool) => tool.definition.name)]);
+    const result = registerRuntimePlugins(staticToolNames, [...presets, ...userInstalled, ...devLoad.plugins]);
+    log.info("plugins/runtime", "registered runtime plugins", {
+      presets: presets.length,
+      userInstalled: userInstalled.length,
+      dev: devLoad.plugins.length,
+      registered: result.registered.length,
+      collisions: result.collisions.length,
+      oauthAliasCollisions: result.oauthAliasCollisions.length,
+    });
+  } catch (err) {
+    log.error("plugins/runtime", "registry init failed; runtime plugins disabled this session", { error: String(err) });
+  }
+}
 
+function initEventPublishers(pubsub: IPubSub): void {
   // --- File-change publisher ---
   // Wired here (not at first publish) so the very first save after
   // boot already sees a live publisher.
@@ -1133,7 +1124,11 @@ async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, p
   // near the route mount; only the pub/sub instance is wired here.
   initAccountingEventPublisher(pubsub);
   initCollectionChangePublisher(pubsub);
+}
 
+// System task defs + user-configurable schedule overrides. Split out
+// of `registerSystemSchedules` so each stays under the max-lines cap.
+function buildSystemTaskDefs(): SystemTaskDef[] {
   // --- Scheduler (Phase 1 of #357) ---
   // Register system tasks with persistence + catch-up. The journal
   // and chat-index also fire from the agent finally-hook for
@@ -1151,7 +1146,16 @@ async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, p
       id: "system:chat-index",
       name: "Chat index backfill",
       description: "Generate AI titles + summaries for un-indexed sessions",
-      schedule: { type: SCHEDULE_TYPES.interval, intervalMs: ONE_HOUR_MS },
+      // Every 6 hours. The primary trigger is the agent finally-hook
+      // (per-turn, 15-min throttle), so the scheduler exists only to
+      // catch strays: a turn skipped by isFresh whose session then
+      // went idle, an out-of-band jsonl edit, or a mid-turn server
+      // crash. Since #1929 the per-tick work is O(stat + entry read)
+      // for unchanged sessions — cheap — but there's still no UX
+      // reason to run it more often than every few hours, and less
+      // frequent runs match a user's expectation of "quiet
+      // background maintenance".
+      schedule: { type: SCHEDULE_TYPES.interval, intervalMs: 6 * ONE_HOUR_MS },
       missedRunPolicy: MISSED_RUN_POLICIES.runOnce,
       run: () => backfillAllSessions().then(() => {}),
     },
@@ -1189,6 +1193,12 @@ async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, p
     }
   }
 
+  return systemTasks;
+}
+
+function registerSystemSchedules(taskManager: ITaskManager): void {
+  const systemTasks = buildSystemTaskDefs();
+
   // Feeds host is configured at module load (before app.listen) — see the
   // `configureFeeds(spawnSystemWorker)` call beside the accounting config — so it
   // is already wired by the time `initScheduler` catch-up can fire a feed refresh.
@@ -1221,6 +1231,44 @@ async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, p
       }
     })
     .catch(logBackgroundError("user-tasks", "failed to register user tasks"));
+}
+
+async function startRuntimeServices(httpServer: ReturnType<typeof app.listen>, port: number, pubsub: IPubSub): Promise<void> {
+  log.info("server", "listening", { port });
+
+  // The notifier engine + its pubsub are now wired in the listen
+  // callback (see PR-#1196 follow-up) so requests arriving before
+  // this function runs hit a fully-initialized engine. The pubsub
+  // is forwarded in here so the rest of `startRuntimeServices` can
+  // share the same instance.
+
+  // macOS Reminder adapter wiring lives in the `app.listen` callback,
+  // alongside `initNotifier`, so it's subscribed before the first
+  // await opens a publish-can-fire-but-no-one's-listening window.
+
+  await initBootDiagnostics();
+
+  attachTransports(httpServer, pubsub);
+
+  // --- Task Manager ---
+  // Created BEFORE the runtime plugins block so plugin runtimes
+  // (which receive `taskManager` via `MakePluginRuntimeDeps`) can
+  // close over it. The `void (async () => ...)()` IIFE below would
+  // also work via async-yield ordering, but the lint rule forbids
+  // closing over a variable declared later in the same scope.
+  const taskManager = createTaskManager({
+    tickMs: debugMode ? ONE_SECOND_MS : ONE_MINUTE_MS,
+  });
+
+  if (debugMode) {
+    registerDebugTasks(taskManager, pubsub);
+  }
+
+  void loadRuntimePluginsFor(pubsub, taskManager);
+
+  initEventPublishers(pubsub);
+
+  registerSystemSchedules(taskManager);
 
   taskManager.start();
 

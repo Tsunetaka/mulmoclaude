@@ -48,7 +48,7 @@ describe("maybeRunJournal — feature gates", () => {
       throw new ClaudeCliNotFoundError();
     };
 
-    await maybeRunJournal({ workspaceRoot, summarize, force: true });
+    await maybeRunJournal({ workspaceRoot, mode: "haiku", summarize, force: true });
     assert.equal(summarizeCalls, 1, "first call should hit summarize and trip the disable latch");
 
     let secondSummarizeCalls = 0;
@@ -56,7 +56,7 @@ describe("maybeRunJournal — feature gates", () => {
       secondSummarizeCalls++;
       return '{"dailySummaryMarkdown":"# x","topicUpdates":[]}';
     };
-    await maybeRunJournal({ workspaceRoot, summarize: livelyStub, force: true });
+    await maybeRunJournal({ workspaceRoot, mode: "haiku", summarize: livelyStub, force: true });
     assert.equal(secondSummarizeCalls, 0, "after disable, summarize must not be reached");
   });
 
@@ -88,10 +88,45 @@ describe("maybeRunJournal — feature gates", () => {
       return '{"dailySummaryMarkdown":"# x","topicUpdates":[]}';
     };
 
-    await maybeRunJournal({ workspaceRoot, summarize });
+    await maybeRunJournal({ workspaceRoot, mode: "haiku", summarize });
     assert.equal(summarizeCalls, 0, "without force the recent timestamps should gate out");
 
-    await maybeRunJournal({ workspaceRoot, summarize, force: true });
+    await maybeRunJournal({ workspaceRoot, mode: "haiku", summarize, force: true });
     assert.ok(summarizeCalls >= 1, "force must bypass the interval gate and reach summarize");
+  });
+});
+
+// Follow-up to #1944: `mode: "off"` is a hard kill switch. Even under
+// `force: true` the pass must return without touching the summarizer or
+// state files.
+describe("maybeRunJournal — mode kill switch", () => {
+  let workspaceRoot: string;
+
+  beforeEach(async () => {
+    __resetForTests();
+    workspaceRoot = await makeFreshWorkspace();
+  });
+
+  it("returns immediately when mode is 'off' — no summarize, even with force", async () => {
+    let summarizeCalls = 0;
+    const summarize: Summarize = async () => {
+      summarizeCalls++;
+      return '{"dailySummaryMarkdown":"# x","topicUpdates":[]}';
+    };
+
+    await maybeRunJournal({ workspaceRoot, mode: "off", summarize, force: true });
+    assert.equal(summarizeCalls, 0, "off must short-circuit before summarize");
+  });
+
+  it("threads the selected model through to the archivist summarize call", async () => {
+    const received: (string | undefined)[] = [];
+    const summarize: Summarize = async (_sys, _user, opts) => {
+      received.push(opts?.model);
+      return '{"dailySummaryMarkdown":"# x","topicUpdates":[]}';
+    };
+
+    await maybeRunJournal({ workspaceRoot, mode: "sonnet", summarize, force: true });
+    assert.ok(received.length >= 1, "summarize must have been called at least once");
+    assert.deepEqual(new Set(received), new Set(["sonnet"]), "every summarize call must receive the selected model");
   });
 });

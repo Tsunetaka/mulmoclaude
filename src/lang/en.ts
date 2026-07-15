@@ -57,6 +57,8 @@ const enMessages = {
     placeholder: "Message Claude…",
     send: "Send",
     stop: "Stop",
+    runningPlaceholder: "Running… press Enter to queue for later",
+    removeBuffered: "Remove queued message",
     attachFile: "Attach file",
     fileTooLarge: "File too large ({sizeMB} MB). Maximum is 30 MB.",
     unsupportedFileType: "File type not supported. Accepted: images, PDF, DOCX, XLSX, PPTX, text files.",
@@ -70,6 +72,11 @@ const enMessages = {
       start: "Start voice input",
       stop: "Stop voice input",
     },
+  },
+  cspViolation: {
+    notice:
+      "⚠ A view tried to load {host}, but the content security policy blocked it ({directive}). To allow it, add the host to config/csp.json — only if you trust it.",
+    dismiss: "Dismiss",
   },
   sessionHistoryPanel: {
     filters: {
@@ -154,6 +161,10 @@ const enMessages = {
     disconnectFailed: "Disconnect failed",
     signInFailed: "Google sign-in failed",
     statusFailed: "Failed to load status",
+    description: "Remote access lets a mobile device connect to this MulmoClaude's collections and feeds.",
+    howTo: "On your phone, open {url} and sign in with the same Google account.",
+    customViewHint: "For a mobile-friendly view, ask Claude to build a {keyword} (not a regular custom view).",
+    qrHint: "Or scan this QR code with your phone's camera.",
   },
   sidebarHeader: {
     home: "Go to latest chat",
@@ -198,6 +209,8 @@ const enMessages = {
     // "RO" = Read-Only. Kept short on purpose — rendered as a compact
     // badge next to the Reference label.
     readOnlyBadge: "RO",
+    showSystemFiles: "Show system files",
+    showSystemFilesTitle: "Show agent-internal top-level dirs (conversations/, feeds/, etc.) in addition to your user content (data/, artifacts/, config/).",
   },
   fileTree: {
     workspace: "(workspace)",
@@ -249,6 +262,9 @@ const enMessages = {
       photos: "Photos",
       model: "Model",
       voice: "Voice",
+      chatIndex: "Chat index",
+      journal: "Journal",
+      notifications: "Web Push",
       skills: "Skills",
       roles: "Roles",
     },
@@ -256,6 +272,7 @@ const enMessages = {
       llm: "LLM",
       servers: "Servers",
       workspace: "Workspace",
+      notifications: "Notifications",
       plugins: "Plugins",
       management: "Management",
     },
@@ -283,6 +300,18 @@ const enMessages = {
       loadError: "Failed to load settings",
       saveError: "Failed to save",
     },
+    notificationsTab: {
+      description:
+        "Get a push on your registered devices when a task you started here finishes — handy when you ask something, step away, and want to know the moment the answer is ready.",
+      enableLabel: "Send a Web Push when a task finishes",
+      enableHint: "Fires when a chat you started here completes. Scheduled and background tasks don't trigger it.",
+      remoteHostNote:
+        "Requires the RemoteHost connection (it supplies the sign-in) and at least one registered device. With either missing, this does nothing.",
+      statusOn: "Web Push is ON",
+      statusOff: "Web Push is OFF",
+      loadError: "Failed to load settings",
+      saveError: "Failed to save",
+    },
     modelTab: {
       description: "Control the reasoning effort Claude Code uses for each turn. Leave unset to use Claude's default.",
       effortLabel: "Reasoning effort",
@@ -306,6 +335,42 @@ const enMessages = {
       ready: "Model ready",
       downloadError: "Model download failed.",
       retry: "Retry",
+      loadError: "Failed to load settings",
+      saveError: "Failed to save",
+    },
+    chatIndexTab: {
+      description:
+        "Background AI titles + summaries for your chat history. Off by default — automation sessions (scheduler / system workers) are always skipped even when on, and human sessions only pay one summarizer call each when a turn ends.",
+      modeLabel: "Chat index model",
+      helperText: "Haiku is cheaper; Sonnet gives sharper titles for long, topic-shifting sessions.",
+      mode: {
+        off: "Off",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "Indexing is OFF",
+        haiku: "Indexing with Haiku",
+        sonnet: "Indexing with Sonnet",
+      },
+      loadError: "Failed to load settings",
+      saveError: "Failed to save",
+    },
+    journalTab: {
+      description:
+        "Automated daily journal — summarises recent chat sessions into journal/*.md and extracts durable memory notes. Off by default. Automation sessions (scheduler / system workers) are always excluded regardless of this setting.",
+      modeLabel: "Journal model",
+      helperText: "Haiku is cheaper; Sonnet produces richer daily / topic summaries. The hourly pass runs only when this is set.",
+      mode: {
+        off: "Off",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "Journal is OFF",
+        haiku: "Journal running with Haiku",
+        sonnet: "Journal running with Sonnet",
+      },
       loadError: "Failed to load settings",
       saveError: "Failed to save",
     },
@@ -402,6 +467,8 @@ const enMessages = {
     rendered: "Rendered",
     raw: "Raw",
     closeFile: "Close file",
+    revealInOs: "Show in folder",
+    revealInOsFailed: "Failed to show in folder",
   },
   fileContentRenderer: {
     download: "ZIP",
@@ -418,6 +485,9 @@ const enMessages = {
     redo: "Redo",
     editMarp: "Edit slide source",
     marpEditorLabel: "Marp slide source",
+    openInOs: "Open in OS",
+    openingInOs: "Opening…",
+    openInOsFailed: "Failed to open in OS",
   },
   filesView: {
     chatPlaceholder: "Ask about this file…",
@@ -962,6 +1032,8 @@ const enMessages = {
     cancel: "Cancel",
     seededByPlugin: "from {pkg}",
     seededByPluginTooltip: "This message was seeded by the {pkg} plugin, not sent by you.",
+    truncatedForRender:
+      "This message is unusually long ({total} chars total). Only the first portion is rendered — {omitted} chars hidden to keep the tab responsive. Use Copy for the full raw text.",
   },
   pluginSkill: {
     noDescription: "(no description)",

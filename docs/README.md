@@ -41,6 +41,7 @@ Guides for using MulmoClaude. No programming knowledge required.
 | [Image-path Routing — Research](image-path-routing.md)            | English  | Read-only audit of how the LLM's image references become browser-loadable URLs                                     |
 | [Image-path Routing — 設計議論](discussion-image-path-routing.md) | 日本語   | 画像パスのルーティング再設計の議論メモと段階的実装計画                                                             |
 | [Wiki / HTML 表示サーフェス](wiki-html-render-surfaces.md)        | 日本語   | Wiki / HTML / Markdown が表示される複数箇所の差異 (権限・画像パス解決) を整理                                      |
+| [Remote Host](remote-host.md)                                    | English  | Driving MulmoClaude from a phone over a Firestore command channel — auth model, command loop, handler table, mobile custom-view bridge |
 
 ## Papers
 
@@ -92,6 +93,8 @@ Code structure, APIs, and build instructions for the host itself. Plugin authors
 | [Logging](logging.md)                         | English  | Log levels, formats, rotation                                                                                                       |
 | [Sandbox Credentials](sandbox-credentials.md) | English  | Docker sandbox credential forwarding                                                                                                |
 | [MCP servers and the Docker sandbox](mcp-sandbox.md) | English  | Why stdio MCP servers can't run under the sandbox, why HTTP MCPs do, and what MulmoClaude drops from the per-session MCP config (#1334) |
+| [Claude ↔ Docker boundary](claude-docker-boundary.md) | English  | What runs in the container vs. on the host when `claude -p` fires — Bash/Read/Write are in the sandbox, MCP tool implementations are on the host through a stdio proxy |
+| [Windows-host filesystem bugs in Linux containers on GHA](windows-docker-ci.md) | English  | How to reproduce Windows-FS-into-Linux-container bugs (dangling NTFS junctions, …) on GitHub Actions using WSL2 + native `dockerd` — the approach `docker_sandbox_windows.yaml` takes |
 | [Manual Testing](manual-testing.md)           | English  | Manual test items not covered by E2E                                                                                                |
 
 ## Project

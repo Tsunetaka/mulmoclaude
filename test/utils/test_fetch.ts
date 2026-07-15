@@ -108,7 +108,7 @@ describe("fetchWithTimeout", () => {
     // the cleanup path and would surface a leak under --detectOpenHandles.
     globalThis.fetch = async () => new Response("ok");
     for (let i = 0; i < 50; i++) {
-      await fetchWithTimeout("http://example.test/", { timeoutMs: 5_000 });
+      await assert.doesNotReject(fetchWithTimeout("http://example.test/", { timeoutMs: 5_000 }));
     }
   });
 });

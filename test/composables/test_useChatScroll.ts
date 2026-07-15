@@ -126,11 +126,13 @@ describe("useChatScroll — streaming auto-scroll", () => {
       chatInputRef: ref(null),
     });
 
-    running.value = true;
-    await nextTick();
-    running.value = false;
-    await nextTick();
-    // No assertion on scrolls — this test just ensures the watchers
-    // don't crash when flipping isRunning with an empty list.
+    await assert.doesNotReject(async () => {
+      running.value = true;
+      await nextTick();
+      running.value = false;
+      await nextTick();
+    });
+    // Assertion is the doesNotReject above — this test's contract is
+    // "watchers don't crash on isRunning flip with an empty list".
   });
 });

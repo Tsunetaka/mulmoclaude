@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { mockAllApis } from "../fixtures/api";
+import { mockAllApis, enableFilesShowSystem } from "../fixtures/api";
 import { API_ROUTES } from "../../src/config/apiRoutes";
 
 import { ONE_SECOND_MS } from "../../server/utils/time.ts";
@@ -63,6 +63,7 @@ async function mockFileTree(page: Page) {
 test.beforeEach(async ({ page }) => {
   await mockAllApis(page);
   await mockFileTree(page);
+  await enableFilesShowSystem(page);
 });
 
 test.describe("file explorer path in URL", () => {

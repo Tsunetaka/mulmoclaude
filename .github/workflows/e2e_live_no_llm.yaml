@@ -80,6 +80,21 @@ jobs:
       - name: Create workspace dir
         run: mkdir -p "$HOME/mulmoclaude"
 
+      # Pin the bearer token so the backend (which enforces it) and Vite's
+      # transformIndexHtml (which injects it into `<meta name="mulmoclaude-auth">`)
+      # read the SAME value from the env instead of Vite racing the backend's
+      # `.session-token` write. Without this, an index.html served before the
+      # backend finished writing the token file gets an empty token → the SPA
+      # runs unauthenticated → every /api/* call 401s → whichever spec loaded
+      # during the gap fails intermittently (#2069). Mirrors the pin
+      # e2e-live/fixtures/isolated-dev-server.ts already applies for fresh-boot.
+      - name: Pin auth token for the dev server
+        run: |
+          TOKEN="$(openssl rand -hex 32)"
+          # Mask before it can reach any later step's log output.
+          echo "::add-mask::$TOKEN"
+          echo "MULMOCLAUDE_AUTH_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
       - name: Start mulmoclaude dev server (background)
         env:
           DISABLE_SANDBOX: "1"

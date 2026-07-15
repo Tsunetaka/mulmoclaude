@@ -28,20 +28,46 @@
           v-for="(file, index) in pastedFiles"
           :key="file.name + index"
           :data-url="file.dataUrl"
+          :preview-data-url="file.previewDataUrl"
           :filename="file.name"
           :mime="file.mime"
           @remove="removeFileAt(index)"
         />
+      </div>
+      <!-- Messages sent while the agent is running queue here instead of
+           going out immediately; they merge back into the input for a
+           final edit + send once the run finishes (App.vue owns the
+           merge). Each chip is removable so a queued line can be dropped
+           before it comes back. -->
+      <div v-if="bufferedMessages.length > 0" class="flex flex-col gap-1 mb-1" data-testid="buffered-message-list">
+        <div
+          v-for="(message, index) in bufferedMessages"
+          :key="index"
+          class="flex items-center gap-1.5 bg-blue-50 border border-blue-200 rounded px-2 py-1 text-xs text-gray-700"
+          data-testid="buffered-message"
+        >
+          <span class="material-icons text-sm leading-none text-blue-400">schedule</span>
+          <span class="flex-1 truncate" :title="message">{{ message }}</span>
+          <button
+            type="button"
+            class="text-gray-400 hover:text-red-600 shrink-0 flex items-center"
+            :title="t('chatInput.removeBuffered')"
+            :aria-label="t('chatInput.removeBuffered')"
+            data-testid="buffered-message-remove"
+            @click="removeBufferedAt(index)"
+          >
+            <span class="material-icons text-sm leading-none">close</span>
+          </button>
+        </div>
       </div>
       <div class="flex gap-2" :class="{ 'mt-2': pastedFiles.length > 0 }">
         <textarea
           ref="textarea"
           :value="modelValue"
           data-testid="user-input"
-          :placeholder="t('chatInput.placeholder')"
+          :placeholder="placeholder"
           rows="2"
-          class="flex-1 bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed resize-none"
-          :disabled="isRunning"
+          class="flex-1 bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 placeholder-gray-400 resize-none"
           @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
           @compositionstart="imeEnter.onCompositionStart"
           @compositionend="imeEnter.onCompositionEnd"
@@ -131,6 +157,7 @@ import { useImeAwareEnter } from "../composables/useImeAwareEnter";
 import { useSkillsList, type SkillSummary } from "../composables/useSkillsList";
 import { useSlashCommandMenu, handleSlashMenuKeydown } from "../composables/useSlashCommandMenu";
 import type { PastedFile } from "../types/pastedFile";
+import { buildHeicPreviewDataUrl, needsBrowserPreviewConversion } from "../utils/attachment/heicPreview";
 
 export type { PastedFile };
 
@@ -141,6 +168,10 @@ const props = withDefaults(
     modelValue: string;
     pastedFiles: PastedFile[];
     isRunning: boolean;
+    /** Messages queued while the agent runs. Rendered as removable chips
+     *  above the input; App.vue merges them back into `modelValue` when
+     *  the run finishes. */
+    bufferedMessages?: string[];
     queries?: string[];
     /** Currently displayed session id. Voice "armed" state is reset
      *  whenever this changes so leaving a session and coming back
@@ -148,16 +179,26 @@ const props = withDefaults(
      *  persisted). */
     sessionId?: string;
   }>(),
-  { queries: () => [], sessionId: "" },
+  { bufferedMessages: () => [], queries: () => [], sessionId: "" },
 );
 
 const emit = defineEmits<{
   "update:modelValue": [value: string];
   "update:pastedFiles": [files: PastedFile[]];
+  "update:bufferedMessages": [messages: string[]];
   send: [];
   stop: [];
   "suggestion-send": [query: string];
 }>();
+
+const placeholder = computed(() => (props.isRunning ? t("chatInput.runningPlaceholder") : t("chatInput.placeholder")));
+
+function removeBufferedAt(index: number): void {
+  emit(
+    "update:bufferedMessages",
+    props.bufferedMessages.filter((_, i) => i !== index),
+  );
+}
 
 // Local voice input (Mac-only). The mic button is hidden unless the
 // backend reports voice input ready; transcripts are appended to the
@@ -324,10 +365,21 @@ async function processFiles(files: File[]): Promise<void> {
     return;
   }
 
-  const pending = accepted.map(async (file) => {
+  const pending = accepted.map(async (file): Promise<PastedFile | null> => {
     const dataUrl = await readFileAsDataUrl(file);
     if (!dataUrl) return null;
-    return { dataUrl, name: file.name, mime: file.type } satisfies PastedFile;
+    // Browser-side HEIC/HEIF conversion only affects the preview
+    // chip's <img src>. The original `dataUrl` still travels to the
+    // upload endpoint unchanged — server-side heic-convert produces
+    // the JPEG the LLM reads. Failed conversion → previewDataUrl
+    // stays absent and the chip falls back to a file icon.
+    const preview = needsBrowserPreviewConversion(file.type) ? await buildHeicPreviewDataUrl(file) : null;
+    return {
+      dataUrl,
+      name: file.name,
+      mime: file.type,
+      ...(preview ? { previewDataUrl: preview } : {}),
+    };
   });
 
   try {
@@ -409,10 +461,36 @@ watch(slashMenuOpen, (open) => {
 });
 
 function onKeydown(event: KeyboardEvent): void {
+  // Ctrl/Cmd+Enter inserts a newline instead of sending. Checked before the
+  // slash menu so the chord still works while a skill is highlighted (the
+  // menu's Enter handler would otherwise select it). A textarea does not
+  // insert on this chord natively, so we splice it in at the caret.
+  if (isNewlineChord(event)) {
+    event.preventDefault();
+    insertNewlineAtCursor();
+    return;
+  }
   if (slashMenuOpen.value && handleSlashMenuKeydown(slashMenu, event, { isImeConfirmation: imeEnter.isImeConfirmation, onSelect: selectSlashSkill })) {
     return;
   }
   imeEnter.onKeydown(event);
+}
+
+function isNewlineChord(event: KeyboardEvent): boolean {
+  return event.key === "Enter" && (event.ctrlKey || event.metaKey) && !imeEnter.isImeConfirmation(event);
+}
+
+function insertNewlineAtCursor(): void {
+  const field = textarea.value;
+  const value = props.modelValue;
+  const start = field?.selectionStart ?? value.length;
+  const end = field?.selectionEnd ?? start;
+  emit("update:modelValue", `${value.slice(0, start)}\n${value.slice(end)}`);
+  nextTick(() => {
+    const caret = start + 1;
+    field?.focus();
+    field?.setSelectionRange(caret, caret);
+  });
 }
 
 // Selection populates `/<name> ` (trailing space dismisses the menu via the

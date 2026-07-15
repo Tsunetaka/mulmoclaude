@@ -10,11 +10,16 @@ import {
   configureScheduler,
   initScheduler,
   getSchedulerTasks,
+  getSchedulerTaskState,
+  getSchedulerLogs,
+  recordExternalRun,
   resetSchedulerForTesting,
+  TASK_TRIGGERS,
   type ITaskManager,
   type TaskDefinition,
   type SystemTaskDef,
 } from "../../src/scheduler/index.ts";
+import { collectDueTasks, listTaskSummaries } from "../../src/scheduler/task-manager.ts";
 
 const stubTm = (over: Partial<ITaskManager>): ITaskManager => ({
   registerTask: () => {},
@@ -88,12 +93,124 @@ test("dependsOn enforces ordering within a tick; dependent skipped if dep fails"
   assert.deepEqual(order2, []); // child never runs because dep did not succeed
 });
 
+test("staggers the start of independently-due tasks by firingStaggerMs (#2057)", async () => {
+  const requestedDelays: number[] = [];
+  const ran: string[] = [];
+  const manager = createTaskManager({
+    tickMs: 60_000,
+    now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, 0)),
+    firingStaggerMs: 500,
+    sleep: async (delayMs) => {
+      requestedDelays.push(delayMs);
+    },
+  });
+  for (const taskId of ["a", "b", "c"]) {
+    manager.registerTask({
+      id: taskId,
+      schedule: { type: SCHEDULE_TYPES.interval, intervalMs: 60_000 },
+      run: async () => {
+        ran.push(taskId);
+      },
+    });
+  }
+  await manager.tick();
+  assert.deepEqual(ran.sort(), ["a", "b", "c"]); // every due task still runs this tick
+  // First task starts immediately (no sleep); the rest are offset by index * gap.
+  assert.deepEqual(requestedDelays, [500, 1000]);
+});
+
+test("caps the total stagger to half a tick so tasks never spill into the next tick (#2057)", async () => {
+  // Debug-mode shape: tickMs == firingStaggerMs. Without the cap the 2nd task
+  // would start a full tick late and ticks would overlap. The cap shrinks the
+  // step to (tickMs * 0.5) / (count - 1) = (1000 * 0.5) / 2 = 250ms.
+  const requestedDelays: number[] = [];
+  const manager = createTaskManager({
+    tickMs: 1000,
+    now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, 0)),
+    firingStaggerMs: 1000,
+    sleep: async (delayMs) => {
+      requestedDelays.push(delayMs);
+    },
+  });
+  for (const taskId of ["a", "b", "c"]) {
+    manager.registerTask({
+      id: taskId,
+      schedule: { type: SCHEDULE_TYPES.interval, intervalMs: 1000 },
+      run: async () => {},
+    });
+  }
+  await manager.tick();
+  assert.deepEqual(requestedDelays, [250, 500]);
+  assert.ok(Math.max(...requestedDelays) < 1000, "last start stays within the tick");
+});
+
+test("firingStaggerMs: 0 fires all due tasks without any delay", async () => {
+  const requestedDelays: number[] = [];
+  const manager = createTaskManager({
+    tickMs: 60_000,
+    now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, 0)),
+    firingStaggerMs: 0,
+    sleep: async (delayMs) => {
+      requestedDelays.push(delayMs);
+    },
+  });
+  for (const taskId of ["a", "b"]) {
+    manager.registerTask({
+      id: taskId,
+      schedule: { type: SCHEDULE_TYPES.interval, intervalMs: 60_000 },
+      run: async () => {},
+    });
+  }
+  await manager.tick();
+  assert.deepEqual(requestedDelays, []);
+});
+
 test("registerTask rejects duplicate ids; updateSchedule returns false for unknown", () => {
   const manager = createTaskManager();
   manager.registerTask({ id: "a", schedule: { type: SCHEDULE_TYPES.daily, time: "09:00" }, run: async () => {} });
   assert.throws(() => manager.registerTask({ id: "a", schedule: { type: SCHEDULE_TYPES.daily, time: "10:00" }, run: async () => {} }));
   assert.equal(manager.updateSchedule("missing", { type: SCHEDULE_TYPES.daily, time: "10:00" }), false);
   assert.equal(manager.updateSchedule("a", { type: SCHEDULE_TYPES.daily, time: "10:00" }), true);
+});
+
+// ── pure helpers extracted from createTaskManager ─────────────────
+
+const makeDef = (over: Partial<TaskDefinition> & { id: string }): TaskDefinition => ({
+  schedule: { type: SCHEDULE_TYPES.interval, intervalMs: 60_000 },
+  run: async () => {},
+  ...over,
+});
+
+test("listTaskSummaries strips run and keeps the summary fields", () => {
+  const registry = new Map<string, TaskDefinition>();
+  assert.deepEqual(listTaskSummaries(registry), []);
+  registry.set("a", makeDef({ id: "a", description: "d", dependsOn: "b" }));
+  const [summary] = listTaskSummaries(registry);
+  assert.deepEqual(summary, {
+    id: "a",
+    description: "d",
+    schedule: { type: SCHEDULE_TYPES.interval, intervalMs: 60_000 },
+    dependsOn: "b",
+  });
+  assert.equal("run" in summary, false);
+});
+
+test("collectDueTasks partitions due tasks and skips disabled/not-due", () => {
+  const midnight = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
+  const registry = new Map<string, TaskDefinition>();
+  registry.set("indep", makeDef({ id: "indep" }));
+  registry.set("dep", makeDef({ id: "dep", dependsOn: "indep" }));
+  registry.set("off", makeDef({ id: "off", enabled: false }));
+  registry.set("notDue", makeDef({ id: "notDue", schedule: { type: SCHEDULE_TYPES.daily, time: "09:00" } }));
+  const { independent, dependent } = collectDueTasks(midnight, registry, 60_000);
+  assert.deepEqual(
+    independent.map((def) => def.id),
+    ["indep"],
+  );
+  assert.deepEqual(
+    dependent.map((def) => def.id),
+    ["dep"],
+  );
 });
 
 // ── adapter (catch-up + persistence + state) ──────────────────────
@@ -171,6 +288,76 @@ test("a scheduled run executes the task and persists state to the injected works
     assert.ok(existsSync(statePath));
     const persisted = JSON.parse(readFileSync(statePath, "utf-8"));
     assert.ok(JSON.stringify(persisted).includes("system:feed"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ── external (skill / user) runs — #2012 ──────────────────────────
+
+test("recordExternalRun persists state + a log entry, readable via getSchedulerTaskState", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "sched-"));
+  try {
+    configure(root);
+    await initScheduler(stubTm({}), []); // no system tasks — just load state + create dirs
+
+    const before = getSchedulerTaskState("skill.news-filter");
+    assert.equal(before.totalRuns, 0);
+    assert.equal(before.lastRunAt, null);
+
+    // Log files partition by the run's `startedAt` day and getSchedulerLogs
+    // reads today's partition, so use a same-day timestamp here.
+    const now = new Date().toISOString();
+    await recordExternalRun({
+      id: "skill.news-filter",
+      name: "news-filter",
+      schedule: { type: SCHEDULE_TYPES.daily, time: "07:30" },
+      scheduledFor: now,
+      startedAt: now,
+      durationMs: 5,
+      trigger: TASK_TRIGGERS.scheduled,
+      errorMessage: null,
+      chatSessionId: "chat-123",
+    });
+
+    const after = getSchedulerTaskState("skill.news-filter");
+    assert.equal(after.totalRuns, 1);
+    assert.equal(after.lastRunResult, "success");
+    assert.equal(after.lastRunAt, now);
+    assert.ok(after.nextScheduledAt, "next run computed from the daily schedule");
+
+    const logs = await getSchedulerLogs({ taskId: "skill.news-filter" });
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].trigger, "scheduled");
+    assert.equal(logs[0].chatSessionId, "chat-123");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recordExternalRun records a failed dispatch as an error run", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "sched-"));
+  try {
+    configure(root);
+    await initScheduler(stubTm({}), []);
+    const now = new Date().toISOString();
+    await recordExternalRun({
+      id: "user.abc",
+      name: "my task",
+      schedule: { type: SCHEDULE_TYPES.interval, intervalMs: 3_600_000 },
+      scheduledFor: now,
+      startedAt: now,
+      durationMs: 1,
+      trigger: TASK_TRIGGERS.manual,
+      errorMessage: "too many background sessions",
+    });
+    const state = getSchedulerTaskState("user.abc");
+    assert.equal(state.lastRunResult, "error");
+    assert.equal(state.lastErrorMessage, "too many background sessions");
+    assert.equal(state.consecutiveFailures, 1);
+    const logs = await getSchedulerLogs({ taskId: "user.abc" });
+    assert.equal(logs[0].result, "error");
+    assert.equal(logs[0].errorMessage, "too many background sessions");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

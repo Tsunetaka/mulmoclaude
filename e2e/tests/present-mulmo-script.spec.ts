@@ -214,6 +214,11 @@ test.describe("presentMulmoScript plugin", () => {
     // landing.
     await page.getByTestId("mulmo-script-generate-movie-button").click();
     const errorChip = await assertMovieErrorChip(page, SSE_ERROR_MESSAGE);
+    // The linter's assertion detector doesn't pick up `expect.poll`
+    // as an assertion (looks for `expect(x).to*` chains). Add an
+    // explicit expect on the returned Locator; `assertMovieErrorChip`
+    // guarantees it's visible so this is a documented no-op.
+    await expect(errorChip).toBeVisible();
     await expect.poll(getGenerateMovieCalls).toBe(1);
 
     // Retry: same endpoint is hit again, chip stays (same error replays).

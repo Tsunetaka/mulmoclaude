@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 
-import { watchDevPlugins } from "../../server/plugins/dev-watcher.js";
+import { watchDevPlugins, summarizeChangedFiles } from "../../server/plugins/dev-watcher.js";
 import type { RuntimePlugin } from "../../server/plugins/runtime-loader.js";
 
 // Make a fake `FSWatcher`. `node:fs.watch` returns an EventEmitter +
@@ -295,6 +295,39 @@ describe("watchDevPlugins — close()", () => {
     const plugin = fakePlugin("@test/close-twice");
     const rig = makeRig(plugin, 30);
     rig.close();
-    rig.close(); // must not throw
+    assert.doesNotThrow(() => rig.close());
+  });
+});
+
+describe("summarizeChangedFiles", () => {
+  it("returns empty + no server-side change for an empty set", () => {
+    assert.deepEqual(summarizeChangedFiles(new Set()), { changedFiles: [], serverSideChange: false });
+  });
+
+  it("sorts the changed files alphabetically", () => {
+    const summary = summarizeChangedFiles(new Set(["vue.js", "definition-Dvdjo6Xe.js", "style.css"]));
+    assert.deepEqual(summary.changedFiles, ["definition-Dvdjo6Xe.js", "style.css", "vue.js"]);
+  });
+
+  it("flags serverSideChange when the server entry `index.js` is present", () => {
+    const summary = summarizeChangedFiles(new Set(["index.js", "vue.js"]));
+    assert.equal(summary.serverSideChange, true);
+    assert.deepEqual(summary.changedFiles, ["index.js", "vue.js"]);
+  });
+
+  it("does NOT flag serverSideChange for browser-only files", () => {
+    assert.equal(summarizeChangedFiles(new Set(["vue.js", "style.css"])).serverSideChange, false);
+  });
+
+  it("does NOT flag nested `assets/index.js` chunks (vite code-split output)", () => {
+    assert.equal(summarizeChangedFiles(new Set(["assets/index.js"])).serverSideChange, false);
+  });
+
+  it("normalizes Windows-style backslash paths for the server entry check", () => {
+    assert.equal(summarizeChangedFiles(new Set(["assets\\index.js"])).serverSideChange, false);
+  });
+
+  it("returns a single entry for a one-file set", () => {
+    assert.deepEqual(summarizeChangedFiles(new Set(["index.js"])), { changedFiles: ["index.js"], serverSideChange: true });
   });
 });

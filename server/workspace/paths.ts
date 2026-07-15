@@ -65,12 +65,20 @@ type PluginWorkspaceDirsContribution<M> = M extends { readonly workspaceDirs: in
 
 type PluginWorkspaceDirsMap<T extends BuiltInPluginMetas> = UnionToIntersection<PluginWorkspaceDirsContribution<T[number]>>;
 
-// Detect Node test runner or other typical test environments
-export const isTestEnv =
-  process.env.NODE_ENV === "test" ||
-  process.execArgv.includes("--test") ||
-  process.argv.some((arg) => arg.includes("test")) ||
-  typeof process.env.NODE_TEST_CONTEXT !== "undefined";
+// Detect Node test runner or other typical test environments. Matches argv
+// elements EXACTLY — a substring `arg.includes("test")` here wrongly flags any
+// `yarn dev` whose tsx path contains "test" (e.g. a worktree named
+// `…-test-fixes`), silently swapping the real workspace for the throwaway test
+// one and 401ing every API (#1596). Pure over its inputs so the detection is
+// testable without a real test env (which always sets NODE_TEST_CONTEXT).
+export const detectTestEnv = (argv: readonly string[], execArgv: readonly string[], env: Record<string, string | undefined>): boolean =>
+  env.NODE_ENV === "test" ||
+  execArgv.includes("--test") || // node --test
+  argv.includes("--test") || // --test passed as an argv flag
+  argv.includes("test") || // playwright / vitest `test` subcommand
+  typeof env.NODE_TEST_CONTEXT !== "undefined";
+
+export const isTestEnv = detectTestEnv(process.argv, process.execArgv, process.env);
 
 // Detect if process.env.HOME has been overridden (a common pattern in workspace/IO integration tests to isolate runs)
 const realUserHome = (() => {

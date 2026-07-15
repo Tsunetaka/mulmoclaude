@@ -69,6 +69,7 @@ See [Wiki](config/helps/wiki.md) for details on how it works.
 - [Sandbox](config/helps/sandbox.md) — how the Docker sandbox isolates the agent, what it can access, and how to disable it
 - [Error recovery](config/helps/error-recovery.md) — the lookup the agent reads on tool failures (gh/git/SSH inside the sandbox, Marp PDF, registry import, build/workspace, plugin runtime) before asking the user
 - [Telegram Bridge](config/helps/telegram.md) — how to talk to MulmoClaude from the Telegram app: creating a bot, starting the bridge, allowlisting chat IDs, commands, and troubleshooting
+- [Remote host](config/helps/remote-host.md) — drive MulmoClaude from a phone at mulmoserver.web.app: Google sign-in connect, host online vs. offline (queued chats, 7-day expiry), photo attachments, and the security model
 - [Feeds](config/helps/feeds.md) — register a self-refreshing data feed (RSS/Atom/JSON) by authoring `feeds/<slug>/schema.json`: schema shape, the `ingest` block, raw-item field mapping, and `maxItems` retention
 - [GitHub repositories in the workspace](config/helps/github.md) — clone-destination rules under `github/<name>/` and how to handle existing directories with matching or different remotes
 - [Collection skills](config/helps/collection-skills.md) — build a data app (model + UI + relations + computed fields + action buttons) by authoring a `schema.json` collection skill: the DSL, field types, derived formulas, actions, records

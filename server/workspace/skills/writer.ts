@@ -118,6 +118,11 @@ export async function updateProjectSkill(input: SaveSkillInput): Promise<UpdateR
 export interface DeleteSkillInput {
   workspaceRoot: string;
   name: string;
+  /** Override the `~/.claude/skills` root the user-scope refusal
+   *  guard consults. Real callers omit this and get the default
+   *  `USER_SKILLS_DIR`; unit tests pass a temp dir to exercise the
+   *  refusal path without touching the caller's home. */
+  userDir?: string;
 }
 
 export type DeleteResult =
@@ -129,13 +134,13 @@ export type DeleteResult =
  * name exists — protects against accidental ~/.claude mutation.
  */
 export async function deleteProjectSkill(input: DeleteSkillInput): Promise<DeleteResult> {
-  const { workspaceRoot, name } = input;
+  const { workspaceRoot, name, userDir } = input;
 
   if (!isValidSlug(name)) return { kind: "invalid-slug", slug: name };
 
   // Look up the skill's effective source via discovery — if the
   // matching name is user-scope, we refuse.
-  const all = await discoverSkills({ workspaceRoot });
+  const all = await discoverSkills({ workspaceRoot, userDir });
   const skill = all.find((candidate) => candidate.name === name);
   if (!skill) return { kind: "not-found", name };
   if (skill.source === "user") return { kind: "user-scope", name };

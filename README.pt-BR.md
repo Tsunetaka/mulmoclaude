@@ -8,11 +8,17 @@
 
 [English](README.md) · [日本語](README.ja.md) · [简体中文](README.zh.md) · [한국어](README.ko.md) · [Español](README.es.md) · **Português (BR)** · [Français](README.fr.md) · [Deutsch](README.de.md)
 
+**Um assistente de IA que sabe tudo sobre você e o acompanha 24 horas por dia não é vendido em lugar nenhum. Você não pode comprar um — só pode cultivar um. MulmoClaude é uma ferramenta para cultivar o seu próprio assistente de IA, no seu próprio computador.**
+
+A substância de um assistente não é o modelo de IA — o modelo é apenas o motor. O que torna um assistente valioso é o quanto ele sabe sobre você: suas conversas, seu calendário, suas anotações, seus dados e os aplicativos que você usa. Algo tão importante não deveria ser confiado a nenhum provedor de serviços — quanto mais tempo você o usa, mais difícil fica sair. MulmoClaude é de código aberto e roda localmente, então tudo o que o seu assistente acumula — memórias, dados, aplicativos — permanece nas suas próprias mãos, como arquivos comuns no seu workspace.
+
+Cultivar exige um ambiente, e o MulmoClaude oferece um: um lugar para acumular memórias (um wiki pessoal que o Claude constrói e mantém sozinho), um lugar para guardar seus dados (coleções baseadas em esquemas, feeds, arquivos comuns) e um lugar para criar aplicativos só para você — sem nenhum conhecimento de programação. Você diz "quero algo assim" em palavras do dia a dia, e o Claude constrói o pequeno aplicativo de que você precisa: uma lista de restaurantes, um rastreador de faturas, prática de vocabulário — software para uma audiência de uma pessoa só. Logo após a instalação, o jardim está vazio; você planta sementes, cuida do solo e cultiva um assistente que é só seu.
+
+E o assistente não fica preso à sua mesa. Faça login pelo celular — ou por um aplicativo de mensagens que você já usa — e você alcança o mesmo assistente que vive no seu computador. O servidor de retransmissão apenas transporta mensagens em trânsito — suas memórias, dados e aplicativos nunca saem do seu computador.
+
+Por baixo dos panos, o MulmoClaude é uma plataforma de aplicações AI-nativa: as capacidades são plugins em um único registro (hoje: um sistema contábil completo com lógica real de escrituração no lado do servidor, um wiki pessoal, um leitor de documentos da SEC e mais), o Claude atua como um controlador universal que compõe através deles, e o chat invoca a GUI certa para cada tarefa — markdown, gráficos, formulários, wikis, planilhas ou cenas 3D.
+
 > **[How AI-Native Applications Should Be Built](MANIFEST.md)** — a tese de arquitetura, UX e protocolo por trás do MulmoClaude.
-
-MulmoClaude é uma plataforma de aplicações AI-nativa, de código aberto, que roda localmente na sua máquina. Em vez de aplicativos isolados, as capacidades são construídas como plugins dentro de um único registro. As aplicações que rodam nela hoje incluem um sistema contábil completo (com lógica real de escrituração no lado do servidor), um wiki pessoal e um leitor de documentos da SEC (Edgar). O Claude atua como um controlador universal que compõe através desses plugins.
-
-Você interage em linguagem natural, e o Claude invoca a GUI certa para a tarefa — respondendo em markdown, gráficos, formulários, wikis, planilhas ou cenas 3D. Todos os dados vivem como arquivos comuns no seu workspace.
 
 ## Início Rápido
 
@@ -424,7 +430,9 @@ Primeiro, execute `claude mcp` uma vez em um terminal e complete o fluxo OAuth p
 Adicione servidores MCP externos sem editar JSON manualmente. Dois tipos são suportados:
 
 - **HTTP** — servidores remotos (ex.: `https://example.com/mcp`). Funciona em todos os modos; no Docker, URLs `localhost` / `127.0.0.1` são reescritas automaticamente para `host.docker.internal`.
-- **Stdio** — subprocesso local, restrito a `npx` / `node` / `tsx` por segurança. Quando o sandbox Docker está habilitado, os caminhos de script devem ficar dentro do workspace para que sejam resolvidos dentro do contêiner.
+- **Stdio** — subprocesso local (por exemplo, um MCP `npx`), restrito a `npx` / `node` / `tsx` por segurança. Roda no host quando o sandbox Docker está **desligado**. Quando o sandbox está **ligado**, entradas stdio são **descartadas por padrão** (a imagem mínima do sandbox não consegue hospedar runtimes arbitrários) — use `"hostExecInDocker": true` para rodar uma no host atrás de um gateway `stdio ↔ HTTP`. Veja [docs/mcp-sandbox.md](docs/mcp-sandbox.md).
+
+Passe credenciais para um servidor stdio com um mapa **`env`** (`"env": { "IMAP_PASS": "…" }`). Os valores são literais e ficam armazenados em `mcp.json` (modo `0600`, mas em **texto simples** — proteção por permissão de arquivo, não um cofre). Todos os detalhes, incluindo o opt-in `hostExecInDocker` e como `env` chega ao processo, estão em [docs/mcp-sandbox.md](docs/mcp-sandbox.md).
 
 A configuração fica em `<workspace>/config/`:
 
@@ -477,6 +485,25 @@ Restrições que o servidor aplica ao carregar o arquivo:
 - O `command` stdio é restrito a `npx`, `node` ou `tsx`.
 - Entradas que falham na validação são silenciosamente descartadas no carregamento (um aviso é registrado); o restante do arquivo ainda se aplica.
 
+**Exemplo** — um servidor stdio com credenciais que também roda sob o sandbox Docker (por exemplo, um MCP de IMAP):
+
+```json
+{
+  "mcpServers": {
+    "imap": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "some-imap-mcp"],
+      "env": { "IMAP_HOST": "imap.example.com", "IMAP_USER": "me", "IMAP_PASS": "secret" },
+      "hostExecInDocker": true,
+      "enabled": true
+    }
+  }
+}
+```
+
+`hostExecInDocker` roda esse servidor no host, fora do sandbox. É uma opção por servidor — habilite-a para quantos servidores precisar, mas apenas nos que você confia. Com o sandbox desligado, ela é ignorada (o servidor já roda no host).
+
 **Exemplo de `settings.json`**:
 
 ```json
@@ -517,6 +544,27 @@ O canvas (painel direito) suporta 8 modos de visualização, alternáveis via ba
 | `Cmd/Ctrl+8` | Roles     | `?view=roles`     | Gerenciamento de papéis                      |
 
 Todo modo de visualização é orientado por URL: clicar em um botão do launcher atualiza `?view=`, e chegar em uma URL com `?view=wiki` (por exemplo) restaura a visualização correspondente. A lista de modos de visualização é definida uma vez em `src/utils/canvas/viewMode.ts` — adicionar um novo modo é apenas adicionar um item ao array.
+
+## Acesso remoto
+
+Acesse o seu MulmoClaude em execução a partir de um celular (ou qualquer navegador): navegue por suas coleções, feeds e visualizações personalizadas e inicie chats, de qualquer lugar. Não é preciso configurar nenhuma conta ou servidor separado: o acesso é concedido simplesmente fazendo login em **ambas** as pontas com a **mesma conta do Google**.
+
+**Como conectar**
+
+1. No desktop, clique no ícone **phonelink** no cabeçalho para abrir o popover _Host remoto_ e escolha **Fazer login com o Google**. O MulmoClaude faz login como seu usuário do Google e abre um canal de comandos via Firebase (o projeto público compartilhado [`mulmoserver`](https://mulmoserver.web.app)). O ícone fica verde enquanto o host está online.
+2. No seu celular, abra **[https://mulmoserver.web.app](https://mulmoserver.web.app)** e faça login com a **mesma conta do Google**. O app web encontra seu host online e se conecta a ele.
+
+Como ambas as pontas se autenticam como o mesmo usuário do Firebase, o celular e o desktop só se encontram dentro do seu próprio espaço de usuário — nenhum terceiro pode alcançar seu host.
+
+**O Firebase e o Firestore são usados apenas como transporte** — um relé para transmitir comandos e respostas entre o seu celular e o seu desktop. Seus dados **nunca são armazenados nem retidos** em nenhum dos dois. No host existem apenas os seus arquivos locais do workspace; tudo o que precisa cruzar o canal (como um anexo em trânsito pelo Firebase Storage) é excluído assim que chega ao destino.
+
+**O que você pode fazer pelo celular**
+
+- Navegar e paginar por suas **coleções** e **feeds**.
+- Abrir **visualizações remotas personalizadas** (custom remote views) — páginas adaptadas para celular que o Claude cria para você. Peça ao Claude para criar uma _custom remote view_ (não uma visualização personalizada comum); ela pode ser somente leitura ou editável.
+- **Iniciar um chat** no host e anexar **fotos, vídeos ou PDFs** do celular. Os bytes dos anexos são grandes demais para o canal de comandos, então passam pelo Firebase Storage; o host baixa cada arquivo para o seu workspace (`data/attachments/`), exclui a cópia em trânsito e entrega o arquivo ao Claude junto com a sua mensagem.
+
+O canal é baseado em comandos e conduzido pelo host: o celular faz as requisições e o seu MulmoClaude de desktop as responde. Use **Desconectar** no popover (ou encerre o MulmoClaude) para colocar o host offline.
 
 ## Workspace
 

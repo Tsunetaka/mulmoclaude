@@ -14,6 +14,46 @@ import { SANDBOXED_VIEW_CDN_ALLOWLIST } from "@mulmoclaude/core/remote-view";
 
 export const HTML_PREVIEW_CSP_ALLOWED_CDNS: readonly string[] = SANDBOXED_VIEW_CDN_ALLOWLIST;
 
+// Directives a user may extend from `config/csp.json` (see #1989). Hosts here
+// are ADDED to the hardcoded base policy, never replace it. `connect-src` is
+// included but is the sharpest edge — widening it opens a two-way exfiltration
+// channel for a custom view's scoped token/data (warned about elsewhere).
+export const CSP_EXTENDABLE_DIRECTIVES = ["frame-src", "script-src", "style-src", "font-src", "img-src", "media-src", "connect-src"] as const;
+export type CspDirective = (typeof CSP_EXTENDABLE_DIRECTIVES)[number];
+export type CspExtraHosts = Partial<Record<CspDirective, readonly string[]>>;
+
+const extraFor = (extra: CspExtraHosts, directive: CspDirective): string[] => [...(extra[directive] ?? [])];
+
+// A user-supplied host is accepted only as a plain https origin (scheme +
+// host, optional port) — no paths, no wildcards, and none of the `'unsafe-*'`
+// / `data:` / `blob:` keyword tokens that would blow the policy wide open.
+// Config widening stays "trust this specific host" and nothing more. Parsed
+// with `URL` (no hand-rolled regex → no ReDoS): the origin round-trip rejects
+// paths / query / hash / credentials, and the per-char host check rejects
+// wildcards like `*.evil.com` that `URL` would otherwise accept as a hostname.
+function isPlainHttpsHost(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || value.toLowerCase() !== `https://${url.host}`) return false;
+    return url.hostname.length > 0 && [...url.hostname].every((char) => /[a-z0-9.-]/i.test(char));
+  } catch {
+    return false;
+  }
+}
+
+export function sanitizeCspExtra(raw: unknown): CspExtraHosts {
+  if (raw === null || typeof raw !== "object") return {};
+  const record = raw as Record<string, unknown>;
+  const out: CspExtraHosts = {};
+  for (const directive of CSP_EXTENDABLE_DIRECTIVES) {
+    const value = record[directive];
+    if (!Array.isArray(value)) continue;
+    const hosts = value.map((host) => (typeof host === "string" ? host.trim() : "")).filter(isPlainHttpsHost);
+    if (hosts.length > 0) out[directive] = [...new Set(hosts)];
+  }
+  return out;
+}
+
 /**
  * Build the CSP string. Split from the wrapper so tests can exercise
  * the policy without HTML-template noise.
@@ -27,17 +67,21 @@ export const HTML_PREVIEW_CSP_ALLOWED_CDNS: readonly string[] = SANDBOXED_VIEW_C
  * undefined for the `srcdoc` fallback (where `'self'` is meaningless
  * either way and there are no same-origin refs to resolve).
  */
-function buildCsp(connectSrc: string, imgSelf: string, cdns: readonly string[], extraImgSrc = "", mediaSrc = ""): string {
-  const cdnList = cdns.join(" ");
-  const imgExtra = extraImgSrc ? ` ${extraImgSrc}` : "";
-  return [
+function buildCsp(connectSrc: string, imgSelf: string, cdns: readonly string[], extraImgSrc = "", mediaSrc = "", extra: CspExtraHosts = {}): string {
+  const cdnArr = [...cdns];
+  // Sanitize at the builder boundary — NOT only at the callers — so an added
+  // host can never carry a `;` (inject another directive) or a `"` (break the
+  // `<meta … content="…">` attribute), regardless of whether the caller
+  // remembered to sanitize. Idempotent for already-clean input.
+  const safeExtra = sanitizeCspExtra(extra);
+  const directives: string[] = [
     "default-src 'none'",
     // LLM-authored HTML almost always uses inline <script> blocks
     // alongside the CDN load. No feasible path to avoid
     // 'unsafe-inline' without rewriting every output.
-    `script-src 'unsafe-inline' ${cdnList}`,
-    `style-src 'unsafe-inline' ${cdnList}`,
-    `font-src ${cdnList}`,
+    `script-src ${["'unsafe-inline'", ...cdnArr, ...extraFor(safeExtra, "script-src")].join(" ")}`,
+    `style-src ${["'unsafe-inline'", ...cdnArr, ...extraFor(safeExtra, "style-src")].join(" ")}`,
+    `font-src ${[...cdnArr, ...extraFor(safeExtra, "font-src")].join(" ")}`,
     // Images: same-origin (workspace files via /api/files/raw), CDN
     // whitelist, plus data: and blob: for inline PNGs and dynamically-
     // generated charts. Wildcard is deliberately avoided here — an attacker
@@ -46,20 +90,28 @@ function buildCsp(connectSrc: string, imgSelf: string, cdns: readonly string[], 
     // blocked. Widen via HTML_PREVIEW_CSP_ALLOWED_CDNS if LLM output
     // legitimately needs more hosts. `extraImgSrc` lets a specific caller
     // (custom views) opt into a broader source set — see buildCustomViewCsp.
-    `img-src ${imgSelf} ${cdnList} data: blob:${imgExtra}`,
-    // Audio / video: omitted by default, so `<audio>`/`<video>` fall back to
-    // default-src 'none' (preview + print stay locked). Custom views opt in via
-    // `mediaSrc` so a record's media URL (e.g. a podcast feed's .mp3) plays;
-    // same one-way GET-exfil tradeoff as img-src, see buildCustomViewCsp.
-    ...(mediaSrc ? [`media-src ${mediaSrc}`] : []),
-    `connect-src ${connectSrc}`,
-  ].join("; ");
+    `img-src ${[imgSelf, ...cdnArr, "data:", "blob:", ...(extraImgSrc ? [extraImgSrc] : []), ...extraFor(safeExtra, "img-src")].join(" ")}`,
+  ];
+  // Audio / video: omitted by default, so `<audio>`/`<video>` fall back to
+  // default-src 'none' (preview + print stay locked). Custom views opt in via
+  // `mediaSrc`; users can also add hosts via config. Same one-way GET-exfil
+  // tradeoff as img-src, see buildCustomViewCsp.
+  const media = [...(mediaSrc ? [mediaSrc] : []), ...extraFor(safeExtra, "media-src")];
+  if (media.length > 0) directives.push(`media-src ${media.join(" ")}`);
+  // frame-src has NO base value — iframes fall back to default-src 'none'
+  // (locked) unless a user opts specific hosts in via config (e.g. a Google
+  // Maps embed). Only emitted when the user added hosts.
+  const frame = extraFor(safeExtra, "frame-src");
+  if (frame.length > 0) directives.push(`frame-src ${frame.join(" ")}`);
+  directives.push(`connect-src ${[connectSrc, ...extraFor(safeExtra, "connect-src")].join(" ")}`);
+  return directives.join("; ");
 }
 
-export function buildHtmlPreviewCsp(origin?: string, cdns: readonly string[] = HTML_PREVIEW_CSP_ALLOWED_CDNS): string {
+export function buildHtmlPreviewCsp(origin?: string, cdns: readonly string[] = HTML_PREVIEW_CSP_ALLOWED_CDNS, extra: CspExtraHosts = {}): string {
   // Block XHR / fetch / WebSocket so previews can't phone home or
-  // exfiltrate anything the inline scripts happen to compute.
-  return buildCsp("'none'", origin ?? "'self'", cdns);
+  // exfiltrate anything the inline scripts happen to compute (unless the
+  // user opts hosts into connect-src via config).
+  return buildCsp("'none'", origin ?? "'self'", cdns, "", "", extra);
 }
 
 /**
@@ -103,8 +155,8 @@ export function buildHtmlPreviewCsp(origin?: string, cdns: readonly string[] = H
  * opaque origin, so `'self'` would never match (same reason the preview policy
  * substitutes the origin into `img-src`).
  */
-export function buildCustomViewCsp(origin: string, cdns: readonly string[] = HTML_PREVIEW_CSP_ALLOWED_CDNS): string {
-  return buildCsp(origin, origin, cdns, "https:", `${origin} https: data: blob:`);
+export function buildCustomViewCsp(origin: string, cdns: readonly string[] = HTML_PREVIEW_CSP_ALLOWED_CDNS, extra: CspExtraHosts = {}): string {
+  return buildCsp(origin, origin, cdns, "https:", `${origin} https: data: blob:`, extra);
 }
 
 /**
@@ -113,8 +165,8 @@ export function buildCustomViewCsp(origin: string, cdns: readonly string[] = HTM
  * server origin substituted for `'self'` — see `buildHtmlPreviewCsp`
  * for why the substitution is required.
  */
-export function buildPrintCspContent(origin: string, cdns: readonly string[] = HTML_PREVIEW_CSP_ALLOWED_CDNS): string {
-  return buildHtmlPreviewCsp(origin, cdns);
+export function buildPrintCspContent(origin: string, cdns: readonly string[] = HTML_PREVIEW_CSP_ALLOWED_CDNS, extra: CspExtraHosts = {}): string {
+  return buildHtmlPreviewCsp(origin, cdns, extra);
 }
 
 const CSP_META_NONCE = ""; // reserved for future use (per-render nonce)
@@ -127,8 +179,8 @@ const CSP_META_NONCE = ""; // reserved for future use (per-render nonce)
  * Pure — doesn't touch the DOM. Safe to use from both client and
  * tests.
  */
-export function wrapHtmlWithPreviewCsp(html: string): string {
-  const csp = buildHtmlPreviewCsp();
+export function wrapHtmlWithPreviewCsp(html: string, extra: CspExtraHosts = {}): string {
+  const csp = buildHtmlPreviewCsp(undefined, HTML_PREVIEW_CSP_ALLOWED_CDNS, extra);
   const meta = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
   if (/<head\b[^>]*>/i.test(html)) {
     return html.replace(/(<head\b[^>]*>)/i, `$1${meta}`);

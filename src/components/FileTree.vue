@@ -51,13 +51,14 @@
            not as a global overlay. -->
       <div v-if="loadingChildren" class="px-2 py-1 text-xs text-gray-400">{{ t("common.loading") }}</div>
       <FileTree
-        v-for="child in loadedChildren"
+        v-for="child in visibleChildren"
         :key="child.path"
         :node="child"
         :selected-path="selectedPath"
         :recent-paths="recentPaths"
         :children-by-path="childrenByPath"
         :sort-mode="sortMode"
+        :show-hidden-system="showHiddenSystem"
         @select="(p) => emit('select', p)"
         @load-children="(p) => emit('loadChildren', p)"
         @create-file="(args) => emit('createFile', args)"
@@ -95,6 +96,7 @@ import { useI18n } from "vue-i18n";
 import { useExpandedDirs } from "../composables/useExpandedDirs";
 import { sortChildren } from "../utils/files/sortChildren";
 import { descriptorForPath, EDIT_POLICY_ICON_COLOR } from "../config/systemFileDescriptors";
+import { isVisibleTopLevel } from "../config/visibleWorkspaceDirs";
 import { normaliseNewFileSlug, policyForFolder } from "../config/createFilePolicy";
 import type { FileSortMode } from "../composables/useFileSortMode";
 import type { TreeNode } from "../types/fileTree";
@@ -118,6 +120,14 @@ const props = defineProps<{
   // show spinner. Array = loaded.
   childrenByPath: Map<string, TreeNode[] | null>;
   sortMode: FileSortMode;
+  // When false, top-level "system" dirs (`conversations/`, `feeds/`,
+  // `.git/`, ad-hoc automation buckets) are filtered out — only
+  // recognised user-content buckets (data / artifacts / config) stay
+  // visible at the workspace root. Filter only fires when this
+  // component IS the root (`node.path === ""`); nested instances
+  // still receive the prop so the recursion carries it, but they
+  // don't apply the filter themselves.
+  showHiddenSystem: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -142,6 +152,16 @@ const cached = computed(() => props.childrenByPath.get(props.node.path));
 // Array = loaded.
 const loadingChildren = computed(() => cached.value === null);
 const loadedChildren = computed(() => (Array.isArray(cached.value) ? sortChildren(cached.value, props.sortMode) : []));
+
+// Root-only filter: hide non-whitelisted top-level dirs unless the
+// user has toggled "show system files" on. Any depth other than
+// the workspace root is a pass-through.
+const isWorkspaceRoot = computed(() => props.node.path === "");
+const visibleChildren = computed(() => {
+  if (!isWorkspaceRoot.value) return loadedChildren.value;
+  if (props.showHiddenSystem) return loadedChildren.value;
+  return loadedChildren.value.filter((child) => child.type === "dir" && isVisibleTopLevel(child.name));
+});
 
 // Kick off a fetch if the dir is expanded but its children haven't
 // been requested yet. Covers two scenarios:

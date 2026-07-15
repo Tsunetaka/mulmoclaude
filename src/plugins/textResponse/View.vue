@@ -18,6 +18,18 @@
             <span class="material-icons text-gray-400 text-base shrink-0 group-open:rotate-180 transition-transform">expand_more</span>
           </summary>
           <div class="border-t border-purple-200 p-4 bg-white rounded-b-lg">
+            <div
+              v-if="truncationInfo.wasTruncated"
+              class="mb-3 p-3 rounded border border-amber-300 bg-amber-50 text-amber-900 text-sm"
+              data-testid="text-response-seeded-truncation-banner"
+            >
+              {{
+                t("pluginTextResponse.truncatedForRender", {
+                  omitted: truncationInfo.omittedChars.toLocaleString(locale),
+                  total: truncationInfo.originalChars.toLocaleString(locale),
+                })
+              }}
+            </div>
             <!-- eslint-disable vue/no-v-html -- marked.parse output of the plugin-seeded prompt; trusted in-process render matching the standard textResponse path. Multi-line element so disable/enable pair (CLAUDE.md UI rule). -->
             <div ref="markdownContainerRef" class="markdown-content prose prose-slate max-w-none" @click="openLinksInNewTab" v-html="renderedHtml"></div>
             <!-- eslint-enable vue/no-v-html -->
@@ -61,6 +73,18 @@
                 <div class="flex justify-between items-start mb-2 text-sm text-gray-500">
                   <span class="font-medium text-gray-700">{{ speakerLabel }}</span>
                   <span v-if="transportKind" class="italic">{{ transportKind }}</span>
+                </div>
+                <div
+                  v-if="truncationInfo.wasTruncated"
+                  class="mb-3 p-3 rounded border border-amber-300 bg-amber-50 text-amber-900 text-sm"
+                  data-testid="text-response-truncation-banner"
+                >
+                  {{
+                    t("pluginTextResponse.truncatedForRender", {
+                      omitted: truncationInfo.omittedChars.toLocaleString(locale),
+                      total: truncationInfo.originalChars.toLocaleString(locale),
+                    })
+                  }}
                 </div>
                 <!-- eslint-disable vue/no-v-html -- marked.parse output of app-owned assistant response text; trusted in-process render. Multi-line element so disable/enable pair (CLAUDE.md UI rule) instead of -next-line. -->
                 <div
@@ -110,9 +134,9 @@ import { usePdfDownload } from "../../composables/usePdfDownload";
 import { useMarkdownZip } from "../../composables/useMarkdownZip";
 import { useClipboardCopy } from "../../composables/useClipboardCopy";
 import { buildPdfFilename } from "../../utils/files/filename";
-import { extractTextResponseTitle } from "./utils";
+import { extractTextResponseTitle, truncateForRender } from "./utils";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const appApi = useAppApi();
 
 const props = withDefaults(
@@ -162,19 +186,30 @@ const seededByPlugin = computed<string>(() => props.selectedResult.data?.seededB
 // inherently scoped to the opening message.
 const isSeededUserTurn = computed(() => Boolean(seededByPlugin.value) && messageRole.value === "user");
 
+// Truncation summary surfaced to the template — the banner renders when
+// `wasTruncated` is true, telling the user the visible content is a preview
+// and the raw text is available via Copy. See #1863 for the pathological
+// input this defends against (Opus 4.8 degenerate repetition freezing Safari).
+const truncationInfo = computed(() => truncateForRender(messageText.value ?? ""));
+
 const renderedHtml = computed(() => {
-  if (!messageText.value) return "";
+  const { displayText } = truncationInfo.value;
+  if (!displayText) return "";
 
-  let processedText = messageText.value;
+  let processedText = displayText;
 
-  // Detect and wrap JSON content in code fences
-  const trimmedText = processedText.trim();
-  if ((trimmedText.startsWith("{") && trimmedText.endsWith("}")) || (trimmedText.startsWith("[") && trimmedText.endsWith("]"))) {
-    try {
-      JSON.parse(trimmedText);
-      processedText = `\`\`\`json\n${trimmedText}\n\`\`\``;
-    } catch {
-      // Not valid JSON, continue with original text
+  // Detect and wrap JSON content in code fences (skip for truncated views —
+  // JSON.parse of a truncated tail would throw anyway, and a partial JSON
+  // dump is more informative rendered as markdown).
+  if (!truncationInfo.value.wasTruncated) {
+    const trimmedText = processedText.trim();
+    if ((trimmedText.startsWith("{") && trimmedText.endsWith("}")) || (trimmedText.startsWith("[") && trimmedText.endsWith("]"))) {
+      try {
+        JSON.parse(trimmedText);
+        processedText = `\`\`\`json\n${trimmedText}\n\`\`\``;
+      } catch {
+        // Not valid JSON, continue with original text
+      }
     }
   }
 

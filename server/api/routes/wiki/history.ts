@@ -152,7 +152,53 @@ interface InternalSnapshotBody {
   sessionId?: string;
 }
 
-router.post("/internal/snapshot", async (req: Request<object, unknown, InternalSnapshotBody>, res: Response) => {
+// Stage 3a (#963): publish a synthetic `manageWiki` toolResult
+// into the session timeline so the canvas shows what the LLM
+// just wrote. The View dispatch (existing manageWiki plugin)
+// picks up the new `page-edit` action and fetches the snapshot
+// body via /api/wiki/pages/:slug/history/:stamp on render —
+// JSONL stays small (~150 bytes per write) because we store
+// the snapshot reference, not the body. `pagePath` is a GC
+// fallback: if the snapshot is gc'd before render, the View
+// falls back to reading the live page file.
+// Wrapped in try/catch so a publish failure (e.g. JSONL append
+// throws) doesn't fail the whole route — the snapshot was
+// already written, and the hook is fire-and-forget. Without
+// this guard the route would 500 even though the wiki write
+// itself succeeded; the next save would still snapshot fine,
+// but the canvas would silently lose this one preview
+// (CodeRabbit review).
+async function publishPageEditToolResult(sessionId: string, slug: string, stamp: string): Promise<void> {
+  try {
+    const outcome = await pushToolResult(sessionId, {
+      uuid: randomUUID(),
+      toolName: TOOL_NAMES.manageWiki,
+      data: {
+        // `"page-edit"` is the action discriminator the wiki
+        // plugin's `View.vue` switches on. It's repeated in the
+        // plugin and in `src/plugins/wiki/pageEditLoader.ts`; a
+        // shared `WIKI_ACTIONS` const would be the cleaner home
+        // but that's a multi-file refactor — out of scope for
+        // this CR follow-up.
+        action: "page-edit",
+        title: slug,
+        slug,
+        stamp,
+        pagePath: path.posix.join(WORKSPACE_DIRS.wikiPages, `${slug}.md`),
+      },
+    });
+    if (outcome.kind === "skipped") {
+      log.warn("wiki", "page-edit toolResult publish skipped", { slug, reason: outcome.reason });
+    }
+  } catch (err) {
+    log.warn("wiki", "page-edit toolResult publish failed", {
+      slug,
+      error: errorMessage(err),
+    });
+  }
+}
+
+async function handleInternalSnapshot(req: Request<object, unknown, InternalSnapshotBody>, res: Response): Promise<void> {
   const { slug, sessionId } = req.body ?? {};
   if (typeof slug !== "string" || slug.length === 0) {
     badRequest(res, "slug required");
@@ -200,53 +246,13 @@ router.post("/internal/snapshot", async (req: Request<object, unknown, InternalS
   );
   log.info("wiki", "internal snapshot recorded", { slug });
 
-  // Stage 3a (#963): publish a synthetic `manageWiki` toolResult
-  // into the session timeline so the canvas shows what the LLM
-  // just wrote. The View dispatch (existing manageWiki plugin)
-  // picks up the new `page-edit` action and fetches the snapshot
-  // body via /api/wiki/pages/:slug/history/:stamp on render —
-  // JSONL stays small (~150 bytes per write) because we store
-  // the snapshot reference, not the body. `pagePath` is a GC
-  // fallback: if the snapshot is gc'd before render, the View
-  // falls back to reading the live page file.
-  // Wrapped in try/catch so a publish failure (e.g. JSONL append
-  // throws) doesn't fail the whole route — the snapshot was
-  // already written, and the hook is fire-and-forget. Without
-  // this guard the route would 500 even though the wiki write
-  // itself succeeded; the next save would still snapshot fine,
-  // but the canvas would silently lose this one preview
-  // (CodeRabbit review).
   if (typeof sessionId === "string" && sessionId.length > 0) {
-    try {
-      const outcome = await pushToolResult(sessionId, {
-        uuid: randomUUID(),
-        toolName: TOOL_NAMES.manageWiki,
-        data: {
-          // `"page-edit"` is the action discriminator the wiki
-          // plugin's `View.vue` switches on. It's repeated in the
-          // plugin and in `src/plugins/wiki/pageEditLoader.ts`; a
-          // shared `WIKI_ACTIONS` const would be the cleaner home
-          // but that's a multi-file refactor — out of scope for
-          // this CR follow-up.
-          action: "page-edit",
-          title: slug,
-          slug,
-          stamp,
-          pagePath: path.posix.join(WORKSPACE_DIRS.wikiPages, `${slug}.md`),
-        },
-      });
-      if (outcome.kind === "skipped") {
-        log.warn("wiki", "page-edit toolResult publish skipped", { slug, reason: outcome.reason });
-      }
-    } catch (err) {
-      log.warn("wiki", "page-edit toolResult publish failed", {
-        slug,
-        error: errorMessage(err),
-      });
-    }
+    await publishPageEditToolResult(sessionId, slug, stamp);
   }
 
   res.json({ slug, ok: true });
-});
+}
+
+router.post("/internal/snapshot", async (req: Request<object, unknown, InternalSnapshotBody>, res: Response) => handleInternalSnapshot(req, res));
 
 export default router;

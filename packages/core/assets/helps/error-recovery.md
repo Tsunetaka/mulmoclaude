@@ -177,3 +177,93 @@ yourself — additions to `config/helps/error-recovery.md` are managed
 by the project maintainers so the canonical copy in
 `packages/core/assets/helps/error-recovery.md` and the installed copy
 stay in sync.
+
+## Sandbox MCP server dies at load — `Cannot find module '@…/…'`
+
+### Symptoms
+
+- Chatting fails before any tool runs, with:
+  `Error: MCP tool mcp__mulmoclaude__handlePermission (passed via --permission-prompt-tool) not found.`
+- Or, in the server log: `[agent-stderr] Error: Cannot find module '@mulmobridge/protocol'`
+  (or `@mulmoclaude/chart-plugin`, `@gui-chat-plugin/camera`, …) followed by a `Require stack:`
+  listing `/app/server/agent/mcp-server.ts`.
+- Sandbox (Docker) mode only. The broker dies **permanently** — it fails on every manual retry
+  too (contrast the transient scheduler race below, which succeeds on a manual re-run).
+
+### Cause
+
+The MCP child resolves its imports against `/app/node_modules` plus the `/app/pkg_modules`
+fallback on `NODE_PATH`. It dies at load when a package it imports is reachable from neither. Two
+layouts cause that:
+
+1. **Windows source checkout.** `yarn` links workspace packages into `node_modules/` as **NTFS
+   junctions**; their absolute Windows target (`C:\Users\…`) does not exist in the Linux container,
+   so every junction dangles. `server/agent/config.ts` bind-mounts a junction-free copy of each
+   workspace package at `/app/pkg_modules/<name>`; a package missing from that list is invisible.
+2. **npx install with nested `node_modules`.** npm sometimes places a dep in the nested
+   `<packageRoot>/node_modules` (a version conflict, or a half-deduped npx cache from repeated
+   overwrite-updates) instead of hoisting it to `<projectRoot>/node_modules`. Only the latter is
+   mounted to `/app/node_modules`, so the nested dep is invisible.
+
+Either way the child dies before the MCP handshake, so the agent loses **every** MCP tool at once —
+`handlePermission` included, which is why the CLI complains about the permission-prompt tool rather
+than about the missing module.
+
+### Fix
+
+Both layouts are handled automatically: the Windows case mounts every workspace scope, and the npx
+case mounts the nested `<packageRoot>/node_modules` onto `/app/pkg_modules`. If you see this anyway:
+
+```bash
+# Check the SHIPPED mount list, not a hand-mounted copy: does the package the
+# child failed on appear in what workspaceModuleMounts() actually produces?
+node_modules/.bin/tsx test/sandbox-repro/print-mcp-container-spec.ts \
+  | grep pkg_modules/<name>       # <name> e.g. @mulmobridge/protocol
+
+# The workspace dists must exist — production ships built output.
+yarn build:packages:dev
+```
+
+A stale `dist/` looks identical from the outside: the mount is there, but its `exports` target is
+absent. Rebuild before suspecting the mounts.
+
+For an **npx** install specifically, the quickest user-side unblock is to clear the npx cache so
+the next launch installs a clean, fully-hoisted tree:
+
+```bash
+rm -rf ~/.npm/_npx        # then re-run:
+npx mulmoclaude@latest
+```
+
+## Scheduled run fails once with `handlePermission not found`, but works on a manual retry
+
+### Symptoms
+
+- A scheduled skill / user task fails with the SAME
+  `MCP tool mcp__mulmoclaude__handlePermission ... not found` message — but running the identical
+  skill by hand immediately afterwards succeeds.
+- More frequent when several tasks are scheduled for the same minute (e.g. multiple 20:00 UTC
+  jobs). The failed run's transcript is tiny (a few hundred bytes to a few KB) and its recorded
+  duration is only milliseconds.
+
+### Cause
+
+This is a transient STARTUP RACE, not the permanent load failure above. Each scheduled chat spawns
+its own `mulmoclaude` MCP broker; when many chats launch in the same instant the broker boots under
+contention and can connect a moment after the agent's first tool call, so the permission-prompt
+tool is briefly absent. The broker connects seconds later — which is why a manual re-run works.
+
+The scheduler now staggers same-minute firings by a second each to reduce this contention (#2057),
+so it should be rare. It is NOT a module-resolution problem — the mounts / `dist` are fine.
+
+### Fix
+
+Just re-run the task. If it recurs often on a busy schedule, spread the tasks across different
+minutes rather than stacking them on the same one.
+
+### Regression coverage
+
+`.github/workflows/docker_sandbox_windows.yaml` boots the real `mcp-server.ts` inside a Linux
+container from a Windows host (WSL2 + native `dockerd`), with the same mounts / env / argv the
+shipped builders produce, and asserts `handlePermission` comes back over the MCP handshake. See
+`docs/windows-docker-ci.md`.

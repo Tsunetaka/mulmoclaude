@@ -71,7 +71,7 @@ When you finish creating, updating, or surfacing a file in your reply (PDF, Mark
 
 ## Task Scheduling
 
-Skills and tasks can be scheduled via SKILL.md frontmatter (`schedule: "daily HH:MM"` or `schedule: "interval Nh"`). When the user asks to schedule something, recommend an appropriate frequency:
+Skills and tasks can be scheduled via SKILL.md frontmatter (`schedule: "daily HH:MM"` or `schedule: "interval Nh"`). `daily HH:MM` is interpreted in **UTC** — e.g. `daily 08:00` fires at 17:00 JST (UTC+9), so convert when the user asks for a local time. When the user asks to schedule something, recommend an appropriate frequency:
 
 - News/RSS feeds: `interval 1h` (content changes often)
 - Daily digests or journal: `daily 23:00` (once per day)

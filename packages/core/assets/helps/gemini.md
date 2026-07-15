@@ -36,11 +36,13 @@ The Gemini API has a **free tier that is sufficient for personal use**. Higher-v
 1. Open [Google AI Studio → API keys](https://aistudio.google.com/apikey) and sign in with a Google account.
 2. Click **Create API key**. If prompted, select or create a Google Cloud project (any project will do).
 3. Copy the key — it starts with `AIza…`.
-4. Open the project's `.env` file in the repository root (copy `.env.example` first if it doesn't exist yet) and add the line:
+4. Create (or open) a `.env` file **in the directory you launch MulmoClaude from** — i.e. the directory where you run `npx mulmoclaude` (in a cloned repo, that's the repo root). Add the line:
 
-   ```
+   ```dotenv
    GEMINI_API_KEY=AIza…your-key…
    ```
+
+   The key stays in your launch directory, not in the `~/mulmoclaude` workspace (which is managed by the assistant). You can also just `export GEMINI_API_KEY=…` in your shell before launching — an exported value takes precedence over the `.env` file.
 
 5. Restart MulmoClaude so the new environment variable is picked up.
 
@@ -48,7 +50,7 @@ The Gemini API has a **free tier that is sufficient for personal use**. Higher-v
 
 The quickest check: switch to the **Artist** role and ask for _"an image of a red panda"_. If a real image appears in the canvas (instead of an italic text marker or a disabled-role hint), the key is wired up correctly.
 
-You can also inspect the server log on startup: messages like `GEMINI_API_KEY not set — image placeholders will render as text markers` indicate the key is missing or misread.
+You can also inspect the server log on startup: a `GEMINI_API_KEY not set — image / audio / video generation is unavailable` warning means the key was not found (missing, misread, or placed outside your launch directory).
 
 ## Security
 

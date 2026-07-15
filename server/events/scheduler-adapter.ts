@@ -11,7 +11,17 @@ import { writeFileAtomic } from "../utils/files/atomic.js";
 import { log } from "../system/logger/index.js";
 import { configureScheduler } from "@mulmoclaude/core/scheduler";
 
-export { initScheduler, applyScheduleOverride, getSchedulerLogs, getSchedulerTasks, type SystemTaskDef } from "@mulmoclaude/core/scheduler";
+export {
+  initScheduler,
+  applyScheduleOverride,
+  getSchedulerLogs,
+  getSchedulerTasks,
+  getSchedulerTaskState,
+  recordExternalRun,
+  TASK_TRIGGERS,
+  type TaskTrigger,
+  type SystemTaskDef,
+} from "@mulmoclaude/core/scheduler";
 
 // Configure the package at module load — before `initScheduler` runs at
 // boot. The atomic writer is the host's (single-sourced with its other

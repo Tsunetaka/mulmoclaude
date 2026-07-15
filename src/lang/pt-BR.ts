@@ -35,6 +35,8 @@ const ptBRMessages = {
     placeholder: "Mensagem para Claude…",
     send: "Enviar",
     stop: "Parar",
+    runningPlaceholder: "Em execução… pressione Enter para enfileirar",
+    removeBuffered: "Remover mensagem da fila",
     attachFile: "Anexar arquivo",
     fileTooLarge: "Arquivo muito grande ({sizeMB} MB). O limite é 30 MB.",
     unsupportedFileType: "Tipo de arquivo não suportado. Aceitos: imagens, PDF, DOCX, XLSX, PPTX e arquivos de texto.",
@@ -48,6 +50,11 @@ const ptBRMessages = {
       start: "Iniciar entrada de voz",
       stop: "Parar entrada de voz",
     },
+  },
+  cspViolation: {
+    notice:
+      "⚠ Uma visualização tentou carregar {host}, mas a política de segurança de conteúdo bloqueou ({directive}). Para permitir, adicione o host a config/csp.json — somente se você confiar nele.",
+    dismiss: "Dispensar",
   },
   sessionHistoryPanel: {
     filters: {
@@ -134,6 +141,10 @@ const ptBRMessages = {
     disconnectFailed: "Falha ao desconectar",
     signInFailed: "Falha ao entrar com o Google",
     statusFailed: "Falha ao carregar o status",
+    description: "O acesso remoto permite que um dispositivo móvel se conecte às coleções e feeds deste MulmoClaude.",
+    howTo: "No seu telefone, abra {url} e entre com a mesma conta do Google.",
+    customViewHint: "Para uma visualização adaptada ao celular, peça ao Claude para criar uma {keyword} (não uma custom view comum).",
+    qrHint: "Ou escaneie este código QR com a câmera do seu celular.",
   },
   sidebarHeader: {
     home: "Ir para o chat mais recente",
@@ -178,6 +189,9 @@ const ptBRMessages = {
     // "RO" = Read-Only. Abreviação em inglês mantida para caber como
     // badge compacto ao lado do rótulo Referência.
     readOnlyBadge: "RO",
+    showSystemFiles: "Exibir arquivos do sistema",
+    showSystemFilesTitle:
+      "Mostra os diretórios raiz internos do agente (conversations/, feeds/ etc.) além do conteúdo do usuário (data/, artifacts/, config/).",
   },
   fileTree: {
     workspace: "(workspace)",
@@ -229,6 +243,9 @@ const ptBRMessages = {
       photos: "Fotos",
       model: "Modelo",
       voice: "Voz",
+      chatIndex: "Índice de chat",
+      journal: "Diário",
+      notifications: "Web Push",
       skills: "Skills",
       roles: "Papéis",
     },
@@ -236,6 +253,7 @@ const ptBRMessages = {
       llm: "LLM",
       servers: "Servidores",
       workspace: "Espaço de trabalho",
+      notifications: "Notificações",
       plugins: "Plugins",
       management: "Gerenciamento",
     },
@@ -263,6 +281,17 @@ const ptBRMessages = {
       loadError: "Falha ao carregar as configurações",
       saveError: "Falha ao salvar",
     },
+    notificationsTab: {
+      description:
+        "Receba uma notificação push nos seus dispositivos registrados quando uma tarefa que você iniciou aqui terminar — útil quando você pergunta algo, se afasta e quer saber assim que a resposta estiver pronta.",
+      enableLabel: "Enviar um Web Push quando uma tarefa terminar",
+      enableHint: "Dispara quando um chat que você iniciou aqui é concluído. Tarefas agendadas e em segundo plano não o acionam.",
+      remoteHostNote: "Requer a conexão RemoteHost (que fornece o login) e pelo menos um dispositivo registrado. Se algum faltar, não faz nada.",
+      statusOn: "Web Push está ATIVADO",
+      statusOff: "Web Push está DESATIVADO",
+      loadError: "Falha ao carregar as configurações",
+      saveError: "Falha ao salvar",
+    },
     modelTab: {
       description: "Controla o esforço de raciocínio que o Claude Code usa em cada turno. Deixe sem configurar para usar o padrão do Claude.",
       effortLabel: "Esforço de raciocínio",
@@ -285,6 +314,42 @@ const ptBRMessages = {
       ready: "Modelo pronto",
       downloadError: "Falha ao baixar o modelo.",
       retry: "Tentar novamente",
+      loadError: "Falha ao carregar as configurações",
+      saveError: "Falha ao salvar",
+    },
+    chatIndexTab: {
+      description:
+        "Títulos e resumos gerados por IA para o histórico do chat. Sai desativado por padrão — sessões de automação (scheduler / workers do sistema) sempre são ignoradas mesmo quando ativado; sessões humanas pagam apenas uma chamada ao sumarizador ao terminar cada turno.",
+      modeLabel: "Modelo do índice de chat",
+      helperText: "Haiku é mais barato; Sonnet dá títulos mais precisos em sessões longas que mudam de assunto.",
+      mode: {
+        off: "Desativado",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "Indexação DESATIVADA",
+        haiku: "Indexando com Haiku",
+        sonnet: "Indexando com Sonnet",
+      },
+      loadError: "Falha ao carregar as configurações",
+      saveError: "Falha ao salvar",
+    },
+    journalTab: {
+      description:
+        "Diário diário automatizado — resume sessões recentes de chat em journal/*.md e extrai notas de memória duradoura. Sai desativado por padrão. Sessões de automação (scheduler / workers do sistema) são sempre excluídas, independentemente desta configuração.",
+      modeLabel: "Modelo do diário",
+      helperText: "Haiku é mais barato; Sonnet produz resumos diários / por tópico mais ricos. A passagem horária só é executada quando isto está ativado.",
+      mode: {
+        off: "Desativado",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "Diário DESATIVADO",
+        haiku: "Diário em execução com Haiku",
+        sonnet: "Diário em execução com Sonnet",
+      },
       loadError: "Falha ao carregar as configurações",
       saveError: "Falha ao salvar",
     },
@@ -381,6 +446,8 @@ const ptBRMessages = {
     rendered: "Renderizado",
     raw: "Fonte",
     closeFile: "Fechar arquivo",
+    revealInOs: "Mostrar na pasta",
+    revealInOsFailed: "Falha ao mostrar na pasta",
   },
   fileContentRenderer: {
     download: "ZIP",
@@ -397,6 +464,9 @@ const ptBRMessages = {
     redo: "Refazer",
     editMarp: "Editar código do slide",
     marpEditorLabel: "Código do slide Marp",
+    openInOs: "Abrir no SO",
+    openingInOs: "Abrindo…",
+    openInOsFailed: "Falha ao abrir no SO",
   },
   filesView: {
     chatPlaceholder: "Pergunte sobre este arquivo…",
@@ -937,6 +1007,8 @@ const ptBRMessages = {
     cancel: "Cancelar",
     seededByPlugin: "de {pkg}",
     seededByPluginTooltip: "Esta mensagem foi gerada pelo plugin {pkg}, não foi enviada por você.",
+    truncatedForRender:
+      "Esta mensagem é excepcionalmente longa ({total} caracteres no total). Apenas a primeira parte é renderizada — {omitted} caracteres ocultos para manter a aba responsiva. Use Copiar para obter o texto completo.",
   },
   pluginSkill: {
     noDescription: "(sem descrição)",

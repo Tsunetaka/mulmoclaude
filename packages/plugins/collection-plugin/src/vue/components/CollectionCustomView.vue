@@ -13,7 +13,9 @@
          (`<a target="_blank">` / `window.open`) as a normal new tab — e.g. a
          feed card linking to its article. Opening requires a user gesture and
          `target="_blank"` defaults to `noopener`, so the popup can't reach back
-         into the view; the token stays isolated. -->
+         into the view; the token stays isolated. `allow-downloads` lets a view
+         save files (e.g. an .ics iCalendar export) — without it the browser
+         silently blocks any download the frame initiates. -->
     <iframe
       v-else-if="srcdoc"
       ref="iframeEl"
@@ -21,7 +23,7 @@
       data-testid="collection-custom-view-iframe"
       :title="view.label"
       :srcdoc="srcdoc"
-      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads"
       class="w-full h-full border-0"
     />
   </div>

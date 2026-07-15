@@ -28,47 +28,24 @@
 // Failures don't abort boot. A missing preset (install drift, rare)
 // logs a warning; healthy presets still register.
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { PRESET_PLUGINS, type PresetPlugin } from "./preset-list.js";
+// The preset-package resolver lives in its own module so the sandbox
+// regression probe (test/sandbox-repro/probe.ts) can import it inside a
+// node:22-slim container without dragging in the full server graph
+// (logger, plugin registry). Re-exported so existing imports of
+// `resolvePresetRoot` from this file keep working.
+import { resolvePresetRoot } from "./resolvePresetRoot.js";
 import { loadPluginFromCacheDir, type LoaderDeps, type RuntimePlugin } from "./runtime-loader.js";
 import { log } from "../system/logger/index.js";
 
-const LOG_PREFIX = "plugins/preset";
+export { resolvePresetRoot };
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const LOG_PREFIX = "plugins/preset";
 
 interface PackageJsonShape {
   version?: string;
-}
-
-/** Resolve the on-disk root of a preset package by walking up from
- *  this file looking for `<dir>/node_modules/<pkg>/`. Mirrors Node's
- *  CommonJS resolution algorithm so it works in every layout the
- *  installer might choose:
- *
- *    - yarn workspaces: deps hoisted to the repo root's `node_modules`
- *    - npm flat install: package's `node_modules` directly
- *    - npm nested install: under a parent package's `node_modules`
- *
- *  Why not `import.meta.resolve('<pkg>/package.json')`: many packages
- *  (including `@gui-chat-plugin/*`) ship an `exports` field that
- *  doesn't expose `./package.json`, so the ESM resolver throws
- *  `ERR_PACKAGE_PATH_NOT_EXPORTED`. The walk-up sidesteps the
- *  exports gate entirely. */
-function resolvePresetRoot(packageName: string): string | null {
-  let dir = __dirname;
-  while (true) {
-    const candidate = path.join(dir, "node_modules", packageName);
-    if (existsSync(path.join(candidate, "package.json"))) {
-      return candidate;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
 }
 
 async function loadOnePreset(entry: PresetPlugin, deps: LoaderDeps = {}): Promise<RuntimePlugin | null> {

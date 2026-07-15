@@ -105,6 +105,8 @@ const ptBRMessages: CollectionMessages = {
     kanbanUncategorized: "Sem categoria",
     kanbanOpenCard: "Abrir {label}",
     addView: "Adicionar visualização",
+    addViewDesktop: "Visualização personalizada",
+    addViewMobile: "Visualização para celular",
     config: {
       open: "Configurações da coleção",
       title: "{title} · configurações",
@@ -117,6 +119,8 @@ const ptBRMessages: CollectionMessages = {
     customViewError: "Não foi possível carregar esta visualização: {error}",
     addViewPrompt:
       'Quero adicionar uma visualização personalizada à coleção "{title}". Pergunte o que eu quero ver ou editar, depois crie o arquivo HTML da visualização em {base}/views/your-view.html e registre-o em {base}/schema.json em `views[]` (capabilities ["read"] para uma visualização somente leitura, ["read","write"] se editar registros). Siga a ajuda custom-view para o contrato de dados.',
+    addMobileViewPrompt:
+      'Quero adicionar uma visualização personalizada para o celular (app remoto) à coleção "{title}". Pergunte o que eu quero ver ou editar, depois crie o arquivo HTML da visualização em {base}/views/your-view.html e registre-o em {base}/schema.json em `views[]` com `target: "mobile"` (somente leitura por padrão; declare `editableFields` / `allowDelete` apenas se editar registros). Siga a ajuda custom-view-remote para o contrato de dados via postMessage — nenhum fetch na visualização.',
     repair: "Reparar",
     dataIssuesDetected: "{count} arquivo(s) de registro têm problemas de dados e podem não aparecer nesta visualização.",
     repairPrompt:

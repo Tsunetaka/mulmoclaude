@@ -19,3 +19,6 @@ playwright-report-live/
 test-results-live/
 .playwright-mcp/
 .mcp.json
+
+# Local, machine-only secrets files — never commit
+.twitter_memo

@@ -9,9 +9,11 @@
       :selected-path="selectedPath"
       :recent-paths="recentPaths"
       :sort-mode="sortMode"
+      :show-hidden-system="showHiddenSystem"
       @select="selectFile"
       @load-children="loadDirChildren"
       @update:sort-mode="setSortMode"
+      @update:show-hidden-system="setShowHiddenSystem"
       @create-file="handleCreateFile"
     />
     <!-- Content pane -->
@@ -72,6 +74,7 @@ import { useFileTree } from "../composables/useFileTree";
 import { useFileSelection, isValidFilePath, readPathMatch } from "../composables/useFileSelection";
 import { useMarkdownMode } from "../composables/useMarkdownMode";
 import { useFileSortMode } from "../composables/useFileSortMode";
+import { useShowHiddenSystemFiles } from "../composables/useShowHiddenSystemFiles";
 import { useContentDisplay } from "../composables/useContentDisplay";
 import { useMarkdownLinkHandler } from "../composables/useMarkdownLinkHandler";
 import { apiPost, apiPut } from "../utils/api";
@@ -100,6 +103,7 @@ const { selectedPath, content, contentLoading, contentError, loadContent, select
 const { mdRawMode, toggleMdRaw } = useMarkdownMode();
 
 const { sortMode, setSortMode } = useFileSortMode();
+const { showHiddenSystem, setShowHiddenSystem } = useShowHiddenSystemFiles();
 
 const { isMarkdown, isHtml, isJson, isJsonl, sandboxedHtml, htmlPreviewUrl, jsonTokens, jsonlLines, mdFrontmatter } = useContentDisplay(selectedPath, content);
 

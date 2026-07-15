@@ -20,6 +20,7 @@ export {
   itemIsDone,
   _resetReconcilerLocksForTesting,
 } from "./reconciler.js";
+export { evalNow } from "./clock.js";
 export {
   startCollectionWatchers,
   stopCollectionWatchers,

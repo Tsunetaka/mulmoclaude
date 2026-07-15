@@ -17,6 +17,7 @@ import { workspacePath as defaultWorkspacePath } from "../workspace.js";
 import { ClaudeCliNotFoundError } from "../journal/archivist-cli.js";
 import { indexSession, listSessionIds, type IndexerDeps } from "./indexer.js";
 import { log } from "../../system/logger/index.js";
+import { chatIndexMode as resolveChatIndexMode, loadSettings } from "../../system/config.js";
 
 // Per-session lock. Indexing different sessions in parallel is
 // fine; indexing the same session twice concurrently would just
@@ -56,11 +57,20 @@ export async function maybeIndexSession(opts: MaybeIndexSessionOptions): Promise
   if (!force && opts.activeSessionIds?.has(sessionId)) return;
   if (running.has(sessionId)) return;
 
-  // Thread `force` through the indexer via IndexerDeps so the
-  // freshness throttle is also bypassed on forced runs.
+  // Resolve chat-index mode from settings unless the caller passed one
+  // explicitly (tests do; production callers don't). "off" short-
+  // circuits before we take the per-session lock so a disabled
+  // indexer stays a zero-work path.
+  const mode = opts.deps?.mode ?? resolveChatIndexMode(loadSettings());
+  if (mode === "off") return;
+
+  // Thread `force` + `mode` through the indexer via IndexerDeps so the
+  // freshness throttle is also bypassed on forced runs and the summarizer
+  // picks the right model.
   const effectiveDeps: IndexerDeps = {
     ...(opts.deps ?? {}),
     ...(force ? { force: true } : {}),
+    mode,
   };
 
   running.add(sessionId);
@@ -95,50 +105,73 @@ export interface BackfillResult {
   skipped: number;
 }
 
+// Index one session for the backfill walk, returning the outcome so the caller
+// keeps ownership of the counters + the module-level `disabled` latch.
+// Extracted to keep backfillAllSessions under the max-lines threshold; covered
+// by test/chat-index/test_maybe_index_session.ts.
+async function indexSessionForBackfill(
+  workspaceRoot: string,
+  sessionId: string,
+  deps: IndexerDeps | undefined,
+  force: boolean,
+  mode: IndexerDeps["mode"],
+): Promise<"indexed" | "skipped" | "disable"> {
+  try {
+    const entry = await indexSession(workspaceRoot, sessionId, { ...(deps ?? {}), ...(force ? { force: true } : {}), mode });
+    if (entry) {
+      log.info("chat-index", "indexed", { sessionId, title: entry.title });
+      return "indexed";
+    }
+    return "skipped";
+  } catch (err) {
+    if (err instanceof ClaudeCliNotFoundError) {
+      log.warn("chat-index", err.message);
+      return "disable";
+    }
+    log.warn("chat-index", "failed to index", { sessionId, error: String(err) });
+    return "skipped";
+  }
+}
+
 export async function backfillAllSessions(
   opts: {
     workspaceRoot?: string;
     deps?: IndexerDeps;
+    // Opt-in to "regenerate every summary, even those still current".
+    // Default false — the scheduled tick uses that so unchanged
+    // sessions cost only a stat + entry read, not a Claude CLI call.
+    // The manual rebuild endpoint and CHAT_INDEX_FORCE_RUN_ON_STARTUP
+    // opt in explicitly, matching their debug / rollout intent (#1929).
+    force?: boolean;
   } = {},
 ): Promise<BackfillResult> {
   const workspaceRoot = opts.workspaceRoot ?? defaultWorkspacePath;
+  // Resolve mode once for the whole walk (settings don't change mid-tick
+  // and re-reading per session would burn ~N syscalls for no benefit).
+  // "off" short-circuits the walk entirely — the sessions get counted
+  // as skipped instead of paying for a listing.
+  const mode = opts.deps?.mode ?? resolveChatIndexMode(loadSettings());
+  if (mode === "off") {
+    return { total: 0, indexed: 0, skipped: 0 };
+  }
   const ids = await listSessionIds(workspaceRoot);
   const result: BackfillResult = {
     total: ids.length,
     indexed: 0,
     skipped: 0,
   };
+  const force = opts.force === true;
   for (const sessionId of ids) {
     if (disabled) {
       result.skipped++;
       continue;
     }
-    try {
-      const entry = await indexSession(workspaceRoot, sessionId, {
-        ...(opts.deps ?? {}),
-        force: true,
-      });
-      if (entry) {
-        result.indexed++;
-        log.info("chat-index", "indexed", {
-          sessionId,
-          title: entry.title,
-        });
-      } else {
-        result.skipped++;
-      }
-    } catch (err) {
-      if (err instanceof ClaudeCliNotFoundError) {
-        disabled = true;
-        log.warn("chat-index", err.message);
-        result.skipped++;
-        continue;
-      }
+    const outcome = await indexSessionForBackfill(workspaceRoot, sessionId, opts.deps, force, mode);
+    if (outcome === "indexed") {
+      result.indexed++;
+    } else {
       result.skipped++;
-      log.warn("chat-index", "failed to index", {
-        sessionId,
-        error: String(err),
-      });
+      if (outcome === "disable") disabled = true;
     }
   }
   return result;

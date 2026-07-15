@@ -18,6 +18,7 @@ import { fileURLToPath } from "url";
 import { isPortFree, findAvailablePort, MAX_PORT_PROBES } from "../server/utils/port.mjs";
 import { parseDevPluginArgs } from "../server/utils/dev-plugin-args.mjs";
 import { cliFlagHelpLines, flagEnvOverrides } from "../server/utils/cli-flags.mjs";
+import { parseEnvFile, mergeLaunchEnv, describeLaunchEnvLoad } from "../server/utils/launch-env.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -216,8 +217,18 @@ try {
   process.exit(1);
 }
 
+// Load `<launch-dir>/.env` so `npx mulmoclaude` users keep secrets
+// (e.g. GEMINI_API_KEY) next to where they launch — NOT inside the
+// isolated ~/mulmoclaude workspace. Shell-exported vars win over the
+// file, so `export GEMINI_API_KEY=…` still takes precedence.
+const launchEnvPath = join(process.cwd(), ".env");
+const { exists: launchEnvExists, parsed: launchEnvParsed } = parseEnvFile(launchEnvPath);
+const { env: baseEnv, loadedKeys, skippedKeys } = mergeLaunchEnv(process.env, launchEnvParsed);
+const launchEnvSummary = describeLaunchEnvLoad({ path: launchEnvPath, exists: launchEnvExists, loadedKeys, skippedKeys });
+if (launchEnvSummary) log(launchEnvSummary);
+
 const serverEnv = {
-  ...process.env,
+  ...baseEnv,
   NODE_ENV: "production",
   PORT: String(port),
 };

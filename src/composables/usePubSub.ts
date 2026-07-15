@@ -7,15 +7,31 @@ interface PubSubMessage {
 
 type Callback = (data: unknown) => void;
 type Unsubscribe = () => void;
+type ReconnectHandler = () => void;
 
 // On reconnect we re-emit every live subscription so the rooms list survives the bounce.
 let socket: Socket | null = null;
 
 const listeners = new Map<string, Set<Callback>>();
+const reconnectHandlers = new Set<ReconnectHandler>();
+// First `connect` is the initial establishment; every subsequent one is a
+// reconnect and needs a state catch-up (missed events during the down window
+// are lost because the pub/sub server has no replay buffer). See #1915.
+let hasConnectedOnce = false;
 
 function resendSubscriptions(sock: Socket): void {
   for (const channel of listeners.keys()) {
     sock.emit("subscribe", channel);
+  }
+}
+
+function fireReconnectHandlers(): void {
+  for (const handler of reconnectHandlers) {
+    try {
+      handler();
+    } catch (err) {
+      console.error("[usePubSub] reconnect handler threw:", err);
+    }
   }
 }
 
@@ -28,7 +44,14 @@ function connect(): Socket {
     transports: ["websocket"],
   });
 
-  sock.on("connect", () => resendSubscriptions(sock));
+  sock.on("connect", () => {
+    resendSubscriptions(sock);
+    if (hasConnectedOnce) {
+      fireReconnectHandlers();
+    } else {
+      hasConnectedOnce = true;
+    }
+  });
 
   sock.on("data", (msg: PubSubMessage) => {
     const cbs = listeners.get(msg.channel);
@@ -46,6 +69,10 @@ function maybeDisconnect(): void {
   if (!socket) return;
   socket.disconnect();
   socket = null;
+  // Reset so the next `connect()` cycle is a true initial connect again —
+  // catch-up handlers only make sense against state accumulated on this
+  // socket, not across an unsubscribe/resubscribe cycle.
+  hasConnectedOnce = false;
 }
 
 export function usePubSub() {
@@ -73,5 +100,16 @@ export function usePubSub() {
     };
   }
 
-  return { subscribe };
+  // Register a handler that fires on every reconnect (not the initial
+  // connect). Callers use this to catch up on missed events after the
+  // socket bounces — the pub/sub server has no replay buffer, so anything
+  // published during the down window is gone. See #1915.
+  function onReconnect(handler: ReconnectHandler): Unsubscribe {
+    reconnectHandlers.add(handler);
+    return () => {
+      reconnectHandlers.delete(handler);
+    };
+  }
+
+  return { subscribe, onReconnect };
 }

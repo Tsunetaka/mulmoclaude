@@ -30,7 +30,15 @@ export function useSessionSync(opts: {
   const { sessionMap, currentSessionId, fetchSessions, onCurrentSessionDeleted } = opts;
   const { subscribe } = usePubSub();
 
+  // Monotonic sequence token — protects sessionMap from stale overwrites when
+  // two concurrent refreshes race (e.g. reconnect fires while a
+  // visibilitychange is mid-flight). Every call increments the token before
+  // awaiting; after the fetch resolves, we mutate only if our token is still
+  // the latest, so the older-but-slower response can never regress live
+  // state (e.g. re-flip isRunning back to true after session_finished).
+  let refreshToken = 0;
   async function refreshSessionStates(): Promise<void> {
+    const myToken = ++refreshToken;
     let summaries: SessionSummary[];
     try {
       summaries = await fetchSessions();
@@ -40,6 +48,7 @@ export function useSessionSync(opts: {
       console.warn("[session-sync] failed to fetch sessions:", err);
       return;
     }
+    if (myToken !== refreshToken) return;
     for (const summary of summaries) {
       const live = sessionMap.get(summary.id);
       if (!live) continue;

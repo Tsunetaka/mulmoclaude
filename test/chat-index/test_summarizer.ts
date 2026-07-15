@@ -10,6 +10,7 @@ import {
   HEAD_CHARS,
   TAIL_CHARS,
   PER_MESSAGE_MAX,
+  buildSummarizeCliArgs,
 } from "../../server/workspace/chat-index/summarizer.js";
 
 describe("extractText", () => {
@@ -231,5 +232,25 @@ describe("formatSpawnError", () => {
     const msg = formatSpawnError(1, "", long);
     // 500 chars cap, plus the prefix "...exited 1: "
     assert.ok(msg.length < 600);
+  });
+});
+
+describe("buildSummarizeCliArgs", () => {
+  it("puts the model after --model and the transcript last after -p", () => {
+    const args = buildSummarizeCliArgs("the transcript", "sonnet");
+    assert.equal(args[args.indexOf("--model") + 1], "sonnet");
+    assert.equal(args[args.length - 2], "-p");
+    assert.equal(args[args.length - 1], "the transcript");
+  });
+
+  it("requests strict json output against the summary schema and runs non-interactively", () => {
+    const args = buildSummarizeCliArgs("x", "haiku");
+    assert.ok(args.includes("--print"));
+    assert.ok(args.includes("--no-session-persistence"));
+    assert.equal(args[args.indexOf("--output-format") + 1], "json");
+    assert.ok(args.includes("--json-schema"));
+    // the schema arg is valid JSON carrying the title/summary/keywords shape
+    const schema = JSON.parse(args[args.indexOf("--json-schema") + 1]);
+    assert.deepEqual(Object.keys(schema.properties).sort(), ["keywords", "summary", "title"]);
   });
 });

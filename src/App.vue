@@ -4,6 +4,17 @@
          it's the first thing the user sees when the server isn't
          reachable. Self-hiding when fetchHealth succeeds. -->
     <BackendOfflineBanner :on-retry="fetchHealth" />
+    <!-- CSP-blocked-resource notice (#1989) — a sandboxed view tried to load a
+         host not allowed by config/csp.json. Tells the user the exact host +
+         directive so they can extend the policy (if they trust it). -->
+    <div
+      v-if="cspViolations.length > 0"
+      class="shrink-0 flex items-start gap-3 bg-amber-50 text-amber-900 text-xs px-3 py-2 border-b border-amber-200"
+      role="alert"
+    >
+      <span class="flex-1 min-w-0">{{ $t("cspViolation.notice", { host: cspViolations[0].host, directive: cspViolations[0].directive }) }}</span>
+      <button class="shrink-0 underline hover:no-underline" @click="dismissCspViolations()">{{ $t("cspViolation.dismiss") }}</button>
+    </div>
     <!-- Global top bar — shown in every view mode -->
     <div class="shrink-0 bg-white text-gray-900">
       <!-- Row 1: title + plugin launcher -->
@@ -148,6 +159,7 @@
           ref="chatInputRef"
           v-model="userInput"
           v-model:pasted-files="pastedFiles"
+          v-model:buffered-messages="currentBufferedMessages"
           :is-running="activeSessionRunning"
           :queries="sessionRoleQueries"
           :session-id="currentSessionId"
@@ -289,6 +301,7 @@
             ref="chatInputRef"
             v-model="userInput"
             v-model:pasted-files="pastedFiles"
+            v-model:buffered-messages="currentBufferedMessages"
             :is-running="activeSessionRunning"
             :queries="sessionRoleQueries"
             :session-id="currentSessionId"
@@ -337,7 +350,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, reactive } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onScopeDispose, reactive } from "vue";
 import { useI18n } from "vue-i18n";
 import { v4 as uuidv4 } from "uuid";
 import { getPlugin } from "./tools";
@@ -379,10 +392,13 @@ import { resolvePastedAttachment } from "./utils/agent/pastedAttachment";
 import { applyAgentEvent, type AgentEventContext } from "./utils/agent/eventDispatch";
 import { pushErrorMessage, beginUserTurn, updateResult, applyToolResultToSession } from "./utils/session/sessionHelpers";
 import { parseCollectionSlashSeed, makeSyntheticCollectionResult, hasRealCollectionResult } from "./utils/collections/presentSeed";
+import { mergeBufferedIntoDraft } from "./utils/chat/buffer";
 import { roleName, roleIcon } from "./utils/role/icon";
 import { createEmptySession } from "./utils/session/sessionFactory";
 import { buildLoadedSession, parseSessionEntries } from "./utils/session/sessionEntries";
 import { usePendingCalls } from "./composables/usePendingCalls";
+import { loadCspExtra } from "./composables/useCspExtra";
+import { cspViolations, dismissCspViolations, installCspViolationListener } from "./composables/useCspViolations";
 import { useRunElapsed } from "./composables/useRunElapsed";
 import { useKeyNavigation } from "./composables/useKeyNavigation";
 import { useDebugBeat } from "./composables/useDebugBeat";
@@ -409,6 +425,7 @@ import ConfirmModal from "./components/ConfirmModal.vue";
 import { useNotifications } from "./composables/useNotifications";
 import { collectionNotifiedSeverities } from "./utils/collections/notifiedItems";
 import { installCollectionAppBindings } from "./composables/collections/uiHost";
+import { useDynamicShortcutIcons } from "./composables/collections/useDynamicShortcutIcons";
 import type { CollectionsListResponse } from "@mulmoclaude/core/collection";
 import { useHealth } from "./composables/useHealth";
 import { useSessionHistory } from "./composables/useSessionHistory";
@@ -448,7 +465,7 @@ const currentSessionId = ref("");
 // --- Debug beat (pub/sub) ---
 const { debugTitleStyle } = useDebugBeat();
 
-const { subscribe: pubsubSubscribe } = usePubSub();
+const { subscribe: pubsubSubscribe, onReconnect: pubsubOnReconnect } = usePubSub();
 
 // --- Routing ---
 const route = useRoute();
@@ -502,10 +519,22 @@ const { shortcuts } = useShortcuts();
 
 const userInput = ref("");
 const pastedFiles = ref<PastedFile[]>([]);
+// Messages the user sends while a run is in flight queue here instead of
+// dispatching, keyed by the session they belong to so concurrent runs in
+// different sessions never mix. `currentBufferedMessages` is the displayed
+// session's queue; it merges back into `userInput` when that session's run
+// finishes (see watch below).
+const bufferedMessagesBySession = ref<Record<string, string[]>>({});
+const currentBufferedMessages = computed<string[]>({
+  get: () => bufferedMessagesBySession.value[currentSessionId.value] ?? [],
+  set: (messages) => {
+    bufferedMessagesBySession.value = { ...bufferedMessagesBySession.value, [currentSessionId.value]: messages };
+  },
+});
 const activePane = ref<"sidebar" | "main">("sidebar");
 
 const { sessions, historyError, fetchSessions, setBookmark, deleteSession: deleteSessionFromHistory } = useSessionHistory();
-const { markSessionRead } = useSessionSync({
+const { markSessionRead, refreshSessionStates } = useSessionSync({
   sessionMap,
   currentSessionId,
   fetchSessions,
@@ -819,6 +848,8 @@ async function refreshGoogleMapsApiKey(): Promise<void> {
   }
 }
 void refreshGoogleMapsApiKey();
+void loadCspExtra();
+installCspViolationListener();
 
 function googleMapKeyFor(toolName: string | undefined): string | null {
   return toolName === TOOL_NAMES.mapControl ? googleMapsApiKey.value : null;
@@ -1045,6 +1076,16 @@ function hasPendingGenerations(sessionId: string): boolean {
 }
 
 function handleSessionFinished(sessionId: string): void {
+  // Trust the definitive server signal and flip the local indicator
+  // immediately (#1915 Fix A). Without this, the "thinking" spinner stays
+  // stuck until the `sessions` channel notification arrives via a separate
+  // socket.io frame — which can go missing on a network hiccup or on
+  // Safari's tab-throttling flow while the sessionChannel frame did land.
+  const session = sessionMap.get(sessionId);
+  if (session) {
+    session.isRunning = false;
+    session.statusMessage = "";
+  }
   refreshSessionTranscript(sessionId).catch((err) => {
     console.error("[handleSessionFinished] refresh failed:", err);
   });
@@ -1054,6 +1095,50 @@ function handleSessionFinished(sessionId: string): void {
     unsubscribeSession(sessionId);
   }
 }
+
+// After the client silently loses events, this pulls fresh state from the
+// server so the UI recovers without a page reload (#1915). Two trigger
+// surfaces:
+//   - socket.io reconnect (network hiccup, WS bounce)
+//   - document visibility flips to `visible` (Safari's silent tab
+//     throttling — WS keeps `connected` on the server but delivery stops
+//     while the tab is backgrounded, and there's no `disconnect` event to
+//     hook on reconnect)
+// refreshSessionStates() carries its own sequence guard inside
+// useSessionSync so concurrent catch-ups can't overwrite newer live state
+// with an older-but-slower response. refreshSessionTranscript() only
+// upgrades toolResults when the server view is strictly larger, so it's
+// already idempotent against interleaving.
+function catchUpMissedEvents(reason: "reconnect" | "visibility"): void {
+  console.info(`[chat-ui] catching up after ${reason}`);
+  refreshSessionStates().catch((err) => {
+    console.warn("[chat-ui] refreshSessionStates failed:", err);
+  });
+  const currentId = currentSessionId.value;
+  if (currentId) {
+    refreshSessionTranscript(currentId).catch((err) => {
+      console.warn("[chat-ui] refreshSessionTranscript failed:", err);
+    });
+  }
+}
+
+// Capture the unsubscribe so remount / HMR doesn't accumulate stale
+// module-level reconnect handlers (Codex review).
+const unsubReconnect = pubsubOnReconnect(() => catchUpMissedEvents("reconnect"));
+
+function handleVisibilityChange(): void {
+  if (document.visibilityState === "visible") {
+    catchUpMissedEvents("visibility");
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+});
+onScopeDispose(() => {
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
+  unsubReconnect();
+});
 
 function createSessionEventHandler(session: ActiveSession, ctx: AgentEventContext): (data: unknown) => void {
   return (data: unknown) => {
@@ -1097,8 +1182,16 @@ async function resolveAttachmentPaths(files: PastedFile[]): Promise<AttachmentRe
 }
 
 async function sendMessage(text?: string) {
-  const message = typeof text === "string" ? text : userInput.value.trim();
-  if (!message || activeSessionRunning.value) return;
+  const fromInput = typeof text !== "string";
+  const message = fromInput ? userInput.value.trim() : text.trim();
+  if (!message) return;
+  // Run in flight: queue instead of dispatching. The input isn't locked,
+  // so the user keeps composing; queued lines come back on completion.
+  if (activeSessionRunning.value) {
+    currentBufferedMessages.value = [...currentBufferedMessages.value, message];
+    if (fromInput) userInput.value = "";
+    return;
+  }
   userInput.value = "";
   const filesSnapshot = [...pastedFiles.value];
   pastedFiles.value = [];
@@ -1132,6 +1225,19 @@ async function sendMessage(text?: string) {
     unsubscribeSession(session.id);
   }
 }
+
+// Drain the displayed session's queued messages back into the input once
+// its run finishes. Keyed by `currentSessionId`, so switching to another
+// session shows (and later drains) that session's own queue — a background
+// run in a different session never dumps its queue into the wrong input.
+watch([activeSessionRunning, currentSessionId], () => {
+  if (activeSessionRunning.value) return;
+  const queued = currentBufferedMessages.value;
+  if (queued.length === 0) return;
+  userInput.value = mergeBufferedIntoDraft(queued, userInput.value);
+  currentBufferedMessages.value = [];
+  focusChatInput();
+});
 
 // Stop the in-flight agent run for the displayed session. The server's
 // /api/agent/cancel aborts the AbortController, kills the Claude
@@ -1281,6 +1387,10 @@ installCollectionAppBindings({
   startNewChatDraft: (prompt: string, role?: string) => startNewChatDraft(prompt, role),
   notifiedSeverities: (slug: string) => collectionNotifiedSeverities(notifierEntries.value, slug),
 });
+// Keep pinned collection-launcher icons that declare `dynamicIcon` live —
+// mounted here (not inside CollectionsIndexView) so it runs regardless of
+// which page is open.
+useDynamicShortcutIcons();
 // Plugin Views that need to tag background work with the current
 // session (e.g. MulmoScript generations) inject this.
 provideActiveSession(activeSession);

@@ -32,12 +32,13 @@ describe("maybeAppendWikiBacklinks (driver)", () => {
   });
 
   it("no-op when wiki/pages/ does not exist", async () => {
-    await maybeAppendWikiBacklinks({
-      chatSessionId: SID,
-      turnStartedAt: Date.now(),
-      workspaceRoot,
-    });
-    // Should complete without throwing. No assertion beyond that.
+    await assert.doesNotReject(
+      maybeAppendWikiBacklinks({
+        chatSessionId: SID,
+        turnStartedAt: Date.now(),
+        workspaceRoot,
+      }),
+    );
   });
 
   it("appends backlink to a page modified during the turn", async () => {

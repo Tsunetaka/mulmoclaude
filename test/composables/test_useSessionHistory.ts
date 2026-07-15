@@ -156,3 +156,55 @@ describe("useSessionHistory — cursor-aware incremental fetch (#205)", () => {
     assert.deepEqual(ids, ["a", "c"]);
   });
 });
+
+describe("useSessionHistory — mutations (setBookmark / deleteSession)", () => {
+  it("setBookmark flips isBookmarked optimistically and returns true on success", async () => {
+    const { sessions, historyError, fetchSessions, setBookmark } = useSessionHistory();
+    stubFetch(async () => mockJsonResponse(200, envelope([row("s1"), row("s2")], "v1:1")));
+    await fetchSessions();
+
+    stubFetch(async () => mockJsonResponse(200, { ok: true }));
+    const ok = await setBookmark("s1", true);
+
+    assert.equal(ok, true);
+    assert.equal(historyError.value, null);
+    assert.equal(sessions.value.find((session) => session.id === "s1")?.isBookmarked, true);
+    assert.notEqual(sessions.value.find((session) => session.id === "s2")?.isBookmarked, true);
+  });
+
+  it("setBookmark sets historyError and leaves the flag untouched on failure", async () => {
+    const { sessions, historyError, fetchSessions, setBookmark } = useSessionHistory();
+    stubFetch(async () => mockJsonResponse(200, envelope([row("s1")], "v1:1")));
+    await fetchSessions();
+
+    stubFetch(async () => mockJsonResponse(500, { error: "bookmark write failed" }));
+    const ok = await setBookmark("s1", true);
+
+    assert.equal(ok, false);
+    assert.equal(typeof historyError.value, "string");
+    assert.notEqual(sessions.value.find((session) => session.id === "s1")?.isBookmarked, true);
+  });
+
+  it("deleteSession returns true without mutating the local list on success", async () => {
+    const { sessions, historyError, fetchSessions, deleteSession } = useSessionHistory();
+    stubFetch(async () => mockJsonResponse(200, envelope([row("a"), row("b")], "v1:1")));
+    await fetchSessions();
+
+    stubFetch(async () => mockJsonResponse(200, { ok: true }));
+    const ok = await deleteSession("a");
+
+    assert.equal(ok, true);
+    assert.equal(historyError.value, null);
+    // The pub/sub deletedIds broadcast removes the row; deleteSession must not.
+    assert.equal(sessions.value.length, 2);
+  });
+
+  it("deleteSession sets historyError and returns false on failure", async () => {
+    const { historyError, deleteSession } = useSessionHistory();
+    stubFetch(async () => mockJsonResponse(503, { error: "delete failed" }));
+    const ok = await deleteSession("a");
+
+    assert.equal(ok, false);
+    assert.equal(typeof historyError.value, "string");
+  });
+});

@@ -8,11 +8,17 @@
 
 [English](README.md) · [日本語](README.ja.md) · **简体中文** · [한국어](README.ko.md) · [Español](README.es.md) · [Português (BR)](README.pt-BR.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
+**一个了解你的一切、全天候陪伴在你身边的 AI 助手，在任何地方都买不到。你无法购买 —— 只能亲手培育。MulmoClaude 就是在你自己的电脑上培育专属 AI 助手的工具。**
+
+助手的实体并不是 AI 模型 —— 模型只是引擎。决定助手价值的，是它对你了解多少：你的对话、日程、笔记、数据，以及你使用的应用。如此重要的东西，不应托付给任何单一的服务提供商 —— 用得越久，就越难离开。MulmoClaude 是开源的，并在本地运行，因此助手积累的一切 —— 记忆、数据、应用 —— 都以普通文件的形式留在你自己的工作区中，掌握在你自己手里。
+
+培育需要环境，而 MulmoClaude 提供了这样一个环境：一个积累记忆的地方（由 Claude 自己构建和维护的个人 wiki）、一个存放数据的地方（模式驱动的集合、订阅源、普通文件），以及一个为你打造专属应用的地方 —— 无需任何编程知识。你只要用日常语言说"我想要这样的东西"，Claude 就会构建你需要的小应用：餐厅清单、发票跟踪器、单词练习 —— 都是只为一个人而写的软件。刚安装完时，这片园地还是空的；你播下种子、耕耘土壤，培育出只属于你的助手。
+
+而且，助手并不被绑在书桌前。从手机 —— 或你已经在用的消息应用 —— 登录，就能连上住在你电脑里的同一个助手。中继服务器只承载传输中的消息 —— 你的记忆、数据和应用永远不会离开你的电脑。
+
+在底层，MulmoClaude 是一个 AI 原生应用平台：各项能力是单一注册表中的插件（目前包括：带真正服务端记账逻辑的完整会计系统、个人 wiki、SEC 文件阅读器等），Claude 作为通用控制器在这些插件之间进行组合编排，聊天会为每个任务召唤合适的 GUI —— markdown、图表、表单、wiki、电子表格或 3D 场景。
+
 > **[How AI-Native Applications Should Be Built](MANIFEST.md)** —— MulmoClaude 背后的架构、UX 与协议论述。
-
-MulmoClaude 是一个在本机上运行的开源 AI 原生应用平台。它不再以孤立的应用为单位，而是将各项能力构建为单一注册表中的插件。如今在其上运行的应用包括：完整的会计系统（带真正的服务端记账逻辑）、个人 wiki，以及 SEC 文件阅读器（Edgar）。Claude 作为通用控制器，在这些插件之间进行组合编排。
-
-你用自然语言进行交互，Claude 会为任务召唤合适的 GUI —— 以 markdown、图表、表单、wiki、电子表格或 3D 场景作出回复。所有数据都以普通文件的形式存放在你的工作区中。
 
 ## 快速开始
 
@@ -421,7 +427,9 @@ mcp__claude_ai_Google_Calendar
 无需手动编辑 JSON 即可添加外部 MCP 服务器。支持两种类型：
 
 - **HTTP** —— 远程服务器（例如 `https://example.com/mcp`）。在所有模式下都可用；在 Docker 中，`localhost` / `127.0.0.1` URL 会自动被改写为 `host.docker.internal`。
-- **Stdio** —— 本地子进程，出于安全考虑限制为 `npx` / `node` / `tsx`。启用 Docker 沙盒时，脚本路径必须位于工作区下，才能在容器内解析。
+- **Stdio** —— 本地子进程（例如一个 `npx` MCP），出于安全考虑限制为 `npx` / `node` / `tsx`。Docker 沙盒**关闭**时在主机上运行。沙盒**开启**时，stdio 条目**默认被丢弃**（最小化的沙盒镜像无法承载任意运行时）—— 改为设置 `"hostExecInDocker": true`，即可让其在主机上通过 `stdio ↔ HTTP` 网关运行。参见 [docs/mcp-sandbox.md](docs/mcp-sandbox.md)。
+
+用 **`env`** 映射向 stdio 服务器传递凭据（`"env": { "IMAP_PASS": "…" }`）。取值为字面量并保存在 `mcp.json` 中（模式 `0600`，但为**明文**—— 是文件权限保护，而非保险库）。完整细节，包括 `hostExecInDocker` 选项以及 `env` 如何到达进程，见 [docs/mcp-sandbox.md](docs/mcp-sandbox.md)。
 
 配置位于 `<workspace>/config/`：
 
@@ -474,6 +482,25 @@ MCP 文件使用 Claude CLI 的标准格式，因此你可以在机器之间复�
 - Stdio 的 `command` 被限制为 `npx`、`node` 或 `tsx`。
 - 未通过验证的条目会在加载时被静默丢弃（会记录一条警告）；文件的其余部分仍然生效。
 
+**示例** —— 一个带凭据、且在 Docker 沙盒下也能运行的 stdio 服务器（例如一个 IMAP MCP）：
+
+```json
+{
+  "mcpServers": {
+    "imap": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "some-imap-mcp"],
+      "env": { "IMAP_HOST": "imap.example.com", "IMAP_USER": "me", "IMAP_PASS": "secret" },
+      "hostExecInDocker": true,
+      "enabled": true
+    }
+  }
+}
+```
+
+`hostExecInDocker` 会让该服务器在主机上（沙盒之外）运行。这是一个按服务器的开关 —— 可按需为多个服务器启用，但只对你信任的服务器启用。沙盒关闭时该设置会被忽略（服务器本就在主机上运行）。
+
 **`settings.json` 示例**：
 
 ```json
@@ -514,6 +541,27 @@ canvas（右侧面板）支持 8 种视图模式，可通过启动器工具栏�
 | `Cmd/Ctrl+8` | Roles     | `?view=roles`     | 角色管理                   |
 
 每种视图模式都由 URL 驱动：点击启动器按钮会更新 `?view=`，而访问带有（例如）`?view=wiki` 的 URL 会恢复相应的视图。视图模式列表在 `src/utils/canvas/viewMode.ts` 中定义一次 —— 添加新模式只需在数组中追加一项。
+
+## 远程访问
+
+从手机（或任意浏览器）访问正在运行的 MulmoClaude —— 随时随地浏览它的集合、动态源和自定义视图，并发起对话。无需配置单独的账户或服务器：只要在**两端都使用同一个 Google 账户**登录，即可获得访问权限。
+
+**如何连接**
+
+1. 在桌面端，点击页头的 **phonelink** 图标打开_远程主机_弹出框，然后选择**使用 Google 登录**。MulmoClaude 会以你的 Google 用户身份登录，并通过 Firebase（共享的公开项目 [`mulmoserver`](https://mulmoserver.web.app)）打开一个命令通道。主机在线期间图标显示为绿色。
+2. 在手机上打开 **[https://mulmoserver.web.app](https://mulmoserver.web.app)** 并使用**同一个 Google 账户**登录。Web 应用会找到你在线的主机并与之连接。
+
+由于两端都以同一个 Firebase 用户身份进行认证，手机和桌面端只会在你自己的用户空间内相遇 —— 任何第三方都无法访问你的主机。
+
+**Firebase 和 Firestore 仅用作传输通道** —— 用于在手机和桌面端之间转发命令与响应的中继。你的数据**绝不会存储或保留**在任何一端。主机上只存在你本地的工作区文件；任何需要经过通道的内容（例如经由 Firebase Storage 中转的附件）在到达目的地后会立即删除。
+
+**你可以从手机上做什么**
+
+- 浏览并翻阅你的**集合**和**动态源**。
+- 打开**自定义远程视图**（custom remote view）—— 由 Claude 为你构建的适配移动端的页面。请让 Claude 构建 _custom remote view_（而不是普通的自定义视图），它可以是只读的，也可以是可写的。
+- 在主机上**发起对话**，并从手机附加**照片、视频或 PDF**。附件的字节太大，无法通过命令通道传输，因此会经由 Firebase Storage 中转；主机将每个文件下载到它的工作区（`data/attachments/`），删除中转副本，然后将文件连同你的消息一起交给 Claude。
+
+该通道基于命令且由主机驱动：手机发出请求，你的桌面端 MulmoClaude 予以响应。使用弹出框中的**断开连接**（或退出 MulmoClaude）即可让主机离线。
 
 ## 工作区
 

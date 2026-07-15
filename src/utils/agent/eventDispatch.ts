@@ -2,8 +2,8 @@
 // via the AgentEventContext adapter. No Vue refs, no component scope.
 
 import type { ActiveSession } from "../../types/session";
-import type { SseEvent, SseToolCallResult } from "../../types/sse";
-import { EVENT_TYPES, generationKey } from "../../types/events";
+import type { SseEvent, SseToolCallResult, SseGenerationStarted, SseGenerationFinished } from "../../types/sse";
+import { EVENT_TYPES, generationKey, type PendingGeneration } from "../../types/events";
 import type { ToolCallHistoryItem } from "../../types/toolCallHistory";
 import { findPendingToolCall, toToolCallEntry } from "./toolCalls";
 import { extractMcpHint } from "./mcpHint";
@@ -36,6 +36,18 @@ function applyToolCallResult(history: ToolCallHistoryItem[], event: SseToolCallR
     return;
   }
   entry.result = event.content;
+}
+
+export function addPendingGeneration(pending: Record<string, PendingGeneration>, event: SseGenerationStarted): void {
+  const { kind, filePath, key } = event;
+  pending[generationKey(kind, filePath, key)] = { kind, filePath, key };
+}
+
+// Returns whether the map is now empty, so the caller can fire the
+// drain callback only on the transition to "no background work left".
+export function removePendingGeneration(pending: Record<string, PendingGeneration>, event: SseGenerationFinished): boolean {
+  Reflect.deleteProperty(pending, generationKey(event.kind, event.filePath, event.key));
+  return Object.keys(pending).length === 0;
 }
 
 export async function applyAgentEvent(event: SseEvent, ctx: AgentEventContext): Promise<void> {
@@ -83,21 +95,10 @@ export async function applyAgentEvent(event: SseEvent, ctx: AgentEventContext): 
       return;
     case EVENT_TYPES.sessionFinished:
       return;
-    case EVENT_TYPES.generationStarted: {
-      const mapKey = generationKey(event.kind, event.filePath, event.key);
-      session.pendingGenerations[mapKey] = {
-        kind: event.kind,
-        filePath: event.filePath,
-        key: event.key,
-      };
+    case EVENT_TYPES.generationStarted:
+      addPendingGeneration(session.pendingGenerations, event);
       return;
-    }
-    case EVENT_TYPES.generationFinished: {
-      const mapKey = generationKey(event.kind, event.filePath, event.key);
-      Reflect.deleteProperty(session.pendingGenerations, mapKey);
-      if (Object.keys(session.pendingGenerations).length === 0) {
-        ctx.onGenerationsDrained();
-      }
-    }
+    case EVENT_TYPES.generationFinished:
+      if (removePendingGeneration(session.pendingGenerations, event)) ctx.onGenerationsDrained();
   }
 }

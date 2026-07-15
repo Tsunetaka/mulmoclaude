@@ -106,6 +106,8 @@ const frMessages: CollectionMessages = {
     kanbanUncategorized: "Non classé",
     kanbanOpenCard: "Ouvrir {label}",
     addView: "Ajouter une vue",
+    addViewDesktop: "Vue personnalisée",
+    addViewMobile: "Vue mobile",
     config: {
       open: "Paramètres de la collection",
       title: "{title} · paramètres",
@@ -118,6 +120,8 @@ const frMessages: CollectionMessages = {
     customViewError: "Impossible de charger cette vue : {error}",
     addViewPrompt:
       'Je veux ajouter une vue personnalisée à la collection « {title} ». Demande-moi ce que je veux voir ou modifier, puis crée le fichier HTML de la vue dans {base}/views/your-view.html et enregistre-le dans {base}/schema.json sous `views[]` (capabilities ["read"] pour une vue en lecture seule, ["read","write"] si elle modifie des enregistrements). Suis l\'aide custom-view pour le contrat de données.',
+    addMobileViewPrompt:
+      'Je veux ajouter une vue personnalisée pour le mobile (application distante) à la collection « {title} ». Demande-moi ce que je veux voir ou modifier, puis crée le fichier HTML de la vue dans {base}/views/your-view.html et enregistre-le dans {base}/schema.json sous `views[]` avec `target: "mobile"` (en lecture seule par défaut ; déclare `editableFields` / `allowDelete` uniquement si elle modifie des enregistrements). Suis l\'aide custom-view-remote pour le contrat de données par postMessage — aucun fetch dans la vue.',
     repair: "Réparer",
     dataIssuesDetected: "{count} fichier(s) d'enregistrement présentent des problèmes de données et peuvent être absents de cette vue.",
     repairPrompt:

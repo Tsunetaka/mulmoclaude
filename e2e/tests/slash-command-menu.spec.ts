@@ -67,6 +67,18 @@ test.describe("slash command menu", () => {
     await expect.poll(() => agentCalls.length, { timeout: 500 }).toBe(0);
   });
 
+  test("Ctrl+Enter inserts a newline instead of selecting the highlighted item", async ({ page }) => {
+    await fillChatInput(page, "/a");
+    await expect(page.getByTestId("slash-command-menu")).toBeVisible();
+
+    await chatInput(page).press("Control+Enter");
+
+    // Newline spliced at the caret — the highlighted skill is NOT selected
+    // (value would be "/archive ") and nothing is sent.
+    await expect(chatInput(page)).toHaveValue("/a\n");
+    await expect.poll(() => agentCalls.length, { timeout: 500 }).toBe(0);
+  });
+
   test("ArrowDown moves the highlight before Enter selects", async ({ page }) => {
     await fillChatInput(page, "/a");
     await expect(page.getByTestId("slash-command-menu")).toBeVisible();

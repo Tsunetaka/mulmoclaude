@@ -11,7 +11,9 @@
            origin — the view can't read the parent's storage; here there is no
            token to protect, but the phone renders under the same rules and the
            preview must match it exactly). `allow-popups*` lets outbound
-           `target="_blank"` links open as normal tabs. -->
+           `target="_blank"` links open as normal tabs. `allow-downloads` lets
+           a view save files (e.g. an .ics iCalendar export); the phone grants
+           it too, so the preview must match. -->
       <div class="phone-frame">
         <iframe
           ref="iframeEl"
@@ -19,7 +21,7 @@
           data-testid="collection-remote-view-iframe"
           :title="view.label"
           :srcdoc="srcdoc"
-          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads"
           class="phone-screen"
         />
       </div>
@@ -33,9 +35,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useCollectionI18n } from "../lang";
-import { deriveAll, errorMessage } from "@mulmoclaude/core/collection";
-import type { CollectionCustomView, CollectionItem, CollectionSchema } from "@mulmoclaude/core/collection";
-import { handleRemoteViewMessage, pageFromItems, REMOTE_VIEW_MAX_BYTES, type RemoteViewItem, type RemoteViewPage } from "@mulmoclaude/core/remote-view";
+import { errorMessage } from "@mulmoclaude/core/collection";
+import type { CollectionCustomView } from "@mulmoclaude/core/collection";
+import {
+  handleRemoteViewMessage,
+  REMOTE_VIEW_MAX_BYTES,
+  type RemoteViewItem,
+  type RemoteViewMutateRequest,
+  type RemoteViewMutateResult,
+  type RemoteViewPage,
+  type RemoteViewPageRequest,
+} from "@mulmoclaude/core/remote-view";
 import { collectionUi } from "../uiContext";
 
 const { t } = useCollectionI18n();
@@ -43,13 +53,6 @@ const { t } = useCollectionI18n();
 const props = defineProps<{
   slug: string;
   view: CollectionCustomView;
-  /** The collection schema — the bridge derives computed fields from it and
-   *  `projectItems` always keeps its `primaryKey`. */
-  schema: CollectionSchema;
-  /** The already-loaded records the bridge pages over. Deliberately the
-   *  UNFILTERED list: the phone pages over the whole collection through the
-   *  command channel, and the preview must behave identically. */
-  items: CollectionItem[];
 }>();
 
 const emit = defineEmits<{
@@ -63,8 +66,17 @@ const error = ref<string | null>(null);
 const srcdoc = ref<string | null>(null);
 const bytes = ref(0);
 const iframeEl = ref<HTMLIFrameElement | null>(null);
+// Last page's inlined/omitted image counts — surfaced so the author sees how
+// many thumbnails fit the per-page budget while iterating (numeric, no locale
+// keys, like the byte caption).
+const imageStats = ref<{ inlined: number; omitted: number } | null>(null);
 
-const sizeCaption = computed(() => `${Math.max(1, Math.round(bytes.value / 1024))} KB / ${Math.round(REMOTE_VIEW_MAX_BYTES / 1024)} KB`);
+const sizeCaption = computed(() => {
+  const base = `${Math.max(1, Math.round(bytes.value / 1024))} KB / ${Math.round(REMOTE_VIEW_MAX_BYTES / 1024)} KB`;
+  const stats = imageStats.value;
+  if (!stats || (stats.inlined === 0 && stats.omitted === 0)) return base;
+  return stats.omitted > 0 ? `${base} · ${stats.inlined} images (${stats.omitted} over budget)` : `${base} · ${stats.inlined} images`;
+});
 
 // Monotonic load id — same stale-load guard as CollectionCustomView.
 let loadSeq = 0;
@@ -103,20 +115,36 @@ async function load(): Promise<void> {
 watch([() => props.slug, () => props.view.id, () => collectionUi().localeTag()], () => void load(), { immediate: true });
 
 // ── The parent side of the remote-view bridge ──
-// Answers ONLY what the phone parent answers — `getItems` pages (clamped +
-// fields-projected by the shared handler) and `startChat` relays. No
-// `onChange`, no `openItem`, no data plane: preview capability must equal
-// phone capability exactly (plans/feat-remote-custom-view.md, decision 5).
+// Answers ONLY what the phone parent answers — `getItems` pages and `startChat`
+// relays. No `onChange`, no `openItem`: preview capability must equal phone
+// capability exactly (plans/feat-remote-custom-view.md, decision 5).
 //
-// `props.items` are the RAW detail records: derived formulas resolve at
-// render time on the desktop, so the bridge must derive them here — with an
-// empty ref cache, exactly like the channel's `deriveItems` — before paging.
-// The JSON round-trip then strips Vue's reactive proxies (postMessage
-// structured-clone throws DataCloneError on them) and matches what the
-// command channel does to a page anyway.
-function getPage(request: Parameters<typeof pageFromItems>[1]): RemoteViewPage {
-  const derived = props.items.map((item) => deriveAll(props.schema, item, {}) as RemoteViewItem);
-  return JSON.parse(JSON.stringify(pageFromItems(derived, request, props.schema.primaryKey))) as RemoteViewPage;
+// Paging goes through the HOST (not client-side over the records) because the
+// page's declared `imageFields` are inlined as `data:` URL thumbnails the
+// browser can neither read from the workspace nor resize — the preview fetches
+// the same host page (real thumbnails, byte budget) the phone will, over the
+// identical `createRemoteViewItems` builder (plans/feat-remote-view-images.md).
+async function getPage(request: RemoteViewPageRequest): Promise<RemoteViewPage> {
+  const binding = collectionUi();
+  if (!binding.fetchRemoteViewItems) throw new Error("fetchRemoteViewItems is not wired on this host");
+  const resp = await binding.fetchRemoteViewItems(props.slug, props.view.id, request);
+  if (!resp.ok) throw new Error(resp.error);
+  imageStats.value = { inlined: resp.data.inlined, omitted: resp.data.omitted };
+  return resp.data.page;
+}
+
+// A preview mutation is a REAL host write, through the same builder + policy the
+// phone will run (plans/feat-remote-writable-view.md, decision 4). The write
+// publishes a collection-change event, so the parent's live subscription
+// refetches `props.items` and the view's next `getItems` reflects it. A refused
+// mutate (read-only / non-editable field / …) throws the host's message, which
+// the bridge relays to the view as `ok: false`.
+async function onMutate(request: RemoteViewMutateRequest): Promise<RemoteViewMutateResult> {
+  const binding = collectionUi();
+  if (!binding.mutateRemoteView) throw new Error("mutateRemoteView is not wired on this host");
+  const resp = await binding.mutateRemoteView(props.slug, props.view.id, request);
+  if (!resp.ok) throw new Error(resp.error);
+  return resp.data.op === "update" ? { item: resp.data.item as RemoteViewItem } : { id: resp.data.id };
 }
 
 function onWindowMessage(event: MessageEvent): void {
@@ -127,6 +155,7 @@ function onWindowMessage(event: MessageEvent): void {
     {
       slug: props.slug,
       getPage,
+      onMutate,
       onStartChat: (prompt, role) => emit("startChat", { prompt, role }),
     },
     // targetOrigin "*": the sandboxed document's origin is opaque, nothing

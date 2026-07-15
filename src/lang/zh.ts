@@ -40,6 +40,8 @@ const zhMessages = {
     placeholder: "向 Claude 发送消息…",
     send: "发送",
     stop: "停止",
+    runningPlaceholder: "运行中… 按 Enter 加入队列",
+    removeBuffered: "移除排队的消息",
     attachFile: "附加文件",
     fileTooLarge: "文件过大（{sizeMB} MB）。上限为 30 MB。",
     unsupportedFileType: "不支持的文件类型。支持:图像、PDF、DOCX、XLSX、PPTX、文本文件。",
@@ -53,6 +55,10 @@ const zhMessages = {
       start: "开始语音输入",
       stop: "停止语音输入",
     },
+  },
+  cspViolation: {
+    notice: "⚠ 某视图尝试加载 {host}，但内容安全策略已将其拦截（{directive}）。如需允许，请将该主机添加到 config/csp.json（仅在你信任它时）。",
+    dismiss: "关闭",
   },
   sessionHistoryPanel: {
     filters: {
@@ -136,6 +142,10 @@ const zhMessages = {
     disconnectFailed: "断开连接失败",
     signInFailed: "Google 登录失败",
     statusFailed: "加载状态失败",
+    description: "远程访问允许移动设备连接到此 MulmoClaude 的收藏与消息流。",
+    howTo: "在手机上打开 {url}，用同一个 Google 账号登录。",
+    customViewHint: "如需移动端优化的视图，请让 Claude 创建 {keyword}（而不是普通的 custom view）。",
+    qrHint: "也可以用手机相机扫描此二维码打开。",
   },
   sidebarHeader: {
     home: "前往最新对话",
@@ -179,6 +189,8 @@ const zhMessages = {
     reference: "引用",
     // "RO" = Read-Only. 保留英文缩写作为紧凑徽章。
     readOnlyBadge: "RO",
+    showSystemFiles: "显示系统文件",
+    showSystemFilesTitle: "在用户内容(data/、artifacts/、config/)之外同时显示代理内部的顶层目录(conversations/、feeds/ 等)。",
   },
   fileTree: {
     workspace: "(工作区)",
@@ -230,6 +242,9 @@ const zhMessages = {
       photos: "照片",
       model: "模型",
       voice: "语音",
+      chatIndex: "聊天索引",
+      journal: "日志",
+      notifications: "Web Push",
       skills: "技能",
       roles: "角色",
     },
@@ -237,6 +252,7 @@ const zhMessages = {
       llm: "LLM",
       servers: "服务器",
       workspace: "工作区",
+      notifications: "通知",
       plugins: "插件",
       management: "管理",
     },
@@ -262,6 +278,16 @@ const zhMessages = {
       loadError: "加载设置失败",
       saveError: "保存失败",
     },
+    notificationsTab: {
+      description: "当你在此处发起的任务完成时，向你已注册的设备发送推送通知——当你提出问题后离开、想在答案就绪的那一刻收到提醒时很有用。",
+      enableLabel: "任务完成时发送 Web Push",
+      enableHint: "在你于此处发起的对话完成时触发。定时任务和后台任务不会触发它。",
+      remoteHostNote: "需要 RemoteHost 连接（用于提供登录）以及至少一台已注册的设备。缺少任一项时不会有任何操作。",
+      statusOn: "Web Push 已开启",
+      statusOff: "Web Push 已关闭",
+      loadError: "加载设置失败",
+      saveError: "保存失败",
+    },
     modelTab: {
       description: "控制 Claude Code 每个回合使用的推理强度。留空则使用 Claude 的默认值。",
       effortLabel: "推理强度",
@@ -283,6 +309,42 @@ const zhMessages = {
       ready: "模型已就绪",
       downloadError: "模型下载失败。",
       retry: "重试",
+      loadError: "加载设置失败",
+      saveError: "保存失败",
+    },
+    chatIndexTab: {
+      description:
+        "为聊天历史自动生成 AI 标题/摘要。默认关闭。开启后自动化会话（scheduler / 系统 worker）仍会始终跳过；只有人类会话在每次轮次结束时才会调用一次摘要。",
+      modeLabel: "聊天索引模型",
+      helperText: "Haiku 更便宜；Sonnet 在长且话题多变的会话中标题更精准。",
+      mode: {
+        off: "关闭",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "索引已关闭",
+        haiku: "使用 Haiku 建立索引中",
+        sonnet: "使用 Sonnet 建立索引中",
+      },
+      loadError: "加载设置失败",
+      saveError: "保存失败",
+    },
+    journalTab: {
+      description:
+        "自动化每日日志 — 将近期聊天会话摘要为 journal/*.md，并抽取持久化记忆笔记。默认关闭。自动化会话（scheduler / 系统 worker）无论此设置如何都会始终排除。",
+      modeLabel: "日志模型",
+      helperText: "Haiku 更便宜；Sonnet 生成的每日/主题摘要更丰富。仅在此设置开启时每小时的轮次才会运行。",
+      mode: {
+        off: "关闭",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "日志已关闭",
+        haiku: "使用 Haiku 运行日志中",
+        sonnet: "使用 Sonnet 运行日志中",
+      },
       loadError: "加载设置失败",
       saveError: "保存失败",
     },
@@ -377,6 +439,8 @@ const zhMessages = {
     rendered: "已渲染",
     raw: "原始",
     closeFile: "关闭文件",
+    revealInOs: "在文件夹中显示",
+    revealInOsFailed: "无法在文件夹中显示",
   },
   fileContentRenderer: {
     download: "ZIP",
@@ -393,6 +457,9 @@ const zhMessages = {
     redo: "重做",
     editMarp: "编辑幻灯片源代码",
     marpEditorLabel: "Marp 幻灯片源代码",
+    openInOs: "在系统中打开",
+    openingInOs: "正在打开…",
+    openInOsFailed: "无法在系统中打开",
   },
   filesView: {
     chatPlaceholder: "询问关于此文件的问题…",
@@ -926,6 +993,7 @@ const zhMessages = {
     cancel: "取消",
     seededByPlugin: "来自 {pkg}",
     seededByPluginTooltip: "此消息由 {pkg} 插件生成，并非您发送。",
+    truncatedForRender: "该消息异常长（共 {total} 个字符）。为保持标签页响应，仅渲染开头部分 — 隐藏了 {omitted} 个字符。使用复制按钮获取完整原文。",
   },
   pluginSkill: {
     noDescription: "(无描述)",

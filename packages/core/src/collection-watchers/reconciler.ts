@@ -25,6 +25,7 @@ import { clear as notifierClear, listAll, publish as notifierPublish, updateForP
 import { whenMatches, type CollectionItem, type CollectionSchema } from "../collection";
 import { type DiscoveryOptions, listItems, readItem, type IoOptions, isTriggerDue, maybeSpawnSuccessor, loadCollection } from "../collection/server";
 import { type CompletionPriority, errMsg, log, requireAdapter } from "./config.js";
+import { evalNow } from "./clock.js";
 
 /** The internal-id prefix every collection-completion bell entry carries.
  *  Used both to build new keys and to filter sweep candidates from the
@@ -220,7 +221,7 @@ export async function reconcileItem(
   dataDir: string,
   itemId: string,
   ioOpts: IoOptions = {},
-  now: Date = new Date(),
+  now: Date = evalNow(),
 ): Promise<void> {
   if (!schema.completionField) {
     // Schema doesn't track completion — drop any stale entry.
@@ -271,13 +272,7 @@ export async function reconcileItem(
  *  reconcile it. Catches up changes that happened while the server was
  *  down. Deleted items are covered by `sweepStaleActiveEntries`, not this
  *  function (it only sees files that exist). */
-export async function reconcileAllItems(
-  slug: string,
-  schema: CollectionSchema,
-  dataDir: string,
-  ioOpts: IoOptions = {},
-  now: Date = new Date(),
-): Promise<void> {
+export async function reconcileAllItems(slug: string, schema: CollectionSchema, dataDir: string, ioOpts: IoOptions = {}, now: Date = evalNow()): Promise<void> {
   if (!schema.completionField) return;
   let items: CollectionItem[];
   try {

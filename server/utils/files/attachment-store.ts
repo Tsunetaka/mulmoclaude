@@ -42,6 +42,12 @@ const MIME_EXT: Readonly<Record<string, string>> = {
   // TIFF — exifr can read it, and the photo plugin enumerates it
   // as a supported source format. Same rationale as HEIC.
   "image/tiff": ".tif",
+  // BMP + AVIF — routed through upload-time JPEG conversion for
+  // Claude's Messages API (see image-jpeg-convert.ts). Without these
+  // MIME_EXT entries the original would land as `<id>.bin`, breaking
+  // the `originalPath` fidelity the route response promises.
+  "image/bmp": ".bmp",
+  "image/avif": ".avif",
   "application/pdf": ".pdf",
   "application/json": ".json",
   "application/xml": ".xml",
@@ -73,6 +79,8 @@ const EXT_MIME: Readonly<Record<string, string>> = {
   ".heif": "image/heif",
   ".tif": "image/tiff",
   ".tiff": "image/tiff",
+  ".bmp": "image/bmp",
+  ".avif": "image/avif",
   ".pdf": "application/pdf",
   ".json": "application/json",
   ".xml": "application/xml",

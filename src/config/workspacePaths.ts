@@ -51,4 +51,10 @@ export const WORKSPACE_FILES = {
    *  `[{ name, indexUrl, rawBaseUrl }]`. Absent file ⇒ only the official
    *  registry is shown. */
   collectionsRegistries: "config/collections-registries.json",
+  /** Optional user-supplied CSP extension for sandboxed HTML views (#1989).
+   *  Per-directive extra hosts ADDED to the hardcoded base policy so a view
+   *  can load e.g. a Google Maps embed. Shape:
+   *  `{ "frame-src": ["https://www.google.com"], ... }`. Absent ⇒ base policy
+   *  only. Widening CSP is a supply-chain / exfiltration surface — see #1989. */
+  csp: "config/csp.json",
 } as const;

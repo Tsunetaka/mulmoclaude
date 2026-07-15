@@ -6,6 +6,7 @@ import { PUBSUB_CHANNELS, type SessionsChannelPayload } from "../config/pubsubCh
 import type { SessionSummary } from "../types/session";
 import { apiDelete, apiGet, apiPost } from "../utils/api";
 import { applySessionDiff } from "../utils/session/mergeSessions";
+import { applyBookmarkFlag } from "./useSessionHistory.helpers";
 import { usePubSub } from "./usePubSub";
 
 interface SessionsResponse {
@@ -18,6 +19,58 @@ function readDeletedIds(payload: unknown): string[] {
   if (!payload || typeof payload !== "object") return [];
   const ids = (payload as SessionsChannelPayload).deletedIds;
   return Array.isArray(ids) ? ids.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+// Cross-tab cache pruning: cursor diffs don't carry deletions
+// (deletedIds is always [] in the REST response — see #205 comments
+// in routes/sessions.ts), so we rely on the channel payload.
+//
+// Gated on getCurrentScope() so unit tests that instantiate the
+// composable outside a Vue setup don't open a real socket.io
+// connection (which would keep node's event loop alive and hang
+// the test process).
+function subscribeToSessionDeletions(sessions: Ref<SessionSummary[]>): void {
+  if (!getCurrentScope()) return;
+  const { subscribe } = usePubSub();
+  const unsubscribe = subscribe(PUBSUB_CHANNELS.sessions, (data) => {
+    const ids = readDeletedIds(data);
+    if (ids.length === 0) return;
+    const drop = new Set(ids);
+    sessions.value = sessions.value.filter((session) => !drop.has(session.id));
+  });
+  if (typeof unsubscribe === "function") onScopeDispose(unsubscribe);
+}
+
+function useSessionMutations(sessions: Ref<SessionSummary[]>, historyError: Ref<string | null>) {
+  async function setBookmark(sessionId: string, bookmarked: boolean): Promise<boolean> {
+    const path = API_ROUTES.sessions.bookmark.replace(":id", encodeURIComponent(sessionId));
+    const result = await apiPost<{ ok: boolean }>(path, { bookmarked });
+    if (!result.ok) {
+      historyError.value = result.error;
+      return false;
+    }
+    // Optimistic local update so the green-icon flip is immediate;
+    // the pub/sub round-trip will reaffirm via the cursor diff (meta
+    // mtime feeds into changeMs) and also reach other tabs.
+    sessions.value = applyBookmarkFlag(sessions.value, sessionId, bookmarked);
+    return true;
+  }
+
+  async function deleteSession(sessionId: string): Promise<boolean> {
+    const path = API_ROUTES.sessions.detail.replace(":id", encodeURIComponent(sessionId));
+    const result = await apiDelete<{ ok: boolean }>(path);
+    if (!result.ok) {
+      historyError.value = result.error;
+      return false;
+    }
+    // Don't update locally — the server publishes `deletedIds` on the
+    // sessions channel and the subscriber below removes the row in
+    // every tab (including this one) the same way. One code path, no
+    // race between the optimistic write and the broadcast.
+    return true;
+  }
+
+  return { setBookmark, deleteSession };
 }
 
 export interface UseSessionHistory {
@@ -55,52 +108,8 @@ export function useSessionHistory(): UseSessionHistory {
     return sessions.value;
   }
 
-  async function setBookmark(sessionId: string, bookmarked: boolean): Promise<boolean> {
-    const path = API_ROUTES.sessions.bookmark.replace(":id", encodeURIComponent(sessionId));
-    const result = await apiPost<{ ok: boolean }>(path, { bookmarked });
-    if (!result.ok) {
-      historyError.value = result.error;
-      return false;
-    }
-    // Optimistic local update so the green-icon flip is immediate;
-    // the pub/sub round-trip will reaffirm via the cursor diff (meta
-    // mtime feeds into changeMs) and also reach other tabs.
-    sessions.value = sessions.value.map((session) => (session.id === sessionId ? { ...session, isBookmarked: bookmarked } : session));
-    return true;
-  }
-
-  async function deleteSession(sessionId: string): Promise<boolean> {
-    const path = API_ROUTES.sessions.detail.replace(":id", encodeURIComponent(sessionId));
-    const result = await apiDelete<{ ok: boolean }>(path);
-    if (!result.ok) {
-      historyError.value = result.error;
-      return false;
-    }
-    // Don't update locally — the server publishes `deletedIds` on the
-    // sessions channel and the subscriber below removes the row in
-    // every tab (including this one) the same way. One code path, no
-    // race between the optimistic write and the broadcast.
-    return true;
-  }
-
-  // Cross-tab cache pruning: cursor diffs don't carry deletions
-  // (deletedIds is always [] in the REST response — see #205 comments
-  // in routes/sessions.ts), so we rely on the channel payload.
-  //
-  // Gated on getCurrentScope() so unit tests that instantiate the
-  // composable outside a Vue setup don't open a real socket.io
-  // connection (which would keep node's event loop alive and hang
-  // the test process).
-  if (getCurrentScope()) {
-    const { subscribe } = usePubSub();
-    const unsubscribe = subscribe(PUBSUB_CHANNELS.sessions, (data) => {
-      const ids = readDeletedIds(data);
-      if (ids.length === 0) return;
-      const drop = new Set(ids);
-      sessions.value = sessions.value.filter((session) => !drop.has(session.id));
-    });
-    if (typeof unsubscribe === "function") onScopeDispose(unsubscribe);
-  }
+  const { setBookmark, deleteSession } = useSessionMutations(sessions, historyError);
+  subscribeToSessionDeletions(sessions);
 
   return {
     sessions,

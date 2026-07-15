@@ -68,6 +68,12 @@ export function registerCompletionHook(chatSessionId: string, hook: CompletionHo
   completionHooks.set(chatSessionId, hook);
 }
 
+/** Drop a hook registered pre-dispatch when the dispatch never spawned a run,
+ *  so `finalizeRun` will never fire it. No-op when none is registered. */
+export function unregisterCompletionHook(chatSessionId: string): void {
+  completionHooks.delete(chatSessionId);
+}
+
 /** Run the one-shot completion hook for a session, if one is registered, then
  *  remove it (so it can't fire twice). No-op when none is registered.
  *

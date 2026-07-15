@@ -69,6 +69,7 @@ When you (or a PR you're reviewing) adds a new diagnostic / fix for a recurring 
 - **UI control sizes + chrome row layout** → [`docs/ui-controls.md`](docs/ui-controls.md)
 - **UI region naming + testid discipline + when to update layout art** → [`docs/ui-cheatsheet.md`](docs/ui-cheatsheet.md) (also the source of truth for the ASCII layout map)
 - **i18n (all 8 locales in lockstep, add / rename / remove keys, new locale registration)** → [`docs/i18n.md`](docs/i18n.md)
+- **Reproducing Windows-host FS bugs inside Linux Docker containers on CI** (dangling NTFS junctions, WSL2 + native `dockerd` setup, gotchas) → [`docs/windows-docker-ci.md`](docs/windows-docker-ci.md)
 
 ## Package dependency direction (always apply)
 
@@ -126,4 +127,15 @@ Full layout + workspace tree + process map: [`docs/developer.md`](docs/developer
 | **Publish a shared `@mulmoclaude/*` or `@mulmobridge/*` npm package** | `/publish` skill — tag `@scope/name@X.Y.Z` (no `v`), GH release with `--latest=false` |
 | **Add / write an e2e test** (mock or live) | [`docs/developer.md#e2e-testing-playwright`](docs/developer.md#e2e-testing-playwright) for mock, [`docs/e2e-live-testing.md`](docs/e2e-live-testing.md) for live (must-read before adding a `e2e-live/tests/*.spec.ts`) |
 | **Manual-test scenarios that can't be automated** | [`docs/manual-testing.md`](docs/manual-testing.md) |
+| **Work on remote host** (drive MulmoClaude from a phone over the Firestore command channel) | [`docs/remote-host.md`](docs/remote-host.md) (auth model, command loop, handler table, mobile custom-view postMessage bridge) |
 | **Reference the centralised constants** (`API_ROUTES`, `TOOL_NAMES`, `WORKSPACE_DIRS`, `PUBSUB_CHANNELS`, `EVENT_TYPES`, `SCHEDULE_TYPES`) | [`docs/developer.md#centralized-constants`](docs/developer.md#centralized-constants). For the four plugin-aware aggregators, edit the plugin's `meta.ts` — never the host record. |
+
+### `chore(release)` commits — never bump the launcher preemptively
+
+A `chore(release)` commit that publishes a shared workspace package (e.g. `@mulmoclaude/core`, `@mulmoclaude/collection-plugin`) MUST bump only that package's `version` and the launcher's DEP RANGE for it (to keep the `launcherSync.mjs` workspace-lockstep invariant green). It MUST NOT bump the launcher's OWN `version` field — that field is reserved for the `/publish-mulmoclaude` workflow that actually publishes the npm launcher.
+
+Rationale: the launcher-sync gate enforces `launcherRange.lowerBound == workspace.version` for dep ratchet, but it never touches or checks the launcher's OWN `version`. Bumping the launcher preemptively "for tidiness" while skipping the actual npm publish creates a silent drift where `packages/mulmoclaude/package.json` runs ahead of npm's latest — future readers can't tell what the next actual publish should be, and end up either skipping the drafted-but-unpublished identity (leaving numbering gaps) or publishing a version whose intent no longer matches the current code. See #1945 for the pattern that motivated this rule.
+
+When to bump `packages/mulmoclaude/package.json`'s `version`:
+- Inside the `/publish-mulmoclaude` flow, right before the actual `npm publish`. That commit becomes the identity of the release.
+- Never as part of a `chore(release)` that publishes only shared packages.

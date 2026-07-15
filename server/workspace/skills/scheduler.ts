@@ -10,12 +10,13 @@
 import { discoverSkills } from "./discovery.js";
 import type { Skill } from "./types.js";
 import type { ITaskManager, TaskSchedule } from "../../events/task-manager/index.js";
+import { TASK_TRIGGERS, type TaskTrigger } from "../../events/scheduler-adapter.js";
+import { fireScheduledChat } from "./scheduled-run.js";
 import { parseSkillFrontmatter } from "./parser.js";
 import { log } from "../../system/logger/index.js";
 import { readFileSync } from "fs";
 import { DEFAULT_ROLE_ID } from "../../../src/config/roles.js";
 import { SESSION_ORIGINS, type SessionOrigin } from "../../../src/types/session.js";
-import { makeUuid } from "../../utils/id.js";
 
 interface SkillScheduleInfo {
   schedule: TaskSchedule;
@@ -36,8 +37,17 @@ export interface SkillSchedulerDeps {
 
 const SKILL_TASK_PREFIX = "skill.";
 
-// Track registered skill task IDs so refresh can unregister stale ones.
-let registeredTaskIds = new Set<string>();
+interface ScheduledSkillTask {
+  id: string;
+  name: string;
+  description: string;
+  schedule: TaskSchedule;
+  roleId: string;
+}
+
+// Registered skill tasks keyed by task-manager id: refresh unregisters stale
+// ones, and the API lists them (origin: "skill") with their schedule + state.
+let registeredSkillTasks = new Map<string, ScheduledSkillTask>();
 let cachedDeps: SkillSchedulerDeps | null = null;
 
 // Mutex: serialize refresh calls so concurrent save/update/delete
@@ -72,64 +82,76 @@ function serializedRefresh(deps: SkillSchedulerDeps): Promise<number> {
 }
 
 async function doRegister(deps: SkillSchedulerDeps): Promise<number> {
-  const { taskManager, workspaceRoot, startChat } = deps;
+  const { taskManager, workspaceRoot } = deps;
 
   // Unregister all previously registered skill tasks
-  for (const taskId of registeredTaskIds) {
+  for (const taskId of registeredSkillTasks.keys()) {
     taskManager.removeTask(taskId);
   }
-  const previousCount = registeredTaskIds.size;
-  registeredTaskIds = new Set<string>();
+  const previousCount = registeredSkillTasks.size;
+  registeredSkillTasks = new Map<string, ScheduledSkillTask>();
 
   const skills = await discoverSkills({ workspaceRoot });
-  let registered = 0;
 
   for (const skill of skills) {
     const info = readSkillScheduleInfo(skill);
     if (!info) continue;
 
-    const { schedule, roleId } = info;
-    const taskId = `${SKILL_TASK_PREFIX}${skill.name}`;
+    const task: ScheduledSkillTask = {
+      id: `${SKILL_TASK_PREFIX}${skill.name}`,
+      name: skill.name,
+      description: `Scheduled skill: ${skill.name} — ${skill.description}`,
+      schedule: info.schedule,
+      roleId: info.roleId,
+    };
 
     taskManager.registerTask({
-      id: taskId,
-      description: `Scheduled skill: ${skill.name} — ${skill.description}`,
-      schedule,
+      id: task.id,
+      description: task.description,
+      schedule: task.schedule,
       run: async () => {
-        const chatSessionId = makeUuid();
-        log.info("skills", "running scheduled skill", {
-          name: skill.name,
-          roleId,
-          chatSessionId,
-        });
-        const result = await startChat({
-          message: `/${skill.name}`,
-          roleId,
-          chatSessionId,
-          origin: SESSION_ORIGINS.skill,
-        });
-        if (result.kind === "error") {
-          throw new Error(`scheduled skill failed: ${result.error ?? "unknown"}`);
-        }
-        log.info("skills", "scheduled skill completed", {
-          name: skill.name,
-          kind: result.kind,
-        });
+        await fireSkillTask(task, TASK_TRIGGERS.scheduled);
       },
     });
-
-    registeredTaskIds.add(taskId);
-    registered++;
+    registeredSkillTasks.set(task.id, task);
   }
 
+  const registered = registeredSkillTasks.size;
   if (previousCount > 0 || registered > 0) {
-    log.info("skills", "skill schedules refreshed", {
-      previous: previousCount,
-      current: registered,
-    });
+    log.info("skills", "skill schedules refreshed", { previous: previousCount, current: registered });
   }
-
   return registered;
+}
+
+// Fire one scheduled skill: dispatch `/skill-name` as a chat and record the run
+// (history + last/next-run state) so it shows on the Automations page.
+async function fireSkillTask(task: ScheduledSkillTask, trigger: TaskTrigger): Promise<string> {
+  if (!cachedDeps) throw new Error("skill scheduler not initialized");
+  return fireScheduledChat({
+    id: task.id,
+    name: task.name,
+    schedule: task.schedule,
+    message: `/${task.name}`,
+    roleId: task.roleId,
+    origin: SESSION_ORIGINS.skill,
+    trigger,
+    logScope: "skills",
+    failureLabel: "scheduled skill",
+    startChat: cachedDeps.startChat,
+  });
+}
+
+/** All registered skill tasks, for the Automations list (origin: "skill"). */
+export function getScheduledSkills(): { id: string; name: string; description: string; schedule: TaskSchedule }[] {
+  return [...registeredSkillTasks.values()].map(({ id, name, description, schedule }) => ({ id, name, description, schedule }));
+}
+
+/** Manually fire a registered skill task by its task-manager id (`skill.<name>`).
+ *  Returns the spawned chat session id, or null if the id isn't a known skill. */
+export async function runScheduledSkillNow(taskId: string): Promise<string | null> {
+  const task = registeredSkillTasks.get(taskId);
+  if (!task) return null;
+  return fireSkillTask(task, TASK_TRIGGERS.manual);
 }
 
 // Read schedule + roleId in one file read (avoid reading the same

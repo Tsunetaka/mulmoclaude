@@ -2,18 +2,20 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { WORKSPACE_DIRS, WORKSPACE_PATHS, WORKSPACE_FILES, EAGER_WORKSPACE_DIRS, workspacePath } from "../../server/workspace/paths.js";
+import {
+  WORKSPACE_DIRS,
+  WORKSPACE_PATHS,
+  WORKSPACE_FILES,
+  EAGER_WORKSPACE_DIRS,
+  workspacePath,
+  isTestEnv,
+  detectTestEnv,
+} from "../../server/workspace/paths.js";
 
 const expectedWorkspacePath = path.join(homedir(), "mulmoclaude");
 
 describe("workspacePath", () => {
   it("points to ~/mulmoclaude or the test/env override", () => {
-    const isTestEnv =
-      process.env.NODE_ENV === "test" ||
-      process.execArgv.includes("--test") ||
-      process.argv.some((arg) => arg.includes("test")) ||
-      typeof process.env.NODE_TEST_CONTEXT !== "undefined";
-
     const realUserHome = (() => {
       try {
         return userInfo().homedir;
@@ -26,6 +28,35 @@ describe("workspacePath", () => {
     const expected =
       process.env.MULMOCLAUDE_WORKSPACE_PATH || (isTestEnv && !isHomeOverridden ? path.join(tmpdir(), "mulmoclaude-test") : expectedWorkspacePath);
     assert.equal(workspacePath, expected);
+  });
+});
+
+describe("detectTestEnv (#1596)", () => {
+  const cleanEnv: Record<string, string | undefined> = {};
+
+  it("does NOT flag `yarn dev` launched from a path containing 'test'", () => {
+    const argv = ["/usr/bin/node", "/home/u/worktrees/e2e-live-docker-test-fixes/node_modules/.bin/tsx", "server/index.ts"];
+    assert.equal(detectTestEnv(argv, [], cleanEnv), false);
+  });
+
+  it("flags `node --test` (flag in execArgv)", () => {
+    assert.equal(detectTestEnv(["node", "x.ts"], ["--test"], cleanEnv), true);
+  });
+
+  it("flags `--test` passed as an argv flag", () => {
+    assert.equal(detectTestEnv(["node", "--test", "x.ts"], [], cleanEnv), true);
+  });
+
+  it("flags `playwright test` (exact 'test' subcommand)", () => {
+    assert.equal(detectTestEnv(["node", "playwright", "test", "--config", "e2e"], [], cleanEnv), true);
+  });
+
+  it("flags the Node test runner via NODE_TEST_CONTEXT", () => {
+    assert.equal(detectTestEnv(["node", "x.ts"], [], { NODE_TEST_CONTEXT: "child-v8" }), true);
+  });
+
+  it("flags NODE_ENV=test", () => {
+    assert.equal(detectTestEnv(["node", "x.ts"], [], { NODE_ENV: "test" }), true);
   });
 });
 

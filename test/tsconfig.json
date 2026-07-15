@@ -41,6 +41,14 @@
     // TS files used only as regex inputs. Type-checking them would
     // fail because they reference packages (e.g. `mammoth/lib/foo`)
     // that aren't installed as dev deps at this repo's root.
-    "scripts/mulmoclaude/fixtures"
+    "scripts/mulmoclaude/fixtures",
+    // Docker-sandbox regression probe. Runs INSIDE a Linux container
+    // that bind-mounts `server/plugins/resolvePresetRoot.ts` at
+    // `/app/server-plugins/resolvePresetRoot.ts` — a path that
+    // doesn't exist on the host, so type-checking it here can't
+    // resolve the import. The probe is executed via tsx inside the
+    // container by `.github/workflows/docker_sandbox_windows.yaml`;
+    // its shape is validated at runtime there.
+    "sandbox-repro"
   ]
 }

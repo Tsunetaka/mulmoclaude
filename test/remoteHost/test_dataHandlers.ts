@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createGetCollection, type GetCollectionDeps } from "../../server/remoteHost/handlers/getCollection.js";
 import { createGetFeed, type GetFeedDeps } from "../../server/remoteHost/handlers/getFeed.js";
 import { createListShortcuts, type ListShortcutsDeps } from "../../server/remoteHost/handlers/listShortcuts.js";
+import { createListSkills, type ListSkillsDeps } from "../../server/remoteHost/handlers/listSkills.js";
 import { createListFeeds, type ListFeedsDeps } from "../../server/remoteHost/handlers/listFeeds.js";
 
 const records = (count: number) => Array.from({ length: count }, (_unused, index) => ({ id: `r${index}` }));
@@ -105,6 +106,43 @@ describe("createListShortcuts", () => {
     const read = (async () => [{ kind: "collection", slug: "clients", title: "Clients", icon: "people" }]) as unknown as ListShortcutsDeps["read"];
     const handler = createListShortcuts({ read });
     assert.deepEqual(await handler({}), { shortcuts: [{ kind: "collection", slug: "clients", title: "Clients", icon: "people" }] });
+  });
+});
+
+describe("createListSkills", () => {
+  const skillsDep = (names: string[]): ListSkillsDeps["discoverSkills"] =>
+    (async () => names.map((name) => ({ name, description: "d", source: "user" }))) as unknown as ListSkillsDeps["discoverSkills"];
+  const collectionsDep = (entries: { slug: string; source: string }[]): ListSkillsDeps["discoverCollections"] =>
+    (async () => entries) as unknown as ListSkillsDeps["discoverCollections"];
+
+  it("returns just the skill ids as a flat string[]", async () => {
+    const handler = createListSkills({
+      discoverSkills: skillsDep(["deep-research", "precommit"]),
+      discoverCollections: collectionsDep([]),
+      workspaceRoot: "/ws",
+    });
+    assert.deepEqual(await handler({}), { skills: ["deep-research", "precommit"] });
+  });
+
+  it("excludes collection skills (skills whose id is a user/project collection slug)", async () => {
+    const handler = createListSkills({
+      discoverSkills: skillsDep(["deep-research", "clients", "invoices"]),
+      discoverCollections: collectionsDep([
+        { slug: "clients", source: "project" },
+        { slug: "invoices", source: "user" },
+      ]),
+      workspaceRoot: "/ws",
+    });
+    assert.deepEqual(await handler({}), { skills: ["deep-research"] });
+  });
+
+  it("does not exclude a skill that merely shares a slug with a feed", async () => {
+    const handler = createListSkills({
+      discoverSkills: skillsDep(["news"]),
+      discoverCollections: collectionsDep([{ slug: "news", source: "feed" }]),
+      workspaceRoot: "/ws",
+    });
+    assert.deepEqual(await handler({}), { skills: ["news"] });
   });
 });
 

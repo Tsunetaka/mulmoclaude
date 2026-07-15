@@ -165,8 +165,7 @@ describe("markRead", () => {
 
   it("does not throw for an unknown session (disk-only fallback)", async () => {
     initSessionStore(stubPubSub());
-    // No session created — should not throw
-    await markRead("nonexistent");
+    await assert.doesNotReject(markRead("nonexistent"));
   });
 });
 

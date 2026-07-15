@@ -104,6 +104,8 @@ const koMessages: CollectionMessages = {
     kanbanUncategorized: "미분류",
     kanbanOpenCard: "{label} 열기",
     addView: "보기 추가",
+    addViewDesktop: "사용자 지정 보기",
+    addViewMobile: "스마트폰 보기",
     config: {
       open: "컬렉션 설정",
       title: "{title} · 설정",
@@ -116,6 +118,8 @@ const koMessages: CollectionMessages = {
     customViewError: "이 보기를 불러오지 못했습니다: {error}",
     addViewPrompt:
       '{title} 컬렉션에 사용자 지정 보기를 추가하고 싶어요. 무엇을 보거나 편집하고 싶은지 먼저 물어본 뒤, {base}/views/your-view.html 에 HTML 보기 파일을 만들고 {base}/schema.json의 `views[]`에 등록해 주세요(읽기 전용 보기는 capabilities ["read"], 레코드를 편집하면 ["read","write"]). 데이터 계약은 custom-view 도움말을 따르세요.',
+    addMobileViewPrompt:
+      '{title} 컬렉션에 스마트폰(리모트 앱)용 사용자 지정 보기를 추가하고 싶어요. 무엇을 보거나 편집하고 싶은지 먼저 물어본 뒤, {base}/views/your-view.html 에 HTML 보기 파일을 만들고 {base}/schema.json의 `views[]`에 `target: "mobile"`과 함께 등록해 주세요(기본은 읽기 전용, 레코드를 편집할 때만 `editableFields` / `allowDelete` 선언). 데이터 계약은 custom-view-remote 도움말을 따르세요 — 보기 안에서 fetch는 일절 금지입니다.',
     repair: "복구",
     dataIssuesDetected: "{count}개의 레코드 파일에 데이터 문제가 있어 이 보기에 표시되지 않을 수 있습니다.",
     repairPrompt:

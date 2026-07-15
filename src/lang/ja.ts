@@ -42,6 +42,8 @@ const jaMessages = {
     placeholder: "Claude にメッセージ…",
     send: "送信",
     stop: "停止",
+    runningPlaceholder: "実行中… Enter で後で送るキューに追加",
+    removeBuffered: "キューのメッセージを削除",
     attachFile: "ファイルを添付",
     fileTooLarge: "ファイルが大きすぎます（{sizeMB} MB）。上限は 30 MB です。",
     unsupportedFileType: "対応していないファイル形式です。画像・PDF・DOCX・XLSX・PPTX・テキストファイルを使用してください。",
@@ -55,6 +57,11 @@ const jaMessages = {
       start: "音声入力を開始",
       stop: "音声入力を停止",
     },
+  },
+  cspViolation: {
+    notice:
+      "⚠ ビューが {host} を読み込もうとしましたが、コンテンツセキュリティポリシー（{directive}）でブロックされました。許可するには config/csp.json にこのホストを追加してください（信頼できる場合のみ）。",
+    dismiss: "閉じる",
   },
   sessionHistoryPanel: {
     filters: {
@@ -139,6 +146,10 @@ const jaMessages = {
     disconnectFailed: "切断に失敗しました",
     signInFailed: "Google サインインに失敗しました",
     statusFailed: "状態の取得に失敗しました",
+    description: "リモートアクセスを有効にすると、モバイルデバイスからこの MulmoClaude のコレクションとフィードに接続できます。",
+    howTo: "モバイルから {url} を開き、同じ Google アカウントでサインインしてください。",
+    customViewHint: "モバイル向けのビューが必要な場合は、通常の custom view ではなく {keyword} を作るように Claude に依頼してください。",
+    qrHint: "スマートフォンのカメラでこの QR コードを読み取っても開けます。",
   },
   sidebarHeader: {
     home: "最新のチャットに移動",
@@ -181,6 +192,9 @@ const jaMessages = {
     recent: "最近",
     reference: "参照",
     readOnlyBadge: "RO",
+    showSystemFiles: "システムファイルを表示",
+    showSystemFilesTitle:
+      "エージェント内部の top-level ディレクトリ (conversations/ や feeds/ など) をユーザーデータ (data/ artifacts/ config/) と合わせて表示します。",
   },
   fileTree: {
     workspace: "（ワークスペース）",
@@ -232,6 +246,9 @@ const jaMessages = {
       photos: "写真",
       model: "モデル",
       voice: "音声",
+      chatIndex: "チャットインデックス",
+      journal: "ジャーナル",
+      notifications: "Web Push",
       skills: "スキル",
       roles: "ロール",
     },
@@ -239,6 +256,7 @@ const jaMessages = {
       llm: "LLM",
       servers: "サーバ",
       workspace: "ワークスペース",
+      notifications: "通知",
       plugins: "プラグイン",
       management: "管理",
     },
@@ -266,6 +284,17 @@ const jaMessages = {
       loadError: "設定の読み込みに失敗しました",
       saveError: "保存に失敗しました",
     },
+    notificationsTab: {
+      description:
+        "ここで開始したタスクが完了したときに、登録済みのデバイスへプッシュ通知を送ります。質問して席を外し、答えができた瞬間を知りたいときに便利です。",
+      enableLabel: "タスク完了時に Web Push を送る",
+      enableHint: "ここで開始したチャットが完了したときに発火します。スケジュール実行やバックグラウンドのタスクでは発火しません。",
+      remoteHostNote: "RemoteHost 接続（サインインを供給）と、登録済みデバイスが1台以上必要です。どちらかが欠けている場合は何も起きません。",
+      statusOn: "Web Push は ON",
+      statusOff: "Web Push は OFF",
+      loadError: "設定の読み込みに失敗しました",
+      saveError: "保存に失敗しました",
+    },
     modelTab: {
       description: "Claude Code が各ターンで使う推論 effort を設定します。未設定の場合は Claude のデフォルトに従います。",
       effortLabel: "推論 effort",
@@ -289,6 +318,42 @@ const jaMessages = {
       ready: "モデルの準備が完了しました",
       downloadError: "モデルのダウンロードに失敗しました。",
       retry: "再試行",
+      loadError: "設定の読み込みに失敗しました",
+      saveError: "保存に失敗しました",
+    },
+    chatIndexTab: {
+      description:
+        "チャット履歴の AI タイトル/サマリー自動生成の設定です。デフォルトは off で、自動化系のセッション（scheduler / system worker）は on にしても常に除外されます。人間のセッションのみターン終了時に 1 回要約が走ります。",
+      modeLabel: "チャットインデックスのモデル",
+      helperText: "Haiku は安価。Sonnet は長く話題が移るセッションでタイトル品質が高くなります。",
+      mode: {
+        off: "オフ",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "インデックス作成: オフ",
+        haiku: "Haiku でインデックス作成中",
+        sonnet: "Sonnet でインデックス作成中",
+      },
+      loadError: "設定の読み込みに失敗しました",
+      saveError: "保存に失敗しました",
+    },
+    journalTab: {
+      description:
+        "ジャーナル日次パスの設定です。最近のチャットセッションを journal/*.md に要約し、恒久メモリ（memory.md）を抽出します。デフォルトは off。自動化系セッション（scheduler / system worker）はこの設定に関わらず常に除外されます。",
+      modeLabel: "ジャーナルのモデル",
+      helperText: "Haiku は安価。Sonnet は日次/トピックまとめの質が高くなります。毎時のパスはここが on の時のみ実行されます。",
+      mode: {
+        off: "オフ",
+        haiku: "Haiku",
+        sonnet: "Sonnet",
+      },
+      status: {
+        off: "ジャーナル: オフ",
+        haiku: "Haiku でジャーナル実行中",
+        sonnet: "Sonnet でジャーナル実行中",
+      },
       loadError: "設定の読み込みに失敗しました",
       saveError: "保存に失敗しました",
     },
@@ -385,6 +450,8 @@ const jaMessages = {
     rendered: "レンダリング",
     raw: "ソース",
     closeFile: "ファイルを閉じる",
+    revealInOs: "ファイルの場所を開く",
+    revealInOsFailed: "フォルダを開けませんでした",
   },
   fileContentRenderer: {
     download: "ZIP",
@@ -401,6 +468,9 @@ const jaMessages = {
     redo: "やり直し",
     editMarp: "スライドソースを編集",
     marpEditorLabel: "Marp スライドソース",
+    openInOs: "OS で開く",
+    openingInOs: "開いています…",
+    openInOsFailed: "OS で開けませんでした",
   },
   filesView: {
     chatPlaceholder: "このファイルについて質問…",
@@ -936,6 +1006,8 @@ const jaMessages = {
     cancel: "キャンセル",
     seededByPlugin: "{pkg} から",
     seededByPluginTooltip: "このメッセージは {pkg} プラグインによって作成されたもので、あなたが送信したものではありません。",
+    truncatedForRender:
+      "このメッセージは非常に長いため（全 {total} 文字）、描画のフリーズを防ぐため先頭のみ表示しています（{omitted} 文字を省略）。全文はコピーボタンから取得できます。",
   },
   pluginSkill: {
     noDescription: "(説明なし)",

@@ -59,6 +59,15 @@ describe("resolveWorkspaceLink", () => {
     assert.equal(resolveWorkspaceLink("summaries/topics/foo.md", "/wiki/foo.md"), "wiki/foo.md");
   });
 
+  it("resolves a linkified data/ path from a deep current file to the workspace root, not double-prefixed (#1548)", () => {
+    // A linkified `data/...` codespan now emits href="/data/..."; from a
+    // deeply-nested current file it must resolve to the root, not join.
+    assert.equal(
+      resolveWorkspaceLink("conversations/summaries/daily/2026/05/25.md", "/data/wiki/sources/kira/lecture-clean.md"),
+      "data/wiki/sources/kira/lecture-clean.md",
+    );
+  });
+
   it("resolves ./sibling.md correctly", () => {
     assert.equal(resolveWorkspaceLink("summaries/topics/foo.md", "./bar.md"), "summaries/topics/bar.md");
   });
