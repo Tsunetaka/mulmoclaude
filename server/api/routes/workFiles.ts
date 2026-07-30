@@ -7,6 +7,7 @@ import { log } from "../../system/logger/index.js";
 import { API_ROUTES } from "../../../src/config/apiRoutes.js";
 import { ONE_HOUR_MS } from "../../utils/time.js";
 import { versionSegments } from "../../../src/utils/slides/slideDeck.js";
+import { hasDescendantVersion } from "../../../src/utils/slides/versioning.js";
 
 const router = Router();
 
@@ -1616,21 +1617,6 @@ router.post(API_ROUTES.work.forkFrom, async (req, res) => {
   res.end();
 });
 
-// .checkout-source から Windows 側 WD ベースパスを読み、WSL マウントパスに変換する。
-// 取得できない（未チェックアウト等）場合は null。
-async function resolveWindowsBaseWsl(wdId: string): Promise<string | null> {
-  const checkoutSourcePath = path.join(workspacePath, "data/work", wdId, ".checkout-source");
-  try {
-    const src = await fsp.readFile(checkoutSourcePath, "utf-8");
-    const line = src.split("\n").find((srcLine) => srcLine.startsWith("windows_path="));
-    if (!line) return null;
-    const winPath = line.slice("windows_path=".length).trim();
-    return winPath ? windowsToWsl(winPath) : null;
-  } catch {
-    return null;
-  }
-}
-
 // structure.json に checked_out:true のページが残っているか（編集中ガード）。
 // structure.json が無い／壊れている場合は「ロック無し」とみなす（後始末は許可）。
 async function hasLockedPages(versionDir: string): Promise<boolean> {
@@ -1663,9 +1649,13 @@ interface DeleteSide {
   path: string | null;
   deleted: boolean;
 }
-type DeleteVersionResult = { ok: true; wd: string; version: string; wsl: DeleteSide; windows: DeleteSide } | { ok: false; status: number; error: string };
+type DeleteVersionResult = { ok: true; wd: string; version: string; wsl: DeleteSide } | { ok: false; status: number; error: string };
 
-// リリース後始末：WSL と Windows のバージョンサブフォルダだけを削除する（N1 本体）。
+// 編集中バージョンの後始末削除：WSL 側の作業サブフォルダ *だけ* を削除する（N1 本体）。
+// Windows(D:) には一切触れない（編集中版は WSL のみに存在する運用のため）。
+// 2 つのガードで拒否する：
+//   ① チェックアウト中ページが残っている → 409（先にチェックイン）。
+//   ② 枝番（子孫）バージョンが他に存在する → 409（親を消すと枝番が孤立するため）。
 async function deleteVersionSubfolder(wdId: string, version: string): Promise<DeleteVersionResult> {
   const wdDir = path.join(workspacePath, "data/work", wdId);
   const wslVersionDir = path.join(wdDir, version);
@@ -1674,22 +1664,23 @@ async function deleteVersionSubfolder(wdId: string, version: string): Promise<De
     return { ok: false, status: 409, error: "チェックアウト中のページが残っています。先にページをチェックインしてください。" };
   }
 
-  const wslDeleted = await removeContainedDir(wslVersionDir, wdDir, version);
+  // 子孫（枝番）ガード：WSL 上の編集中バージョン名で判定する。
+  const editingNames = (await scanEditingVersions(wdId)).map((ver) => ver.version);
+  if (hasDescendantVersion(version, editingNames)) {
+    return { ok: false, status: 409, error: "枝番（子孫）バージョンが存在するため削除できません。先に枝番を削除してください。" };
+  }
 
-  const winBaseWsl = await resolveWindowsBaseWsl(wdId);
-  const winVersionDir = winBaseWsl ? path.join(winBaseWsl, version) : null;
-  const winDeleted = winVersionDir && winBaseWsl ? await removeContainedDir(winVersionDir, winBaseWsl, version) : false;
+  const wslDeleted = await removeContainedDir(wslVersionDir, wdDir, version);
 
   return {
     ok: true,
     wd: wdId,
     version,
     wsl: { path: wslVersionDir, deleted: wslDeleted },
-    windows: { path: winVersionDir, deleted: winDeleted },
   };
 }
 
-// DELETE /api/work/:wd/:version — リリース後始末のサブフォルダ限定削除（N1）
+// DELETE /api/work/:wd/:version — 編集中バージョンの WSL サブフォルダ限定削除（N1・D: 不変）
 router.delete(API_ROUTES.work.version, async (req, res) => {
   const { wd: wdId, version } = req.params as { wd: string; version: string };
 

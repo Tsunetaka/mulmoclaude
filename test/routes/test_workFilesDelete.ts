@@ -6,9 +6,10 @@
 //      isContainedChild) — no fs, table-driven.
 //   2. Route handler over a sandboxed workspace (HOME redirected to a
 //      tmp dir before the module loads, mirroring test_filesCreateRoute).
-//      A fake "Windows" base is wired through .checkout-source so we can
-//      assert both the WSL and Windows version subfolders are removed
-//      while every sibling, ReleasedVersion/, and the WD_ID root survive.
+//      Deletion is WSL-only: the target version subfolder is removed under
+//      data/work/<wd>/ while every sibling, ReleasedVersion/, the WD_ID
+//      root, AND the Windows (D:) side are left untouched. A branch/child
+//      version blocks deletion (409) so a parent can't orphan its branch.
 
 import { after, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -169,7 +170,7 @@ describe("DELETE /api/work/:wd/:version — validation", () => {
 });
 
 describe("DELETE /api/work/:wd/:version — subfolder-limited deletion", () => {
-  it("removes only the target version subfolder on both WSL and Windows", async () => {
+  it("removes only the target WSL version subfolder, leaving Windows (D:) untouched", async () => {
     seedWd();
     const { state, res } = mockRes();
     await deleteHandler(req({ wd: WD_ID, version: VERSION }), res);
@@ -177,12 +178,13 @@ describe("DELETE /api/work/:wd/:version — subfolder-limited deletion", () => {
     assert.equal(state.status, 200, JSON.stringify(state.body));
     assert.equal(state.body?.ok, true);
     assert.equal(state.body?.wsl?.deleted, true);
-    assert.equal(state.body?.windows?.deleted, true);
+    assert.equal(state.body?.windows, undefined, "no Windows side in the result — D: is never touched");
 
-    // Target gone on both sides …
+    // Target gone on the WSL side …
     assert.equal(existsSync(path.join(wdDir(), VERSION)), false, "WSL version dir removed");
-    assert.equal(existsSync(path.join(fakeWinRoot, VERSION)), false, "Windows version dir removed");
-    // … but the sibling version, ReleasedVersion/, WD_ID root, and the
+    // … the Windows (D:) copy of the same version SURVIVES (D: is never touched) …
+    assert.ok(existsSync(path.join(fakeWinRoot, VERSION)), "Windows version dir untouched");
+    // … and the sibling version, ReleasedVersion/, WD_ID root, and the
     // checkout-source all survive (no global --delete).
     assert.ok(existsSync(path.join(wdDir(), "v001")), "sibling WSL version kept");
     assert.ok(existsSync(path.join(fakeWinRoot, "v001")), "sibling Windows version kept");
@@ -190,6 +192,24 @@ describe("DELETE /api/work/:wd/:version — subfolder-limited deletion", () => {
     assert.ok(existsSync(path.join(wdDir(), ".checkout-source")), "checkout-source kept");
     const remaining = await readdir(wdDir());
     assert.ok(!remaining.includes(VERSION), "WD_ID root no longer lists the deleted version");
+  });
+
+  it("refuses (409) when a branch (descendant) version exists, leaving the folder intact", async () => {
+    // v006 has a child v006-001 → deleting v006 would orphan the branch.
+    const wdPath = wdDir();
+    for (const ver of ["v006", "v006-001"]) {
+      mkdirSync(path.join(wdPath, ver, ".pages"), { recursive: true });
+      writeFileSync(path.join(wdPath, ver, ".pages", "structure.json"), JSON.stringify({ pages: {} }));
+    }
+    const { state, res } = mockRes();
+    await deleteHandler(req({ wd: WD_ID, version: "v006" }), res);
+    assert.equal(state.status, 409, JSON.stringify(state.body));
+    assert.ok(existsSync(path.join(wdPath, "v006")), "parent version preserved on 409");
+    // The leaf branch itself has no descendant → it CAN be deleted.
+    const leaf = mockRes();
+    await deleteHandler(req({ wd: WD_ID, version: "v006-001" }), leaf.res);
+    assert.equal(leaf.state.status, 200, JSON.stringify(leaf.state.body));
+    assert.equal(existsSync(path.join(wdPath, "v006-001")), false, "leaf branch removed");
   });
 
   it("is idempotent — deleting an already-gone version succeeds with deleted:false", async () => {
@@ -213,15 +233,14 @@ describe("DELETE /api/work/:wd/:version — subfolder-limited deletion", () => {
     assert.ok(existsSync(path.join(fakeWinRoot, VERSION)), "Windows version dir preserved on 409");
   });
 
-  it("still removes the WSL side when there is no .checkout-source (Windows side skipped)", async () => {
+  it("removes the WSL side regardless of any .checkout-source (Windows never consulted)", async () => {
     const wdPath = wdDir();
     mkdirSync(path.join(wdPath, VERSION, ".pages"), { recursive: true });
     const { state, res } = mockRes();
     await deleteHandler(req({ wd: WD_ID, version: VERSION }), res);
     assert.equal(state.status, 200);
     assert.equal(state.body?.wsl?.deleted, true);
-    assert.equal(state.body?.windows?.path, null, "no Windows base resolved");
-    assert.equal(state.body?.windows?.deleted, false);
+    assert.equal(state.body?.windows, undefined, "result has no Windows side");
     assert.equal(existsSync(path.join(wdPath, VERSION)), false);
   });
 });

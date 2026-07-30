@@ -75,6 +75,24 @@ export function allowedOps(kind: VersionKind): VersionOp[] {
   return kind === "released" ? ["increment", "branch"] : ["increment", "branch", "continue"];
 }
 
+/**
+ * True when some OTHER version in `all` is a descendant (branch) of `target` —
+ * i.e. `target`'s segments are a STRICT prefix of theirs. Used to block a
+ * delete that would orphan a branch: `v006` is blocked while `v006-001` exists,
+ * and `v006-001` is blocked while `v006-001-001` exists. A same-named sibling
+ * (e.g. a released `v004` next to an editing `v004`) is NOT a descendant, so it
+ * never blocks. Non-version names in `all` are ignored.
+ */
+export function hasDescendantVersion(target: string, all: string[]): boolean {
+  if (!isVersionName(target)) return false;
+  const targetSegs = versionSegments(target);
+  return all.some((name) => {
+    if (name === target || !isVersionName(name)) return false;
+    const segs = versionSegments(name);
+    return segs.length > targetSegs.length && sharesPrefix(segs, targetSegs);
+  });
+}
+
 // Released pptx filenames: `<name>_vNNN.pptx` or `<name>_YYYYMMDD_vNNN.pptx`.
 const RELEASED_WITH_DATE = /_(\d{8})_v(\d+)\.pptx$/i;
 const RELEASED_NO_DATE = /_v(\d+)\.pptx$/i;

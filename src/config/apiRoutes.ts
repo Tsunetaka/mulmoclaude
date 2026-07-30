@@ -512,12 +512,12 @@ const HOST_API_ROUTES = {
      *  削除しない（安全側）。サンドボックスの Claude は /mnt/d を触れないため、
      *  /mnt/d が見えるホストのサーバー経由でこの push を実行する口。 */
     releaseToWindows: "/api/work/release-to-windows",
-    /** DELETE — リリース後始末の「サブフォルダ限定削除」（N1）。対象
-     *  `data/work/<wd>/<version>/` のバージョンサブフォルダだけを WSL と
-     *  Windows（`.checkout-source` の `windows_path`/<version>）の両側で削除する。
+    /** DELETE — 編集中バージョンの「サブフォルダ限定削除」（N1）。対象
+     *  `data/work/<wd>/<version>/` のバージョンサブフォルダだけを WSL 上で削除する。
+     *  Windows(D:) には一切触れない（編集中版は WSL のみに存在する運用）。
      *  WD ルートや `ReleasedVersion/` には触れず、全体 `--delete` は一切行わない。
-     *  編集中（structure.json に `checked_out:true` ページが残る）バージョンは
-     *  409 で拒否する。 */
+     *  2 つのガードで 409 拒否する：① `checked_out:true` ページが残る（要チェックイン）、
+     *  ② 枝番（子孫）バージョンが他に存在する（親を消すと孤立するため）。 */
     version: "/api/work/:wd/:version",
   },
 

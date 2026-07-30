@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { nextIncrement, nextBranch, allowedOps, formatVersion, releasedVersionFromFilename } from "../../../src/utils/slides/versioning.js";
+import {
+  nextIncrement,
+  nextBranch,
+  allowedOps,
+  formatVersion,
+  releasedVersionFromFilename,
+  hasDescendantVersion,
+} from "../../../src/utils/slides/versioning.js";
 
 // ── nextIncrement ─────────────────────────────────────────────────────────────
 
@@ -75,6 +82,35 @@ describe("formatVersion", () => {
 
   it("zero-pads branch segments", () => {
     assert.equal(formatVersion([2, 1, 12]), "v002-001-012");
+  });
+});
+
+// ── hasDescendantVersion ──────────────────────────────────────────────────────
+
+describe("hasDescendantVersion", () => {
+  it("is true when a direct child branch exists (v006 blocked by v006-001)", () => {
+    assert.equal(hasDescendantVersion("v006", ["v006", "v006-001"]), true);
+  });
+
+  it("is true when only a deeper descendant exists (v006 blocked by v006-001-001)", () => {
+    assert.equal(hasDescendantVersion("v006", ["v006", "v006-001-001"]), true);
+  });
+
+  it("is false for a leaf branch with no descendants (v006-001 is deletable)", () => {
+    assert.equal(hasDescendantVersion("v006-001", ["v006", "v006-001"]), false);
+  });
+
+  it("does not treat a same-named sibling as a descendant (released v004 next to editing v004)", () => {
+    assert.equal(hasDescendantVersion("v004", ["v004", "v004"]), false);
+  });
+
+  it("does not treat a numeric sibling as a descendant (v006 vs v0061 is not prefixed)", () => {
+    assert.equal(hasDescendantVersion("v006", ["v006", "v007", "v006-001"]), true);
+    assert.equal(hasDescendantVersion("v007", ["v006", "v007", "v006-001"]), false);
+  });
+
+  it("ignores non-version strings in the set", () => {
+    assert.equal(hasDescendantVersion("v006", ["v006", "ReleasedVersion", "notes"]), false);
   });
 });
 

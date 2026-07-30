@@ -116,6 +116,16 @@
                 <button v-if="v.kind === 'editing'" class="mt-0.5 text-[11px] text-blue-600 hover:underline self-start" @click="openVersionModal(wd, v)">
                   ＋新版
                 </button>
+                <!-- 編集中カード：削除（WSL の作業サブフォルダのみ・D: 不変）。子孫あり／CO 中は不可。 -->
+                <button
+                  v-if="v.kind === 'editing'"
+                  class="mt-0.5 text-[11px] text-red-600 hover:underline self-start disabled:text-gray-300 disabled:no-underline disabled:cursor-not-allowed"
+                  :disabled="isDeleteBlocked(wd, v)"
+                  :title="deleteButtonTitle(wd, v)"
+                  @click="openDeleteModal(wd, v)"
+                >
+                  🗑 削除
+                </button>
                 <!-- 編集中カード：リリース（combine → ReleasedVersion 生成 → 自動で Windows へ push） -->
                 <button v-if="v.kind === 'editing'" class="mt-0.5 text-[11px] text-green-700 hover:underline self-start" @click="openReleaseModal(wd, v)">
                   ⬆ リリース
@@ -322,16 +332,46 @@
         </div>
       </div>
     </div>
+
+    <!-- バージョン削除確認モーダル：WSL の data/work/<wd>/<version>/ だけを削除（D: 不変） -->
+    <div v-if="deleteModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 flex flex-col">
+        <div class="flex items-center gap-2 px-4 py-3 border-b">
+          <span class="font-semibold text-red-600">バージョンを削除 — {{ deleteModal.wdId }}（{{ deleteModal.version }}）</span>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" :disabled="deleteBusy" @click="closeDeleteModal">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-sm text-gray-700">
+          <p>
+            編集中バージョン <span class="font-mono">{{ deleteModal.version }}</span> の作業フォルダ
+            <span class="font-mono">data/work/{{ deleteModal.wdId }}/{{ deleteModal.version }}/</span> を削除します。
+          </p>
+          <p class="text-xs text-gray-500 leading-relaxed">
+            Windows(D:) のファイルには一切触れません。リリース済版（ReleasedVersion）や他のバージョンは残ります。この操作は取り消せません。
+          </p>
+          <p v-if="deleteError" class="text-xs text-red-600">{{ deleteError }}</p>
+        </div>
+        <div class="px-4 py-3 border-t flex justify-end gap-2">
+          <button class="px-4 py-2 bg-gray-200 rounded text-sm" :disabled="deleteBusy" @click="closeDeleteModal">キャンセル</button>
+          <button
+            class="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50"
+            :disabled="deleteBusy"
+            @click="executeDeleteVersion"
+          >
+            {{ deleteBusy ? "削除中..." : "削除する" }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { apiGet, apiPost, apiFetchRaw } from "../utils/api";
+import { apiGet, apiPost, apiDelete, apiFetchRaw } from "../utils/api";
 import { API_ROUTES } from "../config/apiRoutes";
 import { PAGE_ROUTES } from "../router/pageRoutes";
-import { nextIncrement, nextBranch, allowedOps, type VersionOp } from "../utils/slides/versioning";
+import { nextIncrement, nextBranch, allowedOps, hasDescendantVersion, type VersionOp } from "../utils/slides/versioning";
 import { NEW_DECK_THEMES } from "../utils/slides/newDeck";
 
 interface VersionInfo {
@@ -800,6 +840,70 @@ async function executeErase(): Promise<void> {
     await scanFiles();
   } finally {
     eraseBusy.value = false;
+  }
+}
+
+// ── バージョン削除（編集中カードの「🗑 削除」）─────────────────────────────────
+// WSL の data/work/<wd>/<version>/ だけを削除（D: 不変）。子孫（枝番）がある版や
+// チェックアウト中の版は削除不可（ボタン無効化＋サーバー 409 の二重ガード）。
+const deleteModal = ref<{ wdId: string; version: string } | null>(null);
+const deleteBusy = ref(false);
+const deleteError = ref<string | null>(null);
+
+// チェックアウト中（CO）の版か。
+function isVersionLocked(verInfo: VersionInfo): boolean {
+  return verInfo.locked === true || verInfo.statuses.includes("checked-out");
+}
+
+// 枝番（子孫）バージョンが他に存在するか（親を消すと孤立するため削除不可）。
+function hasDescendant(wdInfo: WdInfo, verInfo: VersionInfo): boolean {
+  return hasDescendantVersion(
+    verInfo.version,
+    wdInfo.versions.map((ver) => ver.version),
+  );
+}
+
+// 削除ボタンを無効化すべきか（子孫あり or CO 中）。
+function isDeleteBlocked(wdInfo: WdInfo, verInfo: VersionInfo): boolean {
+  return hasDescendant(wdInfo, verInfo) || isVersionLocked(verInfo);
+}
+
+// 削除ボタンの tooltip（無効理由 or 通常説明）。
+function deleteButtonTitle(wdInfo: WdInfo, verInfo: VersionInfo): string {
+  if (hasDescendant(wdInfo, verInfo)) return "枝番（子孫）バージョンがあるため削除できません";
+  if (isVersionLocked(verInfo)) return "チェックアウト中のため削除できません";
+  return "この編集中バージョンを削除（WSL の作業フォルダのみ・D: 不変）";
+}
+
+function openDeleteModal(wdInfo: WdInfo, verInfo: VersionInfo): void {
+  if (isDeleteBlocked(wdInfo, verInfo)) return;
+  deleteModal.value = { wdId: wdInfo.id, version: verInfo.version };
+  deleteBusy.value = false;
+  deleteError.value = null;
+}
+
+function closeDeleteModal(): void {
+  if (deleteBusy.value) return;
+  deleteModal.value = null;
+}
+
+// 「削除」実行：DELETE /api/work/:wd/:version。子孫あり／CO 中はサーバーが 409。
+async function executeDeleteVersion(): Promise<void> {
+  const modal = deleteModal.value;
+  if (!modal || deleteBusy.value) return;
+  deleteBusy.value = true;
+  deleteError.value = null;
+  try {
+    const url = fillRoute(API_ROUTES.work.version, modal.wdId, modal.version);
+    const result = await apiDelete<{ ok: boolean }>(url);
+    if (!result.ok) {
+      deleteError.value = result.error;
+      return;
+    }
+    deleteModal.value = null;
+    await scanFiles();
+  } finally {
+    deleteBusy.value = false;
   }
 }
 
