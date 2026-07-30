@@ -444,6 +444,13 @@ const HOST_API_ROUTES = {
      *  続けて gen_thumbs でサムネ再生成（canvas は明示「更新」ボタンで後追い）。
      *  ホスト実行なのでサムネの CJK 豆腐は出ない。SSE。body `{ theme }`。 */
     theme: "/api/work/:wd/:version/theme",
+    /** POST — WSL の `<wd>/ReleasedVersion/*.pptx` を Windows(D:) の Materials
+     *  `<windows_path>/ReleasedVersion/` へ push（リリース逆同期）。JSON。
+     *  body `{ wdId, windowsWdPath? }`（windowsWdPath 省略時は `.checkout-source`
+     *  の `windows_path` から解決）。新/更新の pptx のみコピーし、D: 側の他版は
+     *  削除しない（安全側）。サンドボックスの Claude は /mnt/d を触れないため、
+     *  /mnt/d が見えるホストのサーバー経由でこの push を実行する口。 */
+    releaseToWindows: "/api/work/release-to-windows",
     /** DELETE — リリース後始末の「サブフォルダ限定削除」（N1）。対象
      *  `data/work/<wd>/<version>/` のバージョンサブフォルダだけを WSL と
      *  Windows（`.checkout-source` の `windows_path`/<version>）の両側で削除する。

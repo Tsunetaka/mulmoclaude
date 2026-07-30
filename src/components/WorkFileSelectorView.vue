@@ -71,6 +71,10 @@
                 <button v-if="v.kind === 'editing'" class="mt-0.5 text-[11px] text-blue-600 hover:underline self-start" @click="openVersionModal(wd, v)">
                   ＋新版
                 </button>
+                <!-- 編集中カード：リリース（combine → ReleasedVersion 生成 → 自動で Windows へ push） -->
+                <button v-if="v.kind === 'editing'" class="mt-0.5 text-[11px] text-green-700 hover:underline self-start" @click="openReleaseModal(wd, v)">
+                  ⬆ リリース
+                </button>
               </div>
               <span v-if="thumbsLoading.has(wd.id)" class="text-xs text-gray-400 self-center">プレビュー生成中...</span>
             </div>
@@ -120,6 +124,49 @@
           </button>
           <button v-if="modalPhase === 'done'" class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="handleModalDone">
             スライドエディタで開く
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- リリースモーダル：combine（COM 結合）→ ReleasedVersion 生成 → サーバーが自動で Windows(D:) へ push -->
+    <div v-if="releaseModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 flex flex-col">
+        <div class="flex items-center gap-2 px-4 py-3 border-b">
+          <span class="font-semibold">リリース — {{ releaseModal.wdId }}（{{ releaseModal.version }}）</span>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" :disabled="modalPhase === 'running'" @click="closeReleaseModal">✕</button>
+        </div>
+
+        <!-- ① 出力ファイル名の確認 -->
+        <div v-if="modalPhase === 'choose'" class="px-4 py-3 space-y-3">
+          <label class="block">
+            <span class="text-sm font-medium">リリースファイル名（ReleasedVersion/ に生成）</span>
+            <input v-model="releaseFilename" type="text" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono" />
+          </label>
+          <p class="text-xs text-gray-500 leading-relaxed">
+            結合後、サーバーが <span class="font-mono">.checkout-source</span> の Windows パスへ自動でコピー（逆同期）します。<br />
+            ⚠ COM 結合のため、実行前に <b>PowerPoint を全て閉じて</b>ください（起動中は中止されます）。
+          </p>
+        </div>
+
+        <!-- ② SSE ログ -->
+        <div v-else class="flex-1 overflow-y-auto px-4 py-3 max-h-80 font-mono text-xs bg-gray-900">
+          <div v-for="(line, i) in modalLog" :key="i" class="text-green-300 whitespace-pre-wrap">{{ line }}</div>
+          <div v-if="modalPhase === 'running'" class="text-yellow-300 animate-pulse">処理中...</div>
+        </div>
+
+        <div class="px-4 py-3 border-t flex justify-end gap-2">
+          <button v-if="modalPhase === 'choose'" class="px-4 py-2 bg-gray-200 rounded text-sm" @click="closeReleaseModal">キャンセル</button>
+          <button
+            v-if="modalPhase === 'choose'"
+            class="px-4 py-2 bg-green-700 text-white rounded text-sm hover:bg-green-800 disabled:opacity-50"
+            :disabled="!releaseFilename.trim()"
+            @click="executeRelease"
+          >
+            リリース実行
+          </button>
+          <button v-if="modalPhase === 'done'" class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="handleReleaseDone">
+            閉じる
           </button>
         </div>
       </div>
@@ -513,6 +560,48 @@ function handleModalDone(): void {
   const target = doneVersion.value;
   versionModal.value = null;
   if (modal && target) openEditor(modal.wdId, target);
+  scanFiles().catch(() => {});
+}
+
+// ── リリースモーダル（combine → ReleasedVersion 生成 → サーバー自動 Windows push）───────
+const releaseModal = ref<{ wdId: string; version: string } | null>(null);
+const releaseFilename = ref("");
+
+// YYYYMMDD（ローカル日付）。リリースファイル名の既定に使う。
+function todayYmd(): string {
+  const now = new Date();
+  const pad = (num: number): string => String(num).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+}
+
+// リリースファイル名の既定：`<WD> <title>_<YYYYMMDD>_<version>.pptx`（命名規約準拠・編集可）。
+function defaultReleaseName(wdInfo: WdInfo, version: string): string {
+  const base = wdInfo.title ? `${wdInfo.id} ${wdInfo.title}` : wdInfo.id;
+  return `${base}_${todayYmd()}_${version}.pptx`;
+}
+
+function openReleaseModal(wdInfo: WdInfo, verInfo: VersionInfo): void {
+  releaseModal.value = { wdId: wdInfo.id, version: verInfo.version };
+  releaseFilename.value = defaultReleaseName(wdInfo, verInfo.version);
+  modalPhase.value = "choose";
+  modalLog.value = [];
+}
+
+function closeReleaseModal(): void {
+  if (modalPhase.value === "running") return;
+  releaseModal.value = null;
+}
+
+// combine を SSE で叩く（結合成功後、サーバーが .checkout-source の Windows パスへ自動 push）。
+async function executeRelease(): Promise<void> {
+  const modal = releaseModal.value;
+  if (!modal || !releaseFilename.value.trim()) return;
+  const url = fillRoute(API_ROUTES.work.combine, modal.wdId, modal.version);
+  await runModalSse(url, { outFilename: releaseFilename.value.trim() });
+}
+
+function handleReleaseDone(): void {
+  releaseModal.value = null;
   scanFiles().catch(() => {});
 }
 

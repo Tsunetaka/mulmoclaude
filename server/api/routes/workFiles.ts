@@ -476,17 +476,46 @@ async function runThumbnails(workDir: string, send: (line: string) => void): Pro
   });
 }
 
+interface CheckoutBody {
+  wdId: string;
+  windowsWdPath: string;
+  action: string;
+  sourceFilename?: string;
+  newFilename?: string;
+}
+
+// checkout-new-version 時のみ Released PPTX を WD 直下へコピーする。
+// 必須パラメータ欠如なら send でエラーを流して false（呼び出し側は中断）。それ以外は true。
+async function copyNewVersionIfNeeded(body: CheckoutBody, wslWdPath: string, send: (line: string) => void): Promise<boolean> {
+  if (body.action !== "checkout-new-version") return true;
+  if (!body.sourceFilename || !body.newFilename) {
+    send("ERROR: sourceFilename and newFilename required for checkout-new-version");
+    return false;
+  }
+  send(`📋 コピー: ${body.sourceFilename} → ${body.newFilename}`);
+  await fsp.copyFile(path.join(wslWdPath, "ReleasedVersion", body.sourceFilename), path.join(wslWdPath, body.newFilename));
+  send("✅ コピー完了");
+  return true;
+}
+
+// sw-checkout.sh を spawn し SSE に流す（終了コード 0 以外は reject）。
+async function runCheckoutScript(wdId: string, wslWdPath: string, send: (line: string) => void): Promise<void> {
+  const scriptPath = path.join(workspacePath, "data/work/scripts/sw-checkout.sh");
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn("bash", [scriptPath, wdId, wslWdPath], {
+      cwd: path.join(workspacePath, "data/work"),
+      env: { ...process.env },
+    });
+    pipeToSse(proc, send);
+    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`sw-checkout.sh exited with code ${String(code)}`))));
+    proc.on("error", reject);
+  });
+}
+
 // POST /api/work/checkout  (SSE ストリーム)
 router.post(API_ROUTES.work.checkout, async (req, res) => {
-  const { wdId, windowsWdPath, action, sourceFilename, newFilename } = req.body as {
-    wdId: string;
-    windowsWdPath: string;
-    action: string;
-    sourceFilename?: string;
-    newFilename?: string;
-  };
-
-  if (!wdId || !windowsWdPath || !action) {
+  const body = req.body as CheckoutBody;
+  if (!body.wdId || !body.windowsWdPath || !body.action) {
     res.status(400).json({ error: "wdId, windowsWdPath, action required" });
     return;
   }
@@ -501,48 +530,19 @@ router.post(API_ROUTES.work.checkout, async (req, res) => {
   };
 
   try {
-    const wslWdPath = windowsToWsl(windowsWdPath);
-
-    // 新バージョン作成: Released PPTX を WD 直下にコピー
-    if (action === "checkout-new-version") {
-      if (!sourceFilename || !newFilename) {
-        send("ERROR: sourceFilename and newFilename required for checkout-new-version");
-        res.end();
-        return;
-      }
-      const srcPath = path.join(wslWdPath, "ReleasedVersion", sourceFilename);
-      const dstPath = path.join(wslWdPath, newFilename);
-      send(`📋 コピー: ${sourceFilename} → ${newFilename}`);
-      await fsp.copyFile(srcPath, dstPath);
-      send("✅ コピー完了");
+    const wslWdPath = windowsToWsl(body.windowsWdPath);
+    if (!(await copyNewVersionIfNeeded(body, wslWdPath, send))) {
+      res.end();
+      return;
     }
-
-    // sw-checkout.sh を実行
-    const scriptPath = path.join(workspacePath, "data/work/scripts/sw-checkout.sh");
-    send(`🔄 チェックアウト開始: ${wdId}`);
-    send(`📂 ソース: ${windowsWdPath}`);
-
-    await new Promise<void>((resolve, reject) => {
-      const proc = spawn("bash", [scriptPath, wdId, wslWdPath], {
-        cwd: path.join(workspacePath, "data/work"),
-        env: { ...process.env },
-      });
-      pipeToSse(proc, send);
-      proc.on("close", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`sw-checkout.sh exited with code ${String(code)}`));
-      });
-      proc.on("error", reject);
-    });
-
+    send(`🔄 チェックアウト開始: ${body.wdId}`);
+    send(`📂 ソース: ${body.windowsWdPath}`);
+    await runCheckoutScript(body.wdId, wslWdPath, send);
     send("✅ チェックアウト完了");
     send("🖼 サムネイル生成中...");
-
-    const workDir = path.join(workspacePath, "data/work", wdId);
-    await runThumbnails(workDir, send);
-
+    await runThumbnails(path.join(workspacePath, "data/work", body.wdId), send);
     send("✅ サムネイル生成完了");
-    send(`DONE:${wdId}`);
+    send(`DONE:${body.wdId}`);
     res.end();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -841,6 +841,26 @@ async function syncReleasedFromWindows(wdId: string, windowsWdPath: string | nul
   return { copied, deleted };
 }
 
+// WSL data/work/<wd>/ReleasedVersion を Windows(D:) の ReleasedVersion へ push（リリース逆同期）。
+// diffReleasedMirror(WSL を正) で新/更新の pptx のみコピー。D: 側の他版は削除しない（安全側）。
+// WSL 側 ReleasedVersion が空のときは no-op（誤コピー防止の安全弁）。
+async function pushReleasedToWindows(wdId: string, windowsWdPath: string | null): Promise<{ copied: string[] }> {
+  const empty = { copied: [] as string[] };
+  if (!isValidWorkWdId(wdId) || !windowsWdPath) return empty;
+  const wslReleasedDir = path.join(workspacePath, "data/work", wdId, "ReleasedVersion");
+  const wslFiles = await statPptxList(wslReleasedDir);
+  if (wslFiles.length === 0) return empty; // 安全弁: WSL が空なら何もしない
+  const winReleasedDir = path.join(windowsToWsl(windowsWdPath), "ReleasedVersion");
+  await fsp.mkdir(winReleasedDir, { recursive: true });
+  const winFiles = await statPptxList(winReleasedDir);
+  const { toCopy } = diffReleasedMirror(wslFiles, winFiles); // WSL を正＝新/更新分のみ
+  const copied = await mirrorCopy(wslReleasedDir, winReleasedDir, toCopy);
+  if (copied.length) {
+    log.info("workFiles.pushReleased", "pushed ReleasedVersion to Windows (WSL→D:)", { wdId, copied });
+  }
+  return { copied };
+}
+
 // ── 素材フォルダ D:→WSL ミラー（スライド生成用の素材・基礎情報）────────────
 // FrameFiles/ScreenShots/RelatedMaterials（ディレクトリ）・ProjectInformation.md/
 // DocumentLayouts.md（単体）・AudioFiles の逐語録 *.md（wav 除外）を D: を正に
@@ -986,6 +1006,29 @@ router.post(API_ROUTES.work.releasedThumbs, async (req, res) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error("workFiles.releasedThumbs", "released thumb generation failed", { err });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// POST /api/work/release-to-windows — WSL の ReleasedVersion を Windows(D:) へ push（逆同期）。
+// windowsWdPath 省略時は .checkout-source（windows_path）から解決する。JSON。
+router.post(API_ROUTES.work.releaseToWindows, async (req, res) => {
+  const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
+  if (!wdId || !isValidWorkWdId(wdId)) {
+    res.status(400).json({ error: "wdId (valid WD-ID) required" });
+    return;
+  }
+  try {
+    const winPath = windowsWdPath ?? (await readCheckoutWindowsPath(wdId));
+    if (!winPath) {
+      res.status(400).json({ error: "windowsWdPath 未指定かつ .checkout-source に windows_path がありません" });
+      return;
+    }
+    const { copied } = await pushReleasedToWindows(wdId, winPath);
+    res.json({ copied, windowsWdPath: winPath });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error("workFiles.releaseToWindows", "push to Windows failed", { err });
     res.status(500).json({ error: msg });
   }
 });
@@ -1144,7 +1187,12 @@ router.post(API_ROUTES.work.combine, async (req, res) => {
   if (!ctx) return;
   const args = ["combine", ctx.wd, ctx.version, outFilename];
   if (dedupMasters === false) args.push("nodedup");
-  await runComScript(args, ctx.wd, ctx.send);
+  // 結合成功後、新版 ReleasedVersion を Windows(D:) へ自動 push（L823 の注記どおり
+  // 「新版は D: へ push してからミラー」の順序を守る）。windows_path は .checkout-source から。
+  await runComScript(args, ctx.wd, ctx.send, async () => {
+    const { copied } = await pushReleasedToWindows(ctx.wd, await readCheckoutWindowsPath(ctx.wd));
+    if (copied.length) ctx.send(`📤 D: へ push: ${copied.join(", ")}`);
+  });
   res.end();
 });
 
