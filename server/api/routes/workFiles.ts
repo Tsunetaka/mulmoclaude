@@ -1055,6 +1055,34 @@ router.post(API_ROUTES.work.register, async (req, res) => {
   }
 });
 
+// POST /api/work/sync-materials — 登録済み WD の素材フォルダだけを D:(Windows) から WSL へ再同期する（「同期」）。
+// SOURCE_MATERIALS（ScreenShots/RelatedMaterials/FrameFiles/AudioFiles の *.md/ProjectInformation.md/
+// DocumentLayouts.md）を D: を正に完全一致ミラーし、追加・更新・削除を反映する。ReleasedVersion と
+// .checkedoutpages には一切触れない（役割分離＝リリースは release-to-windows、頁は sw-page-checkin）。
+// 未登録 WD は 409（先に「登録」が必要）。body `{ wdId, windowsWdPath }`。
+router.post(API_ROUTES.work.syncMaterials, async (req, res) => {
+  const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
+
+  if (!wdId || !isValidWorkWdId(wdId) || !windowsWdPath) {
+    res.status(400).json({ error: "wdId (valid WD-ID) and windowsWdPath required" });
+    return;
+  }
+
+  try {
+    if (!(await isWdRegistered(wdId))) {
+      res.status(409).json({ error: "未登録の WD は同期できません。先に「登録」してください。" });
+      return;
+    }
+    const { copied, deleted } = await syncSourceMaterialsFromWindows(wdId, windowsWdPath);
+    log.info("workFiles.syncMaterials", "manual source-material sync from Windows", { wdId, copied, deleted });
+    res.json({ synced: true, copied, deleted });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error("workFiles.syncMaterials", "source-material sync failed", { err });
+    res.status(500).json({ error: msg });
+  }
+});
+
 // POST /api/work/unregister — WD の WSL 実体（data/work/<wd>/）を丸ごと削除する（「抹消」）。
 // 編集中バージョンが 1 つでも残っていれば 409 で拒否（編集中は WSL にしか無く失われるため）。
 // Windows(D:) 側には一切触れない（D: が正。再登録でいつでも復元できる）。body `{ wdId }`。

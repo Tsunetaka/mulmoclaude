@@ -67,6 +67,15 @@
                     >
                       ＋ 新規作成
                     </button>
+                    <!-- 同期：D: の素材（スクショ・資料）だけを WSL へ取り込み直す（追加・更新・削除を反映） -->
+                    <button
+                      class="px-3 py-1 rounded text-sm font-medium border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      :disabled="wdBusy.has(wd.id)"
+                      title="D: の素材（スクショ・資料）を WSL に取り込み直します（追加・更新・削除を反映）。リリース済版・頁チェックアウトには触れません。"
+                      @click="onSync(wd)"
+                    >
+                      {{ wdBusy.has(wd.id) ? "同期中..." : "同期" }}
+                    </button>
                     <button
                       class="px-3 py-1 rounded text-sm font-medium border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                       :disabled="hasEditingVersion(wd) || wdBusy.has(wd.id)"
@@ -85,6 +94,7 @@
               <p v-if="!wd.registered" class="mt-1 text-xs text-gray-500 leading-relaxed">
                 「登録」を押すと WSL 上に作業フォルダを作成し、D: の素材とリリース済版を取り込みます。登録するまで編集・プレビューはできません。
               </p>
+              <p v-if="syncNote[wd.id]" class="mt-1 text-xs text-green-700">{{ syncNote[wd.id] }}</p>
             </div>
             <div v-if="!wd.registered && wd.versions.length === 0" class="text-xs text-gray-400">リリース済のバージョンはありません。</div>
             <div class="flex flex-wrap gap-2 items-start">
@@ -806,6 +816,41 @@ async function onRegister(wdInfo: WdInfo): Promise<void> {
     }
     releasedThumbs.value = { ...releasedThumbs.value, [wdInfo.id]: map };
     await scanFiles();
+  } finally {
+    setWdBusy(wdInfo.id, false);
+  }
+}
+
+// ── WD の素材同期（「同期」ボタン）─────────────────────────────────────────────
+// 同期結果メッセージ（wdId → 文言）。数秒で自動消去する。
+const syncNote = ref<Record<string, string>>({});
+const SYNC_NOTE_TTL_MS = 5000;
+
+function setSyncNote(wdId: string, msg: string): void {
+  syncNote.value = { ...syncNote.value, [wdId]: msg };
+  setTimeout(() => {
+    syncNote.value = Object.fromEntries(Object.entries(syncNote.value).filter(([key]) => key !== wdId));
+  }, SYNC_NOTE_TTL_MS);
+}
+
+// 「同期」：登録済み WD の素材フォルダだけを D:→WSL に再同期する。
+// ReleasedVersion・頁チェックアウト（.checkedoutpages）には触れない（サーバー側でスコープ限定）。
+async function onSync(wdInfo: WdInfo): Promise<void> {
+  if (wdBusy.value.has(wdInfo.id)) return;
+  setWdBusy(wdInfo.id, true);
+  errorMsg.value = null;
+  try {
+    const result = await apiPost<{ synced: boolean; copied: number; deleted: number }>(API_ROUTES.work.syncMaterials, {
+      wdId: wdInfo.id,
+      windowsWdPath: wdInfo.windowsWdPath,
+    });
+    if (!result.ok) {
+      errorMsg.value = result.error;
+      return;
+    }
+    const { copied, deleted } = result.data;
+    const note = copied || deleted ? `✓ 素材を同期しました（+${copied} 追加・更新 / -${deleted} 削除）` : "✓ 素材は最新です（変更なし）";
+    setSyncNote(wdInfo.id, note);
   } finally {
     setWdBusy(wdInfo.id, false);
   }

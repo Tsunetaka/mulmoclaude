@@ -472,6 +472,13 @@ const HOST_API_ROUTES = {
      *  編集中バージョンが残っていれば 409。Windows(D:) には一切触れない（再登録で復元可）。
      *  body `{ wdId }`。返り値 `{ unregistered, deleted }`。 */
     unregister: "/api/work/unregister",
+    /** POST — 登録済み WD の**素材フォルダのみ** D:(Windows) → WSL へ再同期する（「同期」ボタン）。
+     *  SOURCE_MATERIALS（ScreenShots / RelatedMaterials / FrameFiles / AudioFiles の *.md /
+     *  ProjectInformation.md / DocumentLayouts.md）を D: を正に完全一致ミラーし、追加・更新・削除を
+     *  反映する。**ReleasedVersion と .checkedoutpages には一切触れない**（役割分離＝リリースは
+     *  release-to-windows、頁チェックアウトは sw-page-checkin が別途管理）。未登録 WD は 409。
+     *  body `{ wdId, windowsWdPath }`。返り値 `{ synced, copied, deleted }`。 */
+    syncMaterials: "/api/work/sync-materials",
     /** POST — ReleasedVersion 由来の新版を **Windows COM 分割**（`split_pages.py`）する。
      *  `<wd>/ReleasedVersion/<sourceFilename>` を読み `<wd>/<version>/.pages/` に
      *  ページ単位 pptx ＋ structure.json を生成。SSE ストリーム。
