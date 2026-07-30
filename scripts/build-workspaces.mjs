@@ -33,6 +33,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import os from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -136,6 +137,49 @@ function runOne(pkgName) {
   });
 }
 
+// Cap how many builds run at once. Without this the caller launches ALL
+// matched workspaces simultaneously (25 bridges, then 15 plugins each
+// running `vite build && vue-tsc`), which on a memory-constrained WSL2 VM
+// (~6.6 GiB) exhausts RAM + swap and freezes the whole VM — the terminal
+// / VS Code connection drops mid-build and cannot reconnect (#build-oom).
+// The cap is memory-bound, not core-bound: a 24-core WSL box still has
+// only a handful of GB. Override with BUILD_WORKSPACES_CONCURRENCY.
+function computeConcurrency(total) {
+  const envRaw = process.env.BUILD_WORKSPACES_CONCURRENCY;
+  if (envRaw) {
+    const n = Number.parseInt(envRaw, 10);
+    if (Number.isFinite(n) && n > 0) return Math.min(n, total);
+  }
+  const PER_BUILD_GB = 1.5; // peak RSS of one `vite build && vue-tsc`
+  const RESERVE_GB = 2; // headroom for the base system + node parent
+  const totalGb = os.totalmem() / 1024 ** 3;
+  const memBudget = Math.floor((totalGb - RESERVE_GB) / PER_BUILD_GB);
+  const cpuBudget = Math.max(1, os.cpus().length - 1);
+  return Math.max(2, Math.min(total, cpuBudget, memBudget));
+}
+
+// Bounded worker pool that preserves `--kill-others-on-fail` semantics:
+// on the first failure, workers stop pulling new work and the recorded
+// error is re-thrown so main() can kill the still-running siblings.
+async function runPooled(workspaces, limit) {
+  let index = 0;
+  let failure = null;
+  const worker = async () => {
+    while (index < workspaces.length && !failure) {
+      const pkg = workspaces[index++];
+      try {
+        await runOne(pkg);
+      } catch (err) {
+        if (!failure) failure = err;
+        return;
+      }
+    }
+  };
+  const size = Math.min(limit, workspaces.length);
+  await Promise.all(Array.from({ length: size }, worker));
+  if (failure) throw failure;
+}
+
 function killSurvivors() {
   for (const child of liveChildren) {
     try {
@@ -153,7 +197,8 @@ async function main() {
     console.error(`[build-workspaces] no packages matching scope=${args.scope}` + (args.nameSuffix ? ` suffix=${args.nameSuffix}` : "") + ` under ${args.relDir}`);
     process.exit(1);
   }
-  console.log(`[build-workspaces] building ${workspaces.length} package(s) in parallel under ${args.relDir}: ${workspaces.join(", ")}`);
+  const concurrency = computeConcurrency(workspaces.length);
+  console.log(`[build-workspaces] building ${workspaces.length} package(s) under ${args.relDir} (max ${concurrency} at a time): ${workspaces.join(", ")}`);
 
   // If our own process is signalled (Ctrl-C in dev, CI timeout, etc.),
   // forward SIGTERM to every still-running build before exiting.
@@ -166,7 +211,7 @@ async function main() {
   }
 
   try {
-    await Promise.all(workspaces.map(runOne));
+    await runPooled(workspaces, concurrency);
   } catch (err) {
     console.error(`[build-workspaces] failed: ${err instanceof Error ? err.message : String(err)}`);
     // Match `concurrently --kill-others-on-fail`: terminate the

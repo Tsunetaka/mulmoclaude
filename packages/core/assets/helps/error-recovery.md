@@ -299,6 +299,45 @@ If a specific package keeps failing, build just it:
 `yarn workspace @mulmoclaude/<name> run build`. The build pipeline
 runs plugins before services so cross-package imports resolve cold.
 
+## Build freezes the machine / WSL connection drops mid-`yarn build`
+
+### Symptoms
+
+- `yarn build` (or `build:packages`) runs for a while, then the terminal
+  / VS Code loses its connection to WSL and cannot reconnect until
+  `wsl --shutdown`.
+- The machine becomes unresponsive during the plugins or bridges build
+  step; no explicit error is printed — the process is killed by the OOM
+  killer or the whole WSL VM freezes.
+
+### Cause
+
+`scripts/build-workspaces.mjs` builds every matched workspace under a
+directory — **25 bridges, then 15 plugins**, each plugin running
+`vite build && vue-tsc`. It used to launch them all at once. On a
+memory-constrained VM (a default WSL2 box caps at ~6.6 GiB regardless of
+core count), 15–25 concurrent `vite`/`vue-tsc` processes exhaust RAM +
+swap and freeze the VM, taking the connection down with it. High core
+count is a trap here — memory, not CPU, is the ceiling.
+
+### Fix
+
+The script now caps concurrency (memory-bound, default ~3 on a 6.6 GiB
+box). If a build still freezes the machine, lower it further:
+
+```bash
+BUILD_WORKSPACES_CONCURRENCY=2 yarn build
+```
+
+To raise the ceiling instead, give the WSL2 VM more RAM + swap in the
+Windows-side `%UserProfile%\.wslconfig`, then `wsl --shutdown`:
+
+```ini
+[wsl2]
+memory=12GB
+swap=8GB
+```
+
 ## Plugin runtime — install / drift
 
 ### Symptoms
