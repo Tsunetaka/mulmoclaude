@@ -4,7 +4,14 @@
        floats above all other content without z-index wrestling. -->
   <Teleport to="body">
     <Transition name="mp-fade">
-      <div v-if="open" class="fixed inset-0 z-[9999] flex items-start justify-start" role="dialog" aria-modal="true" :aria-label="t('mulmoPoint.title')">
+      <div
+        v-if="open"
+        translate="no"
+        class="fixed inset-0 z-[9999] flex items-start justify-start"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="t('mulmoPoint.title')"
+      >
         <!-- Backdrop: click-away to close -->
         <div class="absolute inset-0" @click="emit('close')" />
 
