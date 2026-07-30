@@ -512,6 +512,17 @@ const HOST_API_ROUTES = {
      *  続けて gen_thumbs でサムネ再生成（canvas は明示「更新」ボタンで後追い）。
      *  ホスト実行なのでサムネの CJK 豆腐は出ない。SSE。body `{ theme }`。 */
     theme: "/api/work/:wd/:version/theme",
+    /** GET — 適用可能なテンプレート一覧。`data/styles/powerpoint/*.pptx` を走査し
+     *  `{ templates: { id, label }[] }` を返す（id＝拡張子なしファイル名）。リボンの
+     *  「テンプレート適用」プルダウンの選択肢に使う。 */
+    templates: "/api/work/templates",
+    /** POST — デッキ全ページを指定テンプレート（既定 geoplan-cover）の土台に作り替える
+     *  （テンプレート適用・整形コピー方式）。`apply_template.py`（WSL python-pptx・COM
+     *  非依存）が先頭＝表紙／他＝本文として元ページの中身を転記し、名前付き帯を付与、
+     *  apply_theme に委譲して配色（テーマ未適用なら plain）。structure に template
+     *  マーカーと theme を永続化し gen_thumbs でサムネ再生成（canvas は「更新」で後追い）。
+     *  SSE。body `{ template?, theme? }`。structure.json 無しは 404。 */
+    applyTemplate: "/api/work/:wd/:version/apply-template",
     /** POST — WSL の `<wd>/ReleasedVersion/*.pptx` を Windows(D:) の Materials
      *  `<windows_path>/ReleasedVersion/` へ push（リリース逆同期）。JSON。
      *  body `{ wdId, windowsWdPath? }`（windowsWdPath 省略時は `.checkout-source`

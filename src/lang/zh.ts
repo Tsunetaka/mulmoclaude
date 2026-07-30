@@ -1078,6 +1078,8 @@ const zhMessages = {
     toggleChat: "Claude 聊天",
     theme: "主题",
     themeUnapplied: "（未应用）",
+    template: "模板",
+    applyTemplate: "应用模板",
   },
   mulmoPoint: {
     title: "关于 MulmoPoint",

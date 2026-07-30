@@ -1110,6 +1110,8 @@ const esMessages = {
     toggleChat: "Chat de Claude",
     theme: "Tema",
     themeUnapplied: "(Sin aplicar)",
+    template: "Plantilla",
+    applyTemplate: "Aplicar plantilla",
   },
   mulmoPoint: {
     title: "Acerca de MulmoPoint",

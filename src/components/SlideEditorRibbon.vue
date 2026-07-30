@@ -25,6 +25,24 @@
           <option :value="UNAPPLIED_THEME" :disabled="theme !== UNAPPLIED_THEME">{{ t("slides.themeUnapplied") }}</option>
           <option v-for="opt in themes" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
         </select>
+
+        <!-- テンプレート適用（アクション型プルダウン）。テンプレを選ぶと全ページを
+             その土台に作り替える（SlideEditorView が確認モーダル → SSE で実行）。
+             選択は保持せず、実行後プレースホルダに戻る。 -->
+        <template v-if="templates.length > 0">
+          <span class="material-icons text-base text-[#6a8aaa]">dashboard_customize</span>
+          <select
+            class="ribbon-theme-select"
+            data-testid="ribbon-template-select"
+            :value="TEMPLATE_ACTION_NONE"
+            :aria-label="t('slides.applyTemplate')"
+            :title="t('slides.applyTemplate')"
+            @change="onTemplateChange"
+          >
+            <option :value="TEMPLATE_ACTION_NONE">{{ t("slides.applyTemplate") }}</option>
+            <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">{{ tpl.label }}</option>
+          </select>
+        </template>
       </template>
     </div>
 
@@ -95,13 +113,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { PAGE_ROUTES, type PageRouteName } from "../router/pageRoutes";
 import { useSlideEditor, UNAPPLIED_THEME } from "../composables/useSlideEditor";
 import { useWorkFileSelector } from "../composables/useWorkFileSelector";
 import { NEW_DECK_THEMES } from "../utils/slides/newDeck";
+import { apiGet } from "../utils/api";
+import { API_ROUTES } from "../config/apiRoutes";
 import iconSelectDoc from "../assets/icons/icon_overview_white.png";
 import iconDone from "../assets/icons/icon_check.png";
 
@@ -124,6 +144,28 @@ function onThemeChange(event: Event): void {
   const next = (event.target as HTMLSelectElement).value;
   if (next === UNAPPLIED_THEME) return; // 「（未適用）」は選択不可（適用済みは戻せない）
   slideEditor.triggerApplyTheme(next);
+}
+
+// テンプレート適用（アクション型プルダウン）。プレースホルダ値は空文字。
+const TEMPLATE_ACTION_NONE = "";
+const templates = ref<{ id: string; label: string }[]>([]);
+
+async function loadTemplates(): Promise<void> {
+  try {
+    const res = await apiGet<{ templates: { id: string; label: string }[] }>(API_ROUTES.work.templates);
+    if (res.ok) templates.value = res.data.templates;
+  } catch {
+    /* テンプレ取得失敗はプルダウン非表示で許容（機能は無くても編集は継続可能） */
+  }
+}
+onMounted(() => void loadTemplates());
+
+function onTemplateChange(event: Event): void {
+  const sel = event.target as HTMLSelectElement;
+  const tid = sel.value;
+  sel.value = TEMPLATE_ACTION_NONE; // アクション型：選択は保持しない
+  if (tid === TEMPLATE_ACTION_NONE) return;
+  slideEditor.triggerApplyTemplate(tid);
 }
 
 // slides ページで編集ビューがマウント済みのときだけ canvas 更新・チャットを出す。

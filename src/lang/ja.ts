@@ -1093,6 +1093,8 @@ const jaMessages = {
     toggleChat: "Claude チャット",
     theme: "テーマ",
     themeUnapplied: "（未適用）",
+    template: "テンプレート",
+    applyTemplate: "テンプレート適用",
   },
   mulmoPoint: {
     title: "MulmoPoint について",

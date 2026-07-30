@@ -1112,6 +1112,8 @@ const deMessages = {
     toggleChat: "Claude-Chat",
     theme: "Thema",
     themeUnapplied: "(Nicht angewendet)",
+    template: "Vorlage",
+    applyTemplate: "Vorlage anwenden",
   },
   mulmoPoint: {
     title: "Über MulmoPoint",

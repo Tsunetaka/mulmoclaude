@@ -355,6 +355,71 @@
         </div>
       </div>
     </div>
+
+    <!-- テンプレート適用モーダル（全ページをテンプレ土台に作り替え・確認 → SSE） -->
+    <div v-if="templateModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeTemplateModal">
+      <div class="w-[32rem] max-w-[90vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
+        <div class="flex items-center gap-2 px-4 py-2.5 bg-[#0a1830] border-b border-[#1a2a44]">
+          <span class="material-icons text-sm text-[#4a8acc]">dashboard_customize</span>
+          <span class="text-sm font-bold text-[#8aacd0] flex-1">テンプレート「{{ pendingTemplate }}」を適用</span>
+          <button
+            class="text-[#3a5a7a] hover:text-[#6a9acc] disabled:opacity-30"
+            :disabled="templatePhase === 'running'"
+            aria-label="閉じる"
+            @click="closeTemplateModal"
+          >
+            <span class="material-icons text-sm">close</span>
+          </button>
+        </div>
+
+        <!-- 確認フェーズ -->
+        <div v-if="templatePhase === 'confirm'" class="px-4 py-3 space-y-3 text-[#8aacd0]">
+          <p class="text-xs leading-relaxed">
+            全ページを <b class="text-[#6aaade]">{{ pendingTemplate }}</b> の土台に作り替えます。各ページの中身（タイトル・本文・画像）を
+            テンプレに転記し、先頭を表紙・他を本文として配置し直します。
+          </p>
+          <div class="flex items-start gap-2 bg-[#2a1a0a] border border-[#5a3a10] rounded px-3 py-2">
+            <span class="material-icons text-sm text-yellow-500 mt-0.5">warning</span>
+            <p class="text-[11px] text-yellow-200 leading-relaxed">
+              既存レイアウトはテンプレのものに置き換わります。日付・版番号は保持し、テーマ未適用のデッキはプレーンになります。
+              帯と本文が重なる箇所は適用後に微調整してください。
+            </p>
+          </div>
+        </div>
+
+        <!-- SSE ログ -->
+        <div
+          v-else
+          class="px-4 py-3 font-mono text-[11px] text-[#7aa0c0] bg-[#060b14] max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed"
+          style="scrollbar-width: thin; scrollbar-color: #1a2a3a transparent"
+        >
+          <div v-for="(line, i) in templateLog" :key="i">{{ line }}</div>
+          <div v-if="templatePhase === 'running'" class="text-yellow-300 animate-pulse">テンプレを適用中...</div>
+          <div v-if="templatePhase === 'done'" class="text-green-300">完了しました。高解像度の反映は「canvas 更新」で行ってください。</div>
+        </div>
+
+        <!-- フッター -->
+        <div class="flex justify-end gap-2 px-4 py-2.5 bg-[#0a1220] border-t border-[#1a2a44]">
+          <button
+            v-if="templatePhase === 'confirm'"
+            class="px-3 py-1.5 rounded text-xs text-[#8aacd0] bg-[#16233c] hover:bg-[#1e2e48]"
+            @click="closeTemplateModal"
+          >
+            キャンセル
+          </button>
+          <button v-if="templatePhase === 'confirm'" class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a]" @click="runApplyTemplate">
+            適用を実行
+          </button>
+          <button
+            v-if="templatePhase === 'done' || templatePhase === 'error'"
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a]"
+            @click="closeTemplateModal"
+          >
+            閉じる
+          </button>
+        </div>
+      </div>
+    </div>
     <!-- eslint-enable @intlify/vue-i18n/no-raw-text -->
   </div>
 </template>
@@ -416,6 +481,12 @@ const themeModalOpen = ref(false);
 const themePhase = ref<"running" | "done" | "error">("running");
 const themeLog = ref<string[]>([]);
 const pendingTheme = ref<string>("");
+
+// ── テンプレート適用モーダル（全ページをテンプレ土台に作り替え・確認 → SSE） ─────
+const templateModalOpen = ref(false);
+const templatePhase = ref<"confirm" | "running" | "done" | "error">("confirm");
+const templateLog = ref<string[]>([]);
+const pendingTemplate = ref<string>("");
 
 /** dirty（canvas 再生成待ち）ページ数。ヘッダーバッジと確認文言に使う。 */
 const dirtyCount = computed<number>(() => deck.value?.pages.filter((page) => page.dirty).length ?? 0);
@@ -714,6 +785,49 @@ function closeThemeModal(): void {
   themeModalOpen.value = false;
 }
 
+// ── テンプレート適用（リボンのテンプレ選択発） ────────────────────────────────
+// 全ページを指定テンプレの土台に作り替える（整形コピー方式）。破壊的操作なので
+// 確認フェーズを挟む。完了後は structure.theme（plain or 維持）が反映される。
+
+/** リボンでテンプレが選ばれたら確認モーダルを開く。 */
+function openTemplateModal(templateId: string): void {
+  pendingTemplate.value = templateId;
+  templateLog.value = [];
+  templatePhase.value = "confirm";
+  templateModalOpen.value = true;
+}
+
+function closeTemplateModal(): void {
+  if (templatePhase.value === "running") return; // 実行中は閉じさせない
+  templateModalOpen.value = false;
+}
+
+async function runApplyTemplate(): Promise<void> {
+  if (!wdId.value || !version.value || !pendingTemplate.value) return;
+  templatePhase.value = "running";
+  templateLog.value = [];
+  const url = fillRoute(API_ROUTES.work.applyTemplate, wdId.value, version.value);
+  try {
+    const res = await apiFetchRaw(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template: pendingTemplate.value }),
+    });
+    if (!res.ok || !res.body) {
+      templateLog.value.push(`ERROR: HTTP ${res.status}`);
+      templatePhase.value = "error";
+      return;
+    }
+    const done = await drainSse(res.body, templateLog);
+    templatePhase.value = done ? "done" : "error";
+    // 完了後の再読込で structure.theme（plain / 維持）がプルダウンにも反映される。
+    if (done) await reloadDeck();
+  } catch (err) {
+    templateLog.value.push(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    templatePhase.value = "error";
+  }
+}
+
 // ── Chat helpers ─────────────────────────────────────────────────────────────
 
 /** 現在のスライドコンテキストをメッセージの先頭に付与する文字列を返す */
@@ -859,6 +973,7 @@ watch(agentRunning, (running, wasRunning) => {
 // 経由でトリガー／状態参照する（App.vue chrome のリボンとは親子関係が無いため）。
 slideEditor.register({
   onApplyTheme: (themeId: string) => void runApplyTheme(themeId),
+  onApplyTemplate: (templateId: string) => openTemplateModal(templateId),
   onRefresh: () => openRefreshModal(),
   onToggleChat: () => {
     showChatPane.value = !showChatPane.value;

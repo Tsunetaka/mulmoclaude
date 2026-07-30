@@ -1101,6 +1101,8 @@ const frMessages = {
     toggleChat: "Chat Claude",
     theme: "Thème",
     themeUnapplied: "(Non appliqué)",
+    template: "Modèle",
+    applyTemplate: "Appliquer le modèle",
   },
   mulmoPoint: {
     title: "À propos de MulmoPoint",

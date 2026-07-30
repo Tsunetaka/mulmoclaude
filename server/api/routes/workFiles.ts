@@ -1647,6 +1647,121 @@ router.post(API_ROUTES.work.theme, async (req, res) => {
   res.end();
 });
 
+// ── テンプレート適用 ──────────────────────────────────────────────────────────
+// apply_template.py（WSL python-pptx・COM 非依存）で全ページを指定テンプレの土台に
+// 作り替え、apply_theme に委譲して配色 → gen_thumbs でサムネ再生成 → DONE。
+// 「テンプレの部品を元に挿入」ではなく「テンプレを土台に元の記載内容を転記した新ページ」
+// に置換する（整形コピー方式）。先頭＝表紙 / 他＝本文。テーマ未適用なら plain。
+
+const TEMPLATES_DIR = "data/styles/powerpoint";
+// テンプレ ID（拡張子なしファイル名）に許すのは英数始まりの英数・._- のみ（線形＝ReDoS 無し）。
+// パス区切り `/` や先頭 `.`（`..` 等）を含む値は弾く。実在チェックは listTemplateIds が担う。
+const TEMPLATE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** data/styles/powerpoint/*.pptx を走査してテンプレ ID 一覧を返す（.bak.pptx は除外）。 */
+async function listTemplateIds(): Promise<string[]> {
+  const dir = path.join(workspacePath, TEMPLATES_DIR);
+  const ids = (await readdirTypes(dir))
+    .filter((ent) => ent.isFile() && /\.pptx$/i.test(ent.name) && !/\.bak\.pptx$/i.test(ent.name))
+    .map((ent) => ent.name.replace(/\.pptx$/i, ""));
+  return ids.sort((left, right) => left.localeCompare(right));
+}
+
+// GET /api/work/templates — 適用可能なテンプレート一覧（リボンのプルダウン用）
+router.get(API_ROUTES.work.templates, async (_req, res) => {
+  try {
+    const templates = (await listTemplateIds()).map((tid) => ({ id: tid, label: tid }));
+    res.json({ templates });
+  } catch (err) {
+    log.error("workFiles.templates", "list failed", { err });
+    res.status(500).json({ error: "template list failed" });
+  }
+});
+
+/** apply-template body の純粋検証。問題があればエラーメッセージ、無ければ null。 */
+export function validateApplyTemplateBody(body: { template?: unknown; theme?: unknown }): string | null {
+  if (body.template !== undefined && (typeof body.template !== "string" || !TEMPLATE_ID_RE.test(body.template))) {
+    return "template は英数・._- のみのテンプレ ID を指定してください";
+  }
+  if (body.theme !== undefined && (typeof body.theme !== "string" || !(NEW_DECK_THEME_IDS as readonly string[]).includes(body.theme))) {
+    return `theme は ${NEW_DECK_THEME_IDS.join("/")} のいずれかを指定してください`;
+  }
+  return null;
+}
+
+/** apply_template.py の CLI 引数を組み立てる（純粋）。template/theme は省略可。 */
+export function buildApplyTemplateArgs(scriptPath: string, versionDir: string, template?: string, theme?: string): string[] {
+  const args = [scriptPath, "--version-dir", versionDir];
+  if (template) args.push("--template", template);
+  if (theme) args.push("--theme", theme);
+  return args;
+}
+
+// apply_template.py を spawn して SSE に流す。成功(0)なら gen_thumbs → DONE、失敗なら ERROR。
+async function runApplyTemplate(
+  wdId: string,
+  version: string,
+  template: string | undefined,
+  theme: string | undefined,
+  send: (line: string) => void,
+): Promise<void> {
+  const versionDir = path.join(workspacePath, "data/work", wdId, version);
+  const scriptPath = path.join(workspacePath, "data/work/tools/apply_template.py");
+  const args = buildApplyTemplateArgs(scriptPath, versionDir, template, theme);
+  await new Promise<void>((resolve) => {
+    const proc = spawn("python3", args, { env: { ...process.env } });
+    pipeToSse(proc, send, "🧩 ");
+    proc.on("close", (code) => {
+      const finish = async (): Promise<void> => {
+        if (code === 0) {
+          await runGenThumbs(wdId, version, send);
+          send(`DONE:${wdId}`);
+        } else {
+          send("ERROR: apply_template.py が失敗しました（WSL ホストに python-pptx / lxml が必要: pip install python-pptx lxml --break-system-packages）");
+          send(`ERROR: exit ${String(code)}`);
+        }
+        resolve();
+      };
+      finish().catch((err) => {
+        send(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+        resolve();
+      });
+    });
+    proc.on("error", (err) => {
+      send(`ERROR: ${err.message}`);
+      resolve();
+    });
+  });
+}
+
+// POST /api/work/:wd/:version/apply-template — 全ページをテンプレ土台に作り替え（SSE）
+router.post(API_ROUTES.work.applyTemplate, async (req, res) => {
+  const { wd, version } = req.params as { wd: string; version: string };
+  const body = req.body as { template?: string; theme?: string };
+  if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return;
+  }
+  const bodyError = validateApplyTemplateBody(body);
+  if (bodyError) {
+    res.status(400).json({ error: bodyError });
+    return;
+  }
+  if (body.template && !(await listTemplateIds()).includes(body.template)) {
+    res.status(404).json({ error: `テンプレートが見つかりません: ${body.template}` });
+    return;
+  }
+  // preflight: structure.json が無ければ 404（SSE flush 前に JSON で返す）
+  if (!(await pathExists(path.join(workspacePath, "data/work", wd, version, ".pages", "structure.json")))) {
+    res.status(404).json({ error: "対象バージョンに structure.json がありません" });
+    return;
+  }
+  const ctx = beginComStream(req, res);
+  if (!ctx) return;
+  await runApplyTemplate(wd, version, body.template, body.theme, ctx.send);
+  res.end();
+});
+
 // POST /api/work/:wd/:version/fork-from — 編集中由来の新版を .pages コピーで作成（SSE）
 router.post(API_ROUTES.work.forkFrom, async (req, res) => {
   const { wd, version } = req.params as { wd: string; version: string };

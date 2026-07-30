@@ -27,9 +27,11 @@ const theme = ref<string>(UNAPPLIED_THEME);
 
 type Handler = () => void;
 type ThemeHandler = (themeId: string) => void;
+type TemplateHandler = (templateId: string) => void;
 let refreshHandler: Handler | null = null;
 let toggleChatHandler: Handler | null = null;
 let applyThemeHandler: ThemeHandler | null = null;
+let applyTemplateHandler: TemplateHandler | null = null;
 
 export function useSlideEditor() {
   return {
@@ -37,17 +39,19 @@ export function useSlideEditor() {
     dirtyCount,
     chatOpen,
     theme,
-    /** 編集ビューがアクション（canvas 更新・チャットトグル・テーマ適用）を登録する。 */
-    register(handlers: { onRefresh: Handler; onToggleChat: Handler; onApplyTheme: ThemeHandler }): void {
+    /** 編集ビューがアクション（canvas 更新・チャットトグル・テーマ／テンプレ適用）を登録する。 */
+    register(handlers: { onRefresh: Handler; onToggleChat: Handler; onApplyTheme: ThemeHandler; onApplyTemplate: TemplateHandler }): void {
       refreshHandler = handlers.onRefresh;
       toggleChatHandler = handlers.onToggleChat;
       applyThemeHandler = handlers.onApplyTheme;
+      applyTemplateHandler = handlers.onApplyTemplate;
     },
     /** 編集ビューのアンマウント時にハンドラと状態を解除する。 */
     unregister(): void {
       refreshHandler = null;
       toggleChatHandler = null;
       applyThemeHandler = null;
+      applyTemplateHandler = null;
       active.value = false;
       dirtyCount.value = 0;
       chatOpen.value = false;
@@ -64,6 +68,10 @@ export function useSlideEditor() {
     /** リボンのテーマプルダウンからのテーマ適用トリガー。 */
     triggerApplyTheme(themeId: string): void {
       applyThemeHandler?.(themeId);
+    },
+    /** リボンのテンプレート選択からのテンプレート適用トリガー。 */
+    triggerApplyTemplate(templateId: string): void {
+      applyTemplateHandler?.(templateId);
     },
   };
 }

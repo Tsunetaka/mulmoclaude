@@ -1098,6 +1098,8 @@ const ptBRMessages = {
     toggleChat: "Chat do Claude",
     theme: "Tema",
     themeUnapplied: "(Não aplicado)",
+    template: "Modelo",
+    applyTemplate: "Aplicar modelo",
   },
   mulmoPoint: {
     title: "Sobre o MulmoPoint",

@@ -1093,6 +1093,8 @@ const koMessages = {
     toggleChat: "Claude 채팅",
     theme: "테마",
     themeUnapplied: "(미적용)",
+    template: "템플릿",
+    applyTemplate: "템플릿 적용",
   },
   mulmoPoint: {
     title: "MulmoPoint 정보",
