@@ -36,14 +36,48 @@ export interface UseFileDropZoneOptions {
 }
 
 // Module-scope so the install-once contract holds across multiple
-// `useFileDropZone` consumers. The handler reference is retained
-// so `_resetFileDropZoneForTests` can actually remove the listeners
-// (a naive reset that only flipped the flag would leak handlers
-// across test runs — Sourcery review on PR #1331).
+// `useFileDropZone` consumers. The handler reference is retained so the
+// listeners it installs can be removed again (a flag-only guard would leak
+// handlers — Sourcery review on PR #1331).
 let windowGuardHandler: ((event: DragEvent) => void) | null = null;
 
 function isFileDrag(event: DragEvent): boolean {
   return event.dataTransfer?.types.includes("Files") ?? false;
+}
+
+/** Install the window-level `preventDefault` guard on its own, for callers that
+ *  roll their own per-element handlers (the File Explorer attaches a drop zone
+ *  to every folder row, so one `useFileDropZone` per row would mean one window
+ *  listener per row). Idempotent — the module-scope handle makes it install-once. */
+export function installFileDropWindowGuard(): void {
+  installWindowDefaultGuard();
+}
+
+// Bumped whenever a drag terminates anywhere on the window. Hand-rolled drop
+// zones watch it so a drag that ends WITHOUT a matching `dragleave` — released
+// outside any row, or cancelled with Escape — still clears their highlight.
+// `useFileDropZone` gets this from its own per-instance listeners; per-row
+// callers can't afford one listener each, so they share this pulse instead.
+const dragSessionEnded = ref(0);
+let windowResetHandler: (() => void) | null = null;
+
+function installWindowResetPulse(): void {
+  if (windowResetHandler !== null) return;
+  if (typeof window === "undefined") return;
+  const handler = (): void => {
+    dragSessionEnded.value += 1;
+  };
+  window.addEventListener("drop", handler);
+  window.addEventListener("dragend", handler);
+  windowResetHandler = handler;
+}
+
+/** Shared "a drag just ended" counter for callers with hand-rolled handlers.
+ *  Watch it and reset local drag state. Installs the window guard + pulse once. */
+export function useDragSessionEnd(): Readonly<Ref<number>> {
+  installWindowDefaultGuard();
+  installWindowResetPulse();
+  return dragSessionEnded;
 }
 
 function installWindowDefaultGuard(): void {
@@ -131,15 +165,4 @@ export function useFileDropZone(opts: UseFileDropZoneOptions): UseFileDropZoneRe
   });
 
   return { isDragging, onDragenter, onDragover, onDragleave, onDrop };
-}
-
-/** Test-only reset. Removes the window listeners installed by
- *  `installWindowDefaultGuard` so a test can verify the install-once
- *  contract without leaking handlers across cases. */
-export function _resetFileDropZoneForTests(): void {
-  if (windowGuardHandler !== null && typeof window !== "undefined") {
-    window.removeEventListener("dragover", windowGuardHandler);
-    window.removeEventListener("drop", windowGuardHandler);
-  }
-  windowGuardHandler = null;
 }

@@ -1,8 +1,9 @@
 // Filesystem watchers that drive collection-completion bell
-// notifications. One `fs.watch` per discovered collection's `dataDir`,
-// fanned out from a single boot call + a 30-second re-discovery interval
-// that catches newly-created / deleted collections (there is no
-// in-process "collections changed" event broadcast).
+// notifications AND the live-refresh change event. One `fs.watch` per
+// discovered collection's `dataDir`, fanned out from a single boot call
+// + a 30-second re-discovery interval that catches newly-created /
+// deleted collections (there is no in-process "collections changed"
+// event broadcast).
 //
 // Why a watcher, not just route hooks: the canonical pattern for
 // collection-skills has the agent Write records directly with the Write
@@ -10,15 +11,49 @@
 // miss most of the traffic the user generates. The watcher catches every
 // mutation regardless of who wrote the file.
 //
+// That same reasoning is why the watcher publishes change events: a
+// write through `io.ts` publishes its own (immediately, and reliably
+// even where fs.watch is unavailable), but a direct file write has no
+// other producer, so open views would never refresh. Both producers
+// firing for one `io.ts` write is intentional — the payload carries no
+// bodies, so a duplicate costs one redundant refetch, whereas a missed
+// event leaves the UI silently stale.
+//
+// FOUR paths can re-derive a collection's bells, and every backend —
+// including read-only `dataSource` — must be covered by all four. They are
+// listed because they were NOT: this module grew up when only JSON records
+// reconciled, so each path had its own `dataSource` short-circuit, and
+// routing every backend through the store contract left the short-circuits
+// behind. Three of the four were separate live bugs (PR #2243 review).
+//
+//   1. mount           — `startWatcherFor`, boot + every remount
+//   2. store change    — `handleStoreChange`, the backend reported bytes moved
+//   3. schema change   — `reconcileChangedSchemas`, the RULES moved instead
+//   4. clock tick      — `tickTimeTriggers`, `triggerField` came due
+//
+// 3 and 4 are the ones that look skippable and are not: a read-only backend's
+// rows never change, but the completion rules applied to them and the wall
+// clock both do, and neither produces a data event to react to. Before adding
+// a `dataSource` (or any per-backend) early-exit here, check it against all
+// four — the surviving ones below are view-refresh publishes, not skips.
+//
 // All decisions live in `reconciler.ts`; this module is pure plumbing:
 // discover, mkdir, fs.watch, forward events into the reconciler. Every
 // reconcile call is idempotent so fs.watch's well-known quirks (`rename`
 // vs `change`, atomic-write coalescence, filename === null on some
 // platforms) don't need special handling.
 
-import { watch, type FSWatcher } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { discoverCollections, loadCollection, type DiscoveryOptions, type LoadedCollection } from "../collection/server";
+import { access } from "node:fs/promises";
+import {
+  discoverCollections,
+  itemFilePath,
+  loadCollection,
+  publishCollectionChange,
+  storeFor,
+  type DiscoveryOptions,
+  type LoadedCollection,
+  type StoreChange,
+} from "../collection/server";
 import type { CollectionSchema } from "../collection";
 import { errMsg, log } from "./config.js";
 import { evalNow } from "./clock.js";
@@ -41,19 +76,35 @@ const TRIGGER_TICK_INTERVAL_MS = ONE_MINUTE_MS;
 interface CollectionWatcher {
   slug: string;
   dataDir: string;
-  watcher: FSWatcher;
+  /** Unsubscribe from the store's change stream. The store owns HOW changes
+   *  are detected (which paths, which filenames are noise, how an atomic
+   *  replace is debounced); this module only holds the handle. */
+  unsubscribe: () => void;
   /** Last-seen serialized schema for change detection. When a rediscovery
    *  tick observes a different value, the watcher's items are reconciled
    *  and the cache is refreshed — this catches schema-only edits (e.g.
    *  flipping `completionField` on or off) that don't touch any record
    *  file and would otherwise leave bell state stale indefinitely. */
   schemaJson: string;
+  /** The discovered collection this watcher was mounted for — what the
+   *  reconciler needs to pick the right STORE (file records vs a sqlite
+   *  `storage` db). Refreshed whenever `schemaJson` is. */
+  collection: LoadedCollection;
 }
 
 const watchers = new Map<string, CollectionWatcher>();
 let rediscoveryTimer: ReturnType<typeof setInterval> | null = null;
 let triggerTimer: ReturnType<typeof setInterval> | null = null;
 let started = false;
+/** Guards the clock tick against overlapping itself. Paired with
+ *  `watcherEpoch`: a teardown while a pass is in flight bumps the epoch, so
+ *  that pass's `finally` knows it belongs to a dead generation and must not
+ *  clear a guard the restarted watcher set now owns. `triggerTickInFlight`
+ *  is what teardown AWAITS — clearing the flag alone would let a restart run
+ *  a second pass alongside the first. */
+let triggerTickRunning = false;
+let watcherEpoch = 0;
+let triggerTickInFlight: Promise<void> | null = null;
 /** Discovery options threaded into every `discoverCollections` /
  *  `loadCollection` / `sweepStaleActiveEntries` call. Production: empty
  *  (live workspace). Tests: `{ workspaceRoot, userSkillsDir }` pointing
@@ -68,6 +119,11 @@ interface ReconcileSlot {
   pending: boolean;
 }
 const itemSlots = new Map<string, ReconcileSlot>();
+
+/** Per-slug single-flight for a COLLECTION-granularity reconcile — a burst
+ *  of changes the store couldn't attribute to a record collapses into one
+ *  pass plus one trailing re-run, mirroring the per-item slots. */
+const collectionSlots = new Map<string, ReconcileSlot>();
 
 /** Test-only configuration knobs. Production callers pass nothing and get
  *  the live workspace defaults; tests pass a tmpdir-rooted `discoveryOpts`
@@ -108,9 +164,22 @@ export async function startCollectionWatchers(opts: CollectionWatcherOptions = {
     const triggerMs = opts.triggerTickIntervalMs === undefined ? TRIGGER_TICK_INTERVAL_MS : opts.triggerTickIntervalMs;
     if (triggerMs !== null) {
       triggerTimer = setInterval(() => {
-        tickTimeTriggers().catch((err: unknown) => {
-          log().warn("watcher trigger tick failed", { error: errMsg(err) });
-        });
+        // Skip rather than overlap. The pass is idempotent and the next one
+        // is a minute away, so dropping a tick is harmless — whereas letting
+        // firings pile up on a slow pass is not.
+        if (triggerTickRunning) return;
+        triggerTickRunning = true;
+        const epoch = watcherEpoch;
+        triggerTickInFlight = tickTimeTriggers()
+          .catch((err: unknown) => {
+            log().warn("watcher trigger tick failed", { error: errMsg(err) });
+          })
+          .finally(() => {
+            // Only the generation that set the guard may clear it.
+            if (epoch !== watcherEpoch) return;
+            triggerTickRunning = false;
+            triggerTickInFlight = null;
+          });
       }, triggerMs);
       triggerTimer.unref();
     }
@@ -133,22 +202,32 @@ export async function stopCollectionWatchers(): Promise<void> {
     clearInterval(triggerTimer);
     triggerTimer = null;
   }
+  // Wait for a clock pass that is still running: the interval is disarmed
+  // above, but a pass already in flight keeps touching the notifier and the
+  // slot maps, and a restart would otherwise run a second one beside it.
+  await triggerTickInFlight;
+  triggerTickInFlight = null;
+  // Bump AFTER the await: any later `finally` from that pass is now a dead
+  // generation and becomes a no-op, so it can't undo this teardown.
+  watcherEpoch += 1;
+  triggerTickRunning = false;
   for (const watcher of watchers.values()) {
     try {
-      watcher.watcher.close();
+      watcher.unsubscribe();
     } catch {
-      /* fs.watch close is best-effort */
+      /* unsubscribe is best-effort */
     }
   }
   watchers.clear();
   itemSlots.clear();
+  collectionSlots.clear();
   discoveryOpts = {};
   started = false;
 }
 
 /** Test-only: manually trigger one rediscovery + reconcile pass. */
-export async function _syncWatchersForTesting(): Promise<void> {
-  await syncWatchers();
+export async function _syncWatchersForTesting(): Promise<boolean> {
+  return syncWatchers();
 }
 
 /** Test-only: drive one wall-clock tick synchronously, with an optional
@@ -171,8 +250,13 @@ async function tickTimeTriggers(now: Date = evalNow()): Promise<void> {
       log().warn("trigger tick: bad cached schema", { slug: entry.slug, error: errMsg(err) });
       continue;
     }
+    // dataSource is NOT excluded. Its rows are read-only, but `triggerField`
+    // is not among the keys zod forbids on it, and a trigger date fires from
+    // the CLOCK — the one state change that arrives without the file moving.
+    // Skipping it here left CSV rows that were pending-but-not-yet-due unable
+    // to ever bell unless the file happened to be rewritten.
     if (!schema.triggerField && !schema.spawn) continue;
-    await reconcileAllItems(entry.slug, schema, entry.dataDir, discoveryOpts, now);
+    await reconcileAllItems(entry.collection, discoveryOpts, now);
   }
 }
 
@@ -181,21 +265,21 @@ async function tickTimeTriggers(now: Date = evalNow()): Promise<void> {
  *  their items), drops watchers for vanished slugs, and re-reconciles
  *  items for collections whose schema changed. Runs a final sweep when
  *  this tick changed the watcher set or any schema. */
-async function syncWatchers(): Promise<void> {
+async function syncWatchers(): Promise<boolean> {
   let collections;
   try {
     collections = await discoverCollections(discoveryOpts);
   } catch (err) {
     log().warn("watcher discover failed", { error: errMsg(err) });
-    return;
+    return false;
   }
   const liveSlugs = new Set(collections.map((collection) => collection.slug));
   const vanishedMutated = stopVanishedWatchers(liveSlugs);
   const schemaMutated = await reconcileChangedSchemas(collections);
   const addedMutated = await startNewWatchers(collections);
-  if (vanishedMutated || schemaMutated || addedMutated) {
-    await sweepStaleActiveEntries(discoveryOpts);
-  }
+  if (!vanishedMutated && !schemaMutated && !addedMutated) return false;
+  await sweepStaleActiveEntries(discoveryOpts);
+  return true;
 }
 
 function stopVanishedWatchers(liveSlugs: Set<string>): boolean {
@@ -205,7 +289,7 @@ function stopVanishedWatchers(liveSlugs: Set<string>): boolean {
     const watcher = watchers.get(slug);
     if (watcher) {
       try {
-        watcher.watcher.close();
+        watcher.unsubscribe();
       } catch {
         /* best-effort */
       }
@@ -217,6 +301,20 @@ function stopVanishedWatchers(liveSlugs: Set<string>): boolean {
   return mutated;
 }
 
+/** True when a schema edit moved the collection's storage — a different
+ *  `dataSource.path`, a different `dataPath`, or a flip between the two
+ *  modes. The mounted fs.watch is bound to the OLD location, so it must
+ *  be remounted, not just re-reconciled. */
+function storagePathChanged(previousJson: string, next: LoadedCollection["schema"]): boolean {
+  let previous: LoadedCollection["schema"];
+  try {
+    previous = JSON.parse(previousJson) as LoadedCollection["schema"];
+  } catch {
+    return true; // unreadable cache — remount to be safe
+  }
+  return previous.dataSource?.path !== next.dataSource?.path || previous.dataPath !== next.dataPath || previous.storage?.path !== next.storage?.path;
+}
+
 /** Re-reconcile already-watched collections whose schema changed since
  *  the last tick. New collections fall through to `startNewWatchers`. */
 async function reconcileChangedSchemas(collections: readonly LoadedCollection[]): Promise<boolean> {
@@ -226,67 +324,182 @@ async function reconcileChangedSchemas(collections: readonly LoadedCollection[])
     if (!existing) continue;
     const nextJson = JSON.stringify(collection.schema);
     if (existing.schemaJson === nextJson) continue;
+    if (storagePathChanged(existing.schemaJson, collection.schema)) {
+      // Drop the stale mount; `startNewWatchers` (which runs right after
+      // this pass in syncWatchers) remounts on the new location. A
+      // dataSource collection also gets a change ping so open views
+      // refetch against the new file immediately.
+      log().info("watcher storage path changed, remounting", { slug: collection.slug });
+      try {
+        existing.unsubscribe();
+      } catch {
+        /* best-effort */
+      }
+      watchers.delete(collection.slug);
+      if (collection.schema.dataSource !== undefined) publishCollectionChange({ slug: collection.slug, op: "upsert" });
+      mutated = true;
+      continue;
+    }
     existing.schemaJson = nextJson;
+    existing.collection = collection;
     log().info("watcher schema changed, re-reconciling", { slug: collection.slug });
-    await reconcileAllItems(collection.slug, collection.schema, collection.dataDir, discoveryOpts);
+    // Completion rules live in the SCHEMA, so a schema-only edit can change
+    // which items are pending without any record changing. This runs for
+    // every backend including dataSource: those rows are read-only, but the
+    // rules applied to them are not. Re-deriving no-ops unless the schema
+    // declares `completionField`; a completionField that was REMOVED is the
+    // sweep's job, which `mutated` schedules at the end of the tick.
+    await reconcileAllItems(collection, discoveryOpts);
+    if (collection.schema.dataSource !== undefined) {
+      // Read-only rows can't have changed, but a schema edit changes what the
+      // views render (fields, displayField, …), so ping them.
+      publishCollectionChange({ slug: collection.slug, op: "upsert" });
+    }
     mutated = true;
   }
   return mutated;
 }
 
+/** Mount a watcher for every collection that doesn't have one yet. Returns
+ *  whether the watcher SET actually changed — the starters report whether
+ *  they mounted, because ATTEMPTING is not mounting. A start that throws
+ *  (logged and swallowed inside the starter) leaves `watchers` untouched, so
+ *  the collection is retried next tick; counting that as a mutation made
+ *  `syncWatchers` sweep on every tick for as long as the failure persisted. */
 async function startNewWatchers(collections: readonly LoadedCollection[]): Promise<boolean> {
   let mutated = false;
   for (const collection of collections) {
     if (watchers.has(collection.slug)) continue;
-    await startWatcherFor(collection.slug, collection.schema, collection.dataDir);
-    mutated = true;
+    if (await startWatcherFor(collection)) mutated = true;
   }
   return mutated;
 }
 
-async function startWatcherFor(slug: string, schema: CollectionSchema, dataDir: string): Promise<void> {
+/** Mount one collection's change subscription, whatever its backend.
+ *
+ *  The store decides how to detect a change and at what granularity; this
+ *  decides what to do about one. That split is the point: adding a backend
+ *  means implementing `watch` on its store, not another branch here.
+ *
+ *  A store without `watch` cannot report external changes at all — it is
+ *  still registered (so bells reconcile at boot and on the clock tick), just
+ *  without live updates. */
+async function startWatcherFor(collection: LoadedCollection): Promise<boolean> {
+  const { slug } = collection;
   try {
-    // `fs.watch` throws on a missing dir, so ensure it exists. New
-    // collections legitimately start with no records — mkdir is the
-    // canonical first-use bootstrap.
-    await mkdir(dataDir, { recursive: true });
-    // Boot reconcile this collection's existing items BEFORE mounting the
-    // watcher: a pending item the user added during downtime needs its
-    // bell entry even if no event fires today.
-    await reconcileAllItems(slug, schema, dataDir, discoveryOpts);
-    const watcher = watch(dataDir, { persistent: false }, (_eventType, filename) => {
-      // Errors from inside the callback would propagate as unhandled
-      // rejections — wrap so a single bad event can't unwind the watcher.
-      onEvent(slug, filename).catch((err: unknown) => {
-        log().warn("watcher event failed", { slug, filename, error: errMsg(err) });
-      });
-    });
-    watcher.on("error", (err) => {
-      log().warn("watcher error", { slug, error: errMsg(err) });
-    });
-    watchers.set(slug, { slug, dataDir, watcher, schemaJson: JSON.stringify(schema) });
-    log().info("watcher started", { slug, dataDir });
+    // Boot reconcile BEFORE subscribing: an item that went pending while the
+    // server was down needs its bell even if no event ever fires.
+    await reconcileAllItems(collection, discoveryOpts);
+    const store = storeFor(collection, discoveryOpts);
+    const unsubscribe = store.watch
+      ? await store.watch((change) => {
+          void handleStoreChange(slug, change).catch((err: unknown) => {
+            log().warn("store change handling failed", { slug, error: errMsg(err) });
+          });
+        })
+      : () => {};
+    // `null` means the backend HAS a watch but could not arm it this time.
+    // Registering anyway would mark the slug mounted forever: `startNewWatchers`
+    // skips slugs already in `watchers`, so nothing would re-arm it and the
+    // collection would serve stale data until a restart. Leave it out and the
+    // next sync tick retries — the boot reconcile above is idempotent.
+    if (unsubscribe === null) {
+      log().warn("collection watcher could not arm, retrying next sync", { slug });
+      return false;
+    }
+    watchers.set(slug, { slug, dataDir: collection.dataDir, unsubscribe, schemaJson: JSON.stringify(collection.schema), collection });
+    log().info("collection watcher started", { slug, live: store.watch !== undefined });
+    return true;
   } catch (err) {
-    log().warn("watcher start failed", { slug, error: errMsg(err) });
+    log().warn("collection watcher start failed", { slug, error: errMsg(err) });
+    return false;
   }
 }
 
-/** Test-only: the per-key single-flight scheduler. Exported so test code
- *  can drive rapid-fire calls directly and observe the trailing coalesce
- *  — `fs.watch` event timing is too flaky to assert against.
+/** React to one reported change. Backend-agnostic by construction — it sees
+ *  only the granularity the store reported.
  *
- *  Single-flight semantics: while a reconcile is in flight for a given
- *  (slug, itemId), additional events on the same key set `pending = true`
- *  and return — the running reconcile re-runs once after it completes.
- *  This collapses fs.watch's rapid-fire bursts (atomic rename surfaces as
- *  2-3 events) into a single reconcile + one trailing re-run. */
-export function _scheduleItemReconcileForTesting(slug: string, schema: CollectionSchema, dataDir: string, itemId: string): Promise<void> {
-  return scheduleItemReconcile(slug, schema, dataDir, itemId);
+ *  `item`: reconcile just that record, then publish it. `collection`: the
+ *  store couldn't say which record, so re-derive everything and pair it with
+ *  a sweep — a record deleted remotely leaves a bell that a walk over the
+ *  SURVIVING records can never clear. */
+async function handleStoreChange(slug: string, change: StoreChange): Promise<void> {
+  if (change.kind === "collection") {
+    await scheduleCollectionReconcile(slug);
+    return;
+  }
+  // Resolve the collection at EVENT time, not at mount time. A schema-only
+  // edit (one that leaves the storage location alone, so nothing remounts)
+  // refreshes `watchers`' entry in place — a callback closed over the mount-
+  // time snapshot would keep reconciling against the old `completionField` /
+  // `notifyWhen` / `triggerField` and undo what the schema-change pass had
+  // just converged on.
+  const current = watchers.get(slug)?.collection;
+  if (!current) return; // unmounted between the event and now
+  await scheduleItemReconcile(current, change.itemId);
 }
 
-function scheduleItemReconcile(slug: string, schema: CollectionSchema, dataDir: string, itemId: string): Promise<void> {
-  const key = `${slug}\x00${itemId}`;
-  const existing = itemSlots.get(key);
+/** Full re-derivation for a collection-granularity change, single-flighted
+ *  per slug so a burst of writes collapses into one pass plus one trailing
+ *  re-run. */
+function scheduleCollectionReconcile(slug: string): Promise<void> {
+  return runSingleFlight(
+    collectionSlots,
+    slug,
+    async () => {
+      const collection = await loadCollection(slug, discoveryOpts);
+      if (!collection) return;
+      await reconcileAllItems(collection, discoveryOpts);
+      // A record deleted underneath us leaves a bell that a walk over the
+      // SURVIVING records can never clear — the sweep is the other half.
+      await sweepStaleActiveEntries(discoveryOpts);
+    },
+    // Publish from `onSettled`, i.e. even when the pass above threw: the
+    // data changed regardless of whether we managed to re-derive bells from
+    // it, and a missed event leaves every open view silently stale. The slot
+    // is the coalescing unit, so one burst still yields one publish.
+    () => {
+      safePublish({ slug, op: "upsert" });
+      return Promise.resolve();
+    },
+  );
+}
+
+/** Test-only: feed one store-reported change through the same path a live
+ *  subscription uses, so a test can pin how a change is reacted to without
+ *  depending on fs.watch timing. */
+export function _handleStoreChangeForTesting(slug: string, change: StoreChange): Promise<void> {
+  return handleStoreChange(slug, change);
+}
+
+/** Test-only: drive one collection-granularity reconcile directly. */
+export function _scheduleCollectionReconcileForTesting(slug: string): Promise<void> {
+  return scheduleCollectionReconcile(slug);
+}
+
+export function _scheduleItemReconcileForTesting(collection: LoadedCollection, itemId: string): Promise<void> {
+  return scheduleItemReconcile(collection, itemId);
+}
+
+function scheduleItemReconcile(collection: LoadedCollection, itemId: string): Promise<void> {
+  return runSingleFlight(
+    itemSlots,
+    `${collection.slug}\x00${itemId}`,
+    () => reconcileItem(collection, itemId, discoveryOpts),
+    () => publishItemChange(collection, itemId),
+  );
+}
+
+/** The shared single-flight loop behind both schedulers. Re-runs `pass`
+ *  while events keep arriving — the trailing re-run captures any state
+ *  change that landed during a prior pass. After each pass we read
+ *  `pending` and zero it before the next iteration, so an event that
+ *  fires *during* the last pass's await still triggers one more pass
+ *  before the slot is freed. `onSettled`, if given, runs once in the
+ *  `finally` after the slot is freed — the item scheduler uses it to
+ *  publish exactly one live-refresh event per burst. */
+function runSingleFlight(slots: Map<string, ReconcileSlot>, key: string, pass: () => Promise<void>, onSettled?: () => Promise<void>): Promise<void> {
+  const existing = slots.get(key);
   if (existing) {
     existing.pending = true;
     return existing.running;
@@ -294,47 +507,50 @@ function scheduleItemReconcile(slug: string, schema: CollectionSchema, dataDir: 
   const slot: ReconcileSlot = { running: Promise.resolve(), pending: false };
   slot.running = (async () => {
     try {
-      // Re-run while events keep arriving — the trailing re-run captures
-      // any state change that landed during a prior pass. After each pass
-      // we read `pending` and zero it before the next iteration, so an
-      // event that fires *during* the last reconcile's await still
-      // triggers one more pass before the slot is freed.
       let keepGoing = true;
       while (keepGoing) {
         slot.pending = false;
-        await reconcileItem(slug, schema, dataDir, itemId, discoveryOpts);
+        await pass();
         keepGoing = slot.pending;
       }
     } finally {
-      itemSlots.delete(key);
+      slots.delete(key);
+      // `onSettled` runs once after the slot is freed — the slot is the
+      // coalescing primitive, so one burst yields one call. It's in the
+      // `finally` because a failed reconcile still means a file changed,
+      // and open views must be told to refetch either way.
+      if (onSettled) await onSettled();
     }
   })();
-  itemSlots.set(key, slot);
+  slots.set(key, slot);
   return slot.running;
 }
 
-/** Handle a single fs.watch event. Re-loads the collection (schema may
- *  have changed since startup), filters out non-record files, and
- *  forwards to the single-flighted reconciler. `filename === null` (rare,
- *  platform-specific) triggers a full directory rescan to be safe. */
-async function onEvent(slug: string, filename: string | Buffer | null): Promise<void> {
-  const collection = await loadCollection(slug, discoveryOpts);
-  if (!collection) return;
-  if (filename === null) {
-    // Some platforms omit the filename on a watch event — we don't know
-    // which record changed. `reconcileAllItems` covers items whose file
-    // still exists; pair it with a sweep so any record deleted inside the
-    // same opaque event has its stale bell entry cleared too.
-    await reconcileAllItems(slug, collection.schema, collection.dataDir, discoveryOpts);
-    await sweepStaleActiveEntries(discoveryOpts);
-    return;
+/** Emit the live-refresh event for one record. `op` is derived from
+ *  whether the file is still there — `fs.watch` reports neither the kind
+ *  of change nor, reliably, which of `rename`/`change` means what. Only
+ *  file-backed collections reach here; a `storage` (db) collection has no
+ *  per-record file and publishes wholesale in `scheduleStorageReconcile`. */
+async function publishItemChange(collection: LoadedCollection, itemId: string): Promise<void> {
+  const changeOp = (await itemFileExists(collection.dataDir, itemId)) ? "upsert" : "delete";
+  safePublish({ slug: collection.slug, ids: [itemId], op: changeOp });
+}
+
+async function itemFileExists(dataDir: string, itemId: string): Promise<boolean> {
+  try {
+    await access(itemFilePath(dataDir, itemId));
+    return true;
+  } catch {
+    return false;
   }
-  const name = typeof filename === "string" ? filename : filename.toString("utf-8");
-  // Filter: only record files (`*.json`), skip dot-prefixed (atomic
-  // writes / OS metadata / editor swap files). The reconciler is
-  // idempotent so a stray non-record event would be harmless, but
-  // skipping early avoids needless I/O.
-  if (!name.endsWith(".json") || name.startsWith(".")) return;
-  const itemId = name.slice(0, -".json".length);
-  await scheduleItemReconcile(slug, collection.schema, collection.dataDir, itemId);
+}
+
+/** The publisher is host-supplied, so treat it as untrusted: a throw here
+ *  runs inside a `finally` and would mask the reconcile's own error. */
+function safePublish(payload: { slug: string; ids?: string[]; op?: "upsert" | "delete" }): void {
+  try {
+    publishCollectionChange(payload);
+  } catch (err) {
+    log().warn("collection change publish failed", { slug: payload.slug, error: errMsg(err) });
+  }
 }

@@ -100,6 +100,10 @@ const ptBRMessages = {
     intraBody:
       'Os plugins "{first}" e "{second}" registram o mesmo {dimension} "{key}". "{first}" o reivindicou primeiro, portanto o registro de "{second}" é ignorado.',
   },
+  shadowedEnv: {
+    title: "O shell está sobrepondo o .env",
+    body: "Definido tanto no shell quanto no .env: {keys}. O valor do shell prevalece, portanto o .env é ignorado. Se você editou o .env, atualize ou remova o valor do shell e reinicie.",
+  },
   optionalDeps: {
     // `title` genérico mantido para compatibilidade com entradas do
     // histórico persistidas antes da divisão por motivo; as novas
@@ -127,6 +131,11 @@ const ptBRMessages = {
     hideDetails: "Ocultar detalhes",
     retry: "Tentar novamente",
   },
+  remoteHostOffline: {
+    title: "Host remoto desconectado",
+    body: "Seu telefone não conseguirá enviar para este dispositivo até você reconectar.",
+    reconnect: "Reconectar",
+  },
   remoteHost: {
     title: "Host remoto",
     online: "Host remoto on-line",
@@ -147,6 +156,7 @@ const ptBRMessages = {
     qrHint: "Ou escaneie este código QR com a câmera do seu celular.",
   },
   sidebarHeader: {
+    newMessages: "Novas mensagens",
     home: "Ir para o chat mais recente",
     toolCallHistory: "Histórico de chamadas de ferramentas",
     settings: "Configurações",
@@ -194,6 +204,12 @@ const ptBRMessages = {
       "Mostra os diretórios raiz internos do agente (conversations/, feeds/ etc.) além do conteúdo do usuário (data/, artifacts/, config/).",
   },
   fileTree: {
+    dropHint: "Solte arquivos aqui para salvá-los nesta pasta",
+    upload: {
+      progress: "Enviando {done} de {total}…",
+      done: "{count} arquivo(s) salvo(s)",
+      failed: "Não foi possível salvar {count} arquivo(s)",
+    },
     workspace: "(workspace)",
     recentlyChanged: "Alterados recentemente",
     newFileMenuItem: "Novo arquivo",
@@ -241,6 +257,7 @@ const ptBRMessages = {
       refs: "Diretórios de referência",
       map: "Mapa",
       photos: "Fotos",
+      google: "Google",
       model: "Modelo",
       voice: "Voz",
       chatIndex: "Índice de chat",
@@ -248,6 +265,7 @@ const ptBRMessages = {
       notifications: "Web Push",
       skills: "Skills",
       roles: "Papéis",
+      quit: "Encerrar",
     },
     groups: {
       llm: "LLM",
@@ -256,8 +274,24 @@ const ptBRMessages = {
       notifications: "Notificações",
       plugins: "Plugins",
       management: "Gerenciamento",
+      server: "Servidor",
     },
     navAriaLabel: "Seções de configurações",
+    googleTab: {
+      description:
+        "Vincule sua conta do Google para que esta máquina possa chamar as APIs do Google (Calendar primeiro). O token de atualização fica salvo apenas nesta máquina e nunca é enviado a nenhum servidor além do Google.",
+      statusLinked: "Vinculada",
+      statusNotLinked: "Não vinculada",
+      statusPending: "Aguardando a conclusão do consentimento no navegador…",
+      connect: "Vincular conta do Google",
+      unlink: "Desvincular",
+      unlinkConfirm: "Desvincular a conta do Google? O token salvo será revogado e excluído desta máquina.",
+      clientSecretAmbiguous:
+        "Vários arquivos client_secret_*.json foram encontrados em ~/.secrets/. Mantenha apenas um para que o token salvo continue pareado com o cliente OAuth correto.",
+      loadError: "Falha ao carregar o estado da vinculação com o Google.",
+      connectError: "Falha ao iniciar o fluxo de autorização do Google.",
+      unlinkError: "Falha ao desvincular a conta do Google.",
+    },
     mapTab: {
       description: "Define a chave da API do Google Maps usada pelo plugin de mapa. A chave fica salva localmente e só é enviada para o Google Maps.",
       apiKeyLabel: "Chave API do Google Maps",
@@ -281,12 +315,32 @@ const ptBRMessages = {
       loadError: "Falha ao carregar as configurações",
       saveError: "Falha ao salvar",
     },
+    quitTab: {
+      description:
+        "Encerra o servidor do MulmoClaude em execução nesta máquina. Iniciado pelo ícone, ele continua rodando mesmo se você fechar esta aba — é assim que se encerra sem um terminal.",
+      // Message function form — skips vue-i18n's message compiler so the
+      // literal `@` in `mulmoclaude@latest` is not parsed as a linked-message
+      // reference (the compiler throws, and the whole tab renders as nothing).
+      restartHint: () => "Para iniciar de novo, dê um duplo clique no ícone do MulmoClaude (ou rode `npx mulmoclaude@latest`).",
+      quitLabel: "Encerrar o MulmoClaude",
+      confirmBody: "O servidor para e esta página deixa de funcionar. O que estiver em andamento é interrompido.",
+      confirmLabel: "Encerrar",
+      stopping: "Encerrando…",
+      stoppedTitle: "O MulmoClaude foi encerrado",
+      stoppedBody: "Você pode fechar esta aba. Dê um duplo clique no ícone para iniciar de novo.",
+      error: "Falha ao encerrar o servidor",
+    },
     notificationsTab: {
       description:
         "Receba uma notificação push nos seus dispositivos registrados quando uma tarefa que você iniciou aqui terminar — útil quando você pergunta algo, se afasta e quer saber assim que a resposta estiver pronta.",
       enableLabel: "Enviar um Web Push quando uma tarefa terminar",
       enableHint: "Dispara quando um chat que você iniciou aqui é concluído. Tarefas agendadas e em segundo plano não o acionam.",
       remoteHostNote: "Requer a conexão RemoteHost (que fornece o login) e pelo menos um dispositivo registrado. Se algum faltar, não faz nada.",
+      macosRemindersLabel: "Criar um lembrete do macOS quando uma tarefa terminar",
+      macosRemindersHint:
+        "Adiciona a tarefa concluída à sua lista padrão de Lembretes. A sincronização do iCloud espelha no seu iPhone, que é quem entrega a notificação.",
+      macosRemindersForcedOff:
+        "Desativado na inicialização por --disable-macos-reminders ou DISABLE_MACOS_REMINDER_NOTIFICATIONS. Remova a flag ou limpe a variável de ambiente e reinicie para controlar por aqui.",
       statusOn: "Web Push está ATIVADO",
       statusOff: "Web Push está DESATIVADO",
       loadError: "Falha ao carregar as configurações",
@@ -439,6 +493,12 @@ const ptBRMessages = {
     pin: "Fixar no iniciador",
     unpin: "Desafixar do iniciador",
     zoneAriaLabel: "Atalhos fixados",
+    reorder: {
+      open: "Reordenar atalhos",
+      title: "Reordenar",
+      moveUp: "Mover para cima",
+      moveDown: "Mover para baixo",
+    },
   },
   fileContentHeader: {
     showRendered: "Mostrar Markdown renderizado",
@@ -745,6 +805,12 @@ const ptBRMessages = {
     detailsToggle: "Mostrar detalhes",
     promptLabel: "Prompt",
     roleLabel: "Função",
+    confirmDelete: "Excluir a tarefa « {name} »? Esta ação não pode ser desfeita.",
+    hintNewsRss: "Busca de notícias / RSS",
+    hintJournal: "Passagem diária do diário",
+    hintWiki: "Manutenção do wiki",
+    hintMemory: "Extração de memória",
+    hintCalendar: "Sincronização de calendário / contatos",
   },
   pluginCanvas: {
     undo: "Desfazer",
@@ -753,6 +819,7 @@ const ptBRMessages = {
     styleLabel: "Estilo:",
     stylePromptWithPath: "Transforme a imagem em `{path}` em uma imagem no estilo {style}.",
     stylePromptNoPath: "Transforme meu desenho na tela em uma imagem no estilo {style}.",
+    saveFailed: "Não salvo",
   },
   pluginWiki: {
     backToIndex: "Voltar ao índice",
@@ -780,6 +847,7 @@ const ptBRMessages = {
     metadataEditor: "Editor",
     pageEditHeader: "Edição do wiki",
     snapshotExpired: "Snapshot expirado — exibindo a página atual",
+    snapshotLoadError: "Não foi possível carregar o snapshot — a página pode ainda existir. Tente atualizar.",
     pageDeleted: "Página excluída",
     history: {
       tabContent: "Conteúdo",
@@ -936,62 +1004,11 @@ const ptBRMessages = {
     errDeleteFailed: "Falha ao excluir",
     errNetworkError: "Erro de rede",
     errServerError: "Erro do servidor: {status}",
+    errRefreshFailed: "Salvo, mas não foi possível atualizar a lista.",
+    confirmDelete: "Excluir o papel « {name} »? Esta ação não pode ser desfeita.",
   },
   pluginUiImage: {
     promptLabel: "{label}:",
-  },
-  pluginMulmoScript: {
-    beatCount: "{count} beat | {count} beats",
-    movie: "Vídeo",
-    generating: "Gerando…",
-    rendering: "Renderizando…",
-    saving: "Salvando…",
-    update: "Atualizar",
-    characters: "Personagens",
-    drop: "Soltar",
-    gen: "Gerar",
-    play: "▶ Reproduzir",
-    stop: "■ Parar",
-    playPresentation: "Reproduzir apresentação",
-    regenerateMovie: "Regenerar vídeo",
-    movieGenerationFailed: "Falha ao gerar o vídeo",
-    pdf: "PDF",
-    regeneratePdf: "Regenerar PDF",
-    generatingPdf: "Gerando PDF…",
-    retry: "Tentar novamente",
-    errPrefix: "⚠ Erro",
-    noBeats: "Nenhum beat encontrado no script",
-    editSource: "Editar fonte do script",
-    applyChanges: "Aplicar alterações",
-    generateAll: "Gerar tudo",
-    orDropImage: "ou solte uma imagem",
-    generate: "Gerar",
-    generateAudio: "♪ Gerar",
-    saveErrorInvalidJson: "⚠ JSON inválido: {error}",
-    saveErrorSaveFailed: "⚠ Falha ao salvar: {error}",
-  },
-  pluginMarkdown: {
-    loading: "Carregando documento...",
-    loadFailed: "⚠ Falha ao carregar o documento: {error}",
-    refreshFailed: "⚠ Falha ao atualizar o documento: {error} — exibindo o último conteúdo carregado com sucesso.",
-    noContent: "Nenhum conteúdo Markdown disponível",
-    pdf: "PDF",
-    pdfFailedShort: "⚠ Falha no PDF",
-    editSource: "Editar fonte Markdown",
-    saving: "Salvando...",
-    applyChanges: "Aplicar alterações",
-    cancel: "Cancelar",
-    saveFailed: "Falha ao salvar: {error}",
-    saveError: "⚠ {error}",
-    copyLabel: "Copiar",
-    copiedLabel: "Copiado!",
-    taskCountMismatch: "O número de tarefas diverge entre a fonte Markdown e a saída renderizada. A alternância foi recusada para evitar corromper o arquivo.",
-    marpSlidesMode: "Slides Marp · {count}",
-    marpExportPdf: "Exportar PDF",
-    marpRenderFailed: "⚠ Falha ao renderizar os slides Marp: {error}",
-    marpSplitEnter: "Editar o código fonte ao lado da visualização",
-    marpSplitExit: "Fechar o editor de código",
-    marpSplitEditorLabel: "Código",
   },
   markdownMermaid: {
     loadFailed: "⚠ Falha ao carregar o Mermaid: {error}",
@@ -1003,6 +1020,9 @@ const ptBRMessages = {
     editContent: "Editar conteúdo de texto",
     applyChanges: "Aplicar alterações",
     copyLabel: "Copiar",
+    speakerSystem: "Sistema",
+    speakerUser: "Você",
+    speakerAssistant: "Assistente",
     copiedLabel: "Copiado!",
     cancel: "Cancelar",
     seededByPlugin: "de {pkg}",

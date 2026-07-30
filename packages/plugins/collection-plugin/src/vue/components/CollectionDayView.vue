@@ -188,7 +188,7 @@ function hourLabel(hour: number): string {
 const labelField = computed<string | null>(() => labelFieldFor(props.schema));
 
 // Field types with no compact inline representation for a chip subtitle.
-const CHIP_SKIP_TYPES = new Set<string>(["date", "datetime", "table", "embed", "image", "markdown"]);
+const CHIP_SKIP_TYPES = new Set<string>(["date", "datetime", "table", "embed", "backlinks", "rollup", "image", "markdown"]);
 const MAX_CHIP_FIELDS = 3;
 
 /** A few scalar field values to show under a chip's title — excludes the label

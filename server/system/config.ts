@@ -108,9 +108,59 @@ export interface AppSettings {
   // registered devices are notified. Only sends while the RemoteHost channel
   // is connected (that's what supplies the Firebase auth) — otherwise a no-op.
   pushEnabled?: boolean;
+
+  // macOS Reminders sink (#789), on by default on darwin. The CLI flag
+  // `--disable-macos-reminders` / `DISABLE_MACOS_REMINDER_NOTIFICATIONS=1`
+  // still wins, but an icon launch (#2613) passes neither, so for those
+  // users this setting is the only way to turn the sink off (#2617).
+  macosRemindersEnabled?: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = { extraAllowedTools: [] };
+
+// `AppSettings` is an interface, so its keys don't exist at runtime — but two
+// consumers need them: the bug-report FAQ's `configKey:` pointers are verified
+// against this list in CI, and the diagnostics report decides what it may print
+// from it. The two `satisfies` below make the compiler reject a drifted list:
+// a new field in `AppSettings` that isn't added here fails to build.
+export const APP_SETTINGS_KEYS = [
+  "extraAllowedTools",
+  "googleMapsApiKey",
+  "photoExif",
+  "effortLevel",
+  "voiceInput",
+  "chatIndex",
+  "journal",
+  "pushEnabled",
+  "macosRemindersEnabled",
+] as const satisfies readonly (keyof AppSettings)[];
+
+export type AppSettingsKey = (typeof APP_SETTINGS_KEYS)[number];
+
+// Keys the diagnostics report may print VERBATIM. Deliberately an allow list:
+// a setting added later is redacted until someone judges it safe, so the
+// default on drift is "withhold" rather than "leak". `googleMapsApiKey` is the
+// one secret stored in plaintext today and is absent by construction.
+export const SAFE_SETTINGS_KEYS = [
+  "extraAllowedTools",
+  "photoExif",
+  "effortLevel",
+  "voiceInput",
+  "chatIndex",
+  "journal",
+  "pushEnabled",
+  "macosRemindersEnabled",
+] as const satisfies readonly AppSettingsKey[];
+
+export type SafeSettingsKey = (typeof SAFE_SETTINGS_KEYS)[number];
+
+// `satisfies` above catches a typo'd or removed key, but not a MISSING one —
+// a field added to `AppSettings` and forgotten here would still compile, and
+// would then be invisible to both the FAQ check and the redactor. This turns
+// that omission into a build error: the `extends never` bound only holds while
+// nothing is left over.
+type AssertNoUncovered<T extends never> = T;
+export type UncoveredAppSettingsKey = AssertNoUncovered<Exclude<keyof AppSettings, AppSettingsKey>>;
 
 export const SETTINGS_FILE_NAME = "settings.json";
 export const MCP_FILE_NAME = "mcp.json";
@@ -157,6 +207,8 @@ function isVoiceInputSettings(value: unknown): value is { enabled: boolean; mode
 // Optional fields: each is either absent or must match its type. Split out of
 // isAppSettings so that function stays under the cognitive-complexity ceiling
 // as new optional settings land.
+const isOptionalBoolean = (value: unknown): boolean => value === undefined || typeof value === "boolean";
+
 function hasValidOptionalAppSettings(value: Record<string, unknown>): boolean {
   if (value.googleMapsApiKey !== undefined && typeof value.googleMapsApiKey !== "string") return false;
   if (value.photoExif !== undefined && !isPhotoExifSettings(value.photoExif)) return false;
@@ -164,7 +216,8 @@ function hasValidOptionalAppSettings(value: Record<string, unknown>): boolean {
   if (value.voiceInput !== undefined && !isVoiceInputSettings(value.voiceInput)) return false;
   if (value.chatIndex !== undefined && !isChatIndexMode(value.chatIndex)) return false;
   if (value.journal !== undefined && !isJournalMode(value.journal)) return false;
-  if (value.pushEnabled !== undefined && typeof value.pushEnabled !== "boolean") return false;
+  if (!isOptionalBoolean(value.pushEnabled)) return false;
+  if (!isOptionalBoolean(value.macosRemindersEnabled)) return false;
   return true;
 }
 
@@ -232,7 +285,8 @@ export function isAppSettingsPatch(value: unknown): value is AppSettingsPatch {
   if (value.voiceInput !== undefined && !isVoiceInputSettings(value.voiceInput)) return false;
   if (!isOptionalNullableChatIndexMode(value.chatIndex)) return false;
   if (!isOptionalNullableJournalMode(value.journal)) return false;
-  if (value.pushEnabled !== undefined && typeof value.pushEnabled !== "boolean") return false;
+  if (!isOptionalBoolean(value.pushEnabled)) return false;
+  if (!isOptionalBoolean(value.macosRemindersEnabled)) return false;
   return true;
 }
 
@@ -275,6 +329,9 @@ function cloneAppSettings(settings: AppSettings): AppSettings {
   if (settings.pushEnabled !== undefined) {
     copy.pushEnabled = settings.pushEnabled;
   }
+  if (settings.macosRemindersEnabled !== undefined) {
+    copy.macosRemindersEnabled = settings.macosRemindersEnabled;
+  }
   return copy;
 }
 
@@ -306,6 +363,13 @@ export function isPhotoExifAutoCaptureEnabled(settings: AppSettings): boolean {
  *  Settings UI stay aligned. */
 export function isPushEnabled(settings: AppSettings): boolean {
   return settings.pushEnabled ?? false;
+}
+
+/** macOS Reminders sink flag with the documented default of `true`.
+ *  It shipped enabled (#789), so a settings file written before this
+ *  field existed must keep firing reminders. */
+export function isMacosRemindersEnabled(settings: AppSettings): boolean {
+  return settings.macosRemindersEnabled ?? true;
 }
 
 export function loadSettings(): AppSettings {
@@ -358,6 +422,9 @@ export function saveSettings(settings: AppSettings): void {
   }
   if (settings.pushEnabled !== undefined) {
     payload.pushEnabled = settings.pushEnabled;
+  }
+  if (settings.macosRemindersEnabled !== undefined) {
+    payload.macosRemindersEnabled = settings.macosRemindersEnabled;
   }
   const serialised = JSON.stringify(payload, null, 2);
   writeFileAtomicSync(settingsPath(), `${serialised}\n`, { mode: 0o600 });

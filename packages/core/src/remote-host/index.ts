@@ -20,6 +20,40 @@ import { CollectionReference, DocumentData, DocumentReference, Firestore, collec
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = Record<string, JsonValue>;
 
+/** Structural JSON view of `T`, recursively.
+ *
+ *  TypeScript gives an implicit index signature to type aliases and mapped
+ *  types but NOT to interfaces, so a payload assembled from domain interfaces
+ *  (`Shortcut`, `FeedSummary`, …) cannot satisfy `Record<string, JsonValue>`
+ *  structurally — even though it is plain JSON at runtime. Mapping over `T`
+ *  reconstructs it as an anonymous type, which does get that index signature.
+ *
+ *  Recursive on purpose: a top-level-only map would still leave nested
+ *  interfaces (`{ shortcuts: Shortcut[] }`) unassignable, which is the case
+ *  every handler here actually has. */
+// The function branch must come BEFORE the object branch: a function IS an
+// object to TypeScript, so without it a function maps to `{}` and sails
+// through — the helper would accept a payload that serialises to nothing.
+// Verified: `toJsonObject({ callback: () => undefined })` compiled clean until
+// this branch existed (CodeRabbit, #2596).
+export type Jsonify<T> = T extends JsonValue
+  ? T
+  : T extends (...args: never[]) => unknown
+    ? never
+    : T extends (infer U)[]
+      ? Jsonify<U>[]
+      : T extends object
+        ? { [K in keyof T]: Jsonify<T[K]> }
+        : never;
+
+/** Widen a JSON-shaped handler payload to the channel's `JsonObject`.
+ *
+ *  Exists so the `Jsonify` reasoning above lives in ONE place. Before this,
+ *  eight remote-host handlers each carried their own `as unknown as JsonObject`
+ *  with the justification re-argued in eight slightly different comments —
+ *  which is how a rule stops being reviewable. */
+export const toJsonObject = <T extends object>(payload: Jsonify<T>): JsonObject => payload as JsonObject;
+
 // A channel routes commands to one specific host. Both sides agree on a
 // hardcoded hostId per use case (e.g. "mulmoclaude", "mulmoterminal"); there is
 // no discovery — the remote and host just share the id.
@@ -50,7 +84,7 @@ export interface Command {
   // NUMBERS set by the remote at enqueue time — deliberately plain numbers, not
   // Firestore Timestamps, so `isExpired` / `byCreatedAt` stay pure + browser-safe
   // and unit-testable without a Firestore fake. Clock skew over a multi-day expiry
-  // window is immaterial. See plans/feat-remote-offline-queue.md.
+  // window is immaterial. See plans/done/feat-remote-offline-queue.md.
   createdAt?: number; // enqueue time — age/display + best-effort dispatch bias (NOT a strict order guarantee; chat is async)
   expiresAt?: number; // deadline; past it the host deletes the command + its staged attachments
   queuedOffline?: boolean; // emitted while the host was offline (gates the remote's attachment rollback)
@@ -113,3 +147,8 @@ export const commandsCollection = (firestore: Firestore, channel: Channel): Coll
 // { online, updatedAt } here; the remote reads it to know if the host is up.
 export const hostDoc = (firestore: Firestore, channel: Channel): DocumentReference<DocumentData> =>
   doc(firestore, "users", channel.uid, "hosts", channel.hostId);
+
+// Channel health as the resilient runner reports it. Browser-safe alongside the
+// wire types because the control that renders it runs in the client.
+export { RUNNER_HEALTH_STATES, isRunnerHealth, isRunnerHealthState } from "./health.js";
+export type { RunnerHealth, RunnerHealthState } from "./health.js";

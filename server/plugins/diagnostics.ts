@@ -123,12 +123,6 @@ export function collectPluginMetaDiagnostics(): readonly PluginMetaDiagnostic[] 
   return cachedDiagnostics;
 }
 
-/** Reset the cache. Test-only — production code calls
- *  `collectPluginMetaDiagnostics()` once at boot. */
-export function resetPluginMetaDiagnosticsCacheForTest(): void {
-  cachedDiagnostics = null;
-}
-
 /** Run at server boot after the notifier engine is initialized.
  *  Logs every diagnostic via `log.warn` and publishes one notification
  *  per item so the bell shows them. Dedupes against the engine's

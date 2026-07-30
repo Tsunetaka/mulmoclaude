@@ -4,7 +4,7 @@
 // function of its arguments. The composable imports these and calls them
 // from inside its computed/watch closures; behaviour is identical.
 
-import { deriveAll } from "@mulmoclaude/core/collection";
+import { deriveAll, fieldText } from "@mulmoclaude/core/collection";
 import type {
   CollectionDetailResponse,
   CollectionItem,
@@ -45,8 +45,8 @@ export function isExternalUrl(value: unknown): boolean {
 }
 
 export function detailText(value: unknown): string {
-  if (value === undefined || value === null || value === "") return EM_DASH;
-  return String(value);
+  const text = fieldText(value, EM_DASH);
+  return text === "" ? EM_DASH : text;
 }
 
 export function formatCell(value: unknown, type: FieldType): string {
@@ -60,8 +60,11 @@ export function formatCell(value: unknown, type: FieldType): string {
 
 /** Resolve the ISO 4217 code for a money field: a per-record
  *  `currencyField` (when present and non-blank) wins over the field's
- *  literal `currency`. */
+ *  literal `currency`. Only `money` / `derived` variants carry currency
+ *  keys; any other field resolves to undefined (the formatter's USD
+ *  fallback), as before. */
 export function resolveCurrency(field: FieldSpec, record: CollectionItem | null | undefined): string | undefined {
+  if (field.type !== "money" && field.type !== "derived") return undefined;
   if (field.currencyField && record) {
     const code = record[field.currencyField];
     if (typeof code === "string" && code.trim().length > 0) return code;
@@ -72,7 +75,7 @@ export function resolveCurrency(field: FieldSpec, record: CollectionItem | null 
 export function formatMoney(value: unknown, currency: string | undefined, displayLocale: string): string {
   if (value === undefined || value === "") return EM_DASH;
   const amount = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(amount)) return String(value);
+  if (!Number.isFinite(amount)) return fieldText(value, EM_DASH);
   const currencyCode = currency && currency.length > 0 ? currency : DEFAULT_CURRENCY;
   try {
     return new Intl.NumberFormat(displayLocale, { style: "currency", currency: currencyCode }).format(amount);
@@ -108,30 +111,6 @@ export function displayFieldFor(fields: Record<string, FieldSpec>, primaryKey: s
   return primaryKey;
 }
 
-export function uniqueRefTargets(schema: CollectionSchema): string[] {
-  const targets = new Set<string>();
-  const walk = (fields: Record<string, FieldSpec>): void => {
-    for (const field of Object.values(fields)) {
-      if (field.type === "ref" && typeof field.to === "string" && field.to.length > 0) targets.add(field.to);
-      // Sub-fields of a table can also be refs; walk one level deep
-      // (nested tables are schema-rejected, so one recursion suffices).
-      if (field.type === "table" && field.of) walk(field.of);
-    }
-  };
-  walk(schema.fields);
-  return [...targets];
-}
-
-export function uniqueEmbedTargets(schema: CollectionSchema): string[] {
-  const targets = new Set<string>();
-  // Embeds are top-level only (the schema rejects `embed` inside a
-  // table's `of`), so no recursion.
-  for (const field of Object.values(schema.fields)) {
-    if (field.type === "embed" && typeof field.to === "string" && field.to.length > 0) targets.add(field.to);
-  }
-  return [...targets];
-}
-
 export function buildRefDisplayMap(detail: CollectionDetailResponse): RefDisplayMap {
   const { fields, primaryKey } = detail.collection.schema;
   const displayField = displayFieldFor(fields, primaryKey);
@@ -145,14 +124,23 @@ export function buildRefDisplayMap(detail: CollectionDetailResponse): RefDisplay
   return map;
 }
 
-export function buildRefRecordMap(detail: CollectionDetailResponse): RefRecordMap {
-  const { schema } = detail.collection;
+/** Index DERIVED records by primary key — the client mirror of the
+ *  server's `loadTarget` indexing: string non-empty ids only, one record
+ *  per id (a duplicate keeps the LAST record in its FIRST position —
+ *  plain-object key semantics). Shared by the ref-record cache and the
+ *  backlinks view so every client consumer agrees with server enrichment
+ *  on which source records exist. */
+export function derivedRecordsById(schema: CollectionSchema, items: CollectionItem[]): RefRecordMap {
   const map: RefRecordMap = {};
-  for (const item of detail.items) {
+  for (const item of items) {
     const slugRaw = item[schema.primaryKey];
     if (typeof slugRaw === "string" && slugRaw.length > 0) map[slugRaw] = deriveAll(schema, item, {});
   }
   return map;
+}
+
+export function buildRefRecordMap(detail: CollectionDetailResponse): RefRecordMap {
+  return derivedRecordsById(detail.collection.schema, detail.items);
 }
 
 export function sortedRefOptions(map: RefDisplayMap): RefOption[] {
@@ -169,7 +157,7 @@ export function buildEmbedOptions(schema: CollectionSchema, items: CollectionIte
   const displayField = displayFieldFor(fields, primaryKey);
   return items
     .map((item) => {
-      const slug = String(item[primaryKey] ?? "");
+      const slug = fieldText(item[primaryKey]);
       const labelRaw = item[displayField];
       const display = typeof labelRaw === "string" && labelRaw.length > 0 ? labelRaw : slug;
       return { slug, display };

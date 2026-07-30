@@ -40,11 +40,12 @@ describe("loadPresetPlugins", () => {
   });
 
   // Locks the publish boundary so a future entry doesn't accidentally
-  // end up classified on the wrong side. spotify is the only entry
-  // intended for npm publish; everything else stays dev-only until
-  // its mc-* skill replacement settles or distribution is decided.
-  it("publish boundary: exactly spotify is non-devOnly", () => {
+  // end up classified on the wrong side. spotify and google are the
+  // entries intended for npm publish (both ship in the launcher's
+  // dependencies); everything else stays dev-only until its mc-* skill
+  // replacement settles or distribution is decided.
+  it("publish boundary: exactly spotify and google are non-devOnly", () => {
     const nonDevOnly = PRESET_PLUGINS.filter((entry) => !entry.devOnly).map((entry) => entry.packageName);
-    assert.deepEqual(nonDevOnly.sort(), ["@mulmoclaude/spotify-plugin"]);
+    assert.deepEqual(nonDevOnly.sort(), ["@mulmoclaude/google-plugin", "@mulmoclaude/spotify-plugin"]);
   });
 });

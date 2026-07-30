@@ -21,7 +21,7 @@ const collectionDeps = (all: { id: string }[]): GetCollectionDeps => ({
           dataDir: `/d/${slug}`,
           schema: { primaryKey: "id", fields: { id: { type: "string" }, won: { type: "number" }, points: { type: "derived", formula: "won * 3" } } },
         }) as unknown as GetCollectionDeps["loadCollection"],
-  listItems: (async () => all) as unknown as GetCollectionDeps["listItems"],
+  listRecords: (async () => all) as unknown as GetCollectionDeps["listRecords"],
   toDetail: ((collection: { slug: string; schema: unknown }) => ({
     slug: collection.slug,
     title: collection.slug,
@@ -74,7 +74,7 @@ describe("createGetCollection", () => {
 describe("createGetFeed", () => {
   const feedDeps = (all: { id: string }[]): GetFeedDeps => ({
     listFeeds: (async () => [{ slug: "news", dataDir: "/f/news", schema: {} }]) as unknown as GetFeedDeps["listFeeds"],
-    listItems: (async () => all) as unknown as GetFeedDeps["listItems"],
+    listRecords: (async () => all) as unknown as GetFeedDeps["listRecords"],
     toDetail: ((feed: { slug: string }) => ({
       slug: feed.slug,
       title: feed.slug,

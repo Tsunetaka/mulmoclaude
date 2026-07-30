@@ -20,10 +20,14 @@
 // never drifts (it clamps per-month at compute time, not stored
 // clamped). See `advanceTriggerDate`.
 
+import { fieldTextOrNull } from "../core/fieldText";
 import { log } from "./host";
 import { errorMessage, ONE_DAY_MS } from "./util";
-import { writeItem, type IoOptions } from "./io";
+import type { IoOptions } from "./io";
+import { storeFor } from "./store";
+import type { LoadedCollection } from "./discoveredCollection";
 import { isFieldDrivenEvery } from "../core/schema";
+import { itemIsDone } from "../core/completion";
 import type { CollectionEvery, CollectionItem, CollectionSchema, CollectionSpawnEvery, CollectionWhen } from "../core/schema";
 
 /** A timezone-free calendar date. `m` is 1-12. */
@@ -127,17 +131,16 @@ export function successorId(sourceId: string, next: CivilDate): string {
 
 /** True iff `item` satisfies the spawn predicate. With an explicit
  *  `when`, matches `String(item[when.field]) ∈ when.in`. Without one,
- *  defaults to the completion-done condition. Self-contained (no import
- *  from notifications.ts) to keep the module graph acyclic. */
+ *  defaults to the completion-done condition — the shared, flag-aware
+ *  `itemIsDone` (core/completion; downhill import, so the module graph
+ *  stays acyclic). */
 function matchesWhen(when: CollectionWhen | undefined, schema: CollectionSchema, item: CollectionItem): boolean {
   if (when) {
     const raw = item[when.field];
-    return raw !== undefined && raw !== null && when.in.includes(String(raw));
+    const text = fieldTextOrNull(raw);
+    return text !== null && when.in.includes(text);
   }
-  const { completionField, completionDoneValues } = schema;
-  if (!completionField || !completionDoneValues) return false;
-  const raw = item[completionField];
-  return raw !== undefined && raw !== null && completionDoneValues.includes(String(raw));
+  return itemIsDone(schema, item);
 }
 
 /** Resolve the literal `every` that applies to `sourceItem`. Literal-arm
@@ -150,7 +153,15 @@ export function resolveEvery(every: CollectionSpawnEvery, sourceItem: Collection
   if (!isFieldDrivenEvery(every)) return every;
   const raw = sourceItem[every.fromField];
   if (raw === undefined || raw === null || raw === "") return null;
-  return every.map[String(raw)] ?? null;
+  const key = fieldTextOrNull(raw);
+  // Own-property lookup, not a bare index: a record whose driver field reads
+  // `constructor` / `toString` would otherwise resolve to an `Object.prototype`
+  // member. `?? null` cannot catch that — a function is not undefined — so the
+  // interval would flow into `advanceTriggerDate` and produce a NaN successor
+  // date. Matches the own-property check `schemaRules` already uses on the same
+  // map at validation time.
+  if (key === null || !Object.hasOwn(every.map, key)) return null;
+  return every.map[key] ?? null;
 }
 
 export interface ComputedSuccessor {
@@ -203,14 +214,8 @@ function logSpawnSkip(slug: string, triggerField: string, every: CollectionSpawn
  *  predicate doesn't match, the trigger date is unparseable, or the
  *  successor already exists (create-if-absent). Never overwrites an
  *  existing successor — protects any edits the user made to it. */
-export async function maybeSpawnSuccessor(
-  slug: string,
-  schema: CollectionSchema,
-  dataDir: string,
-  sourceItem: CollectionItem,
-  sourceId: string,
-  ioOpts: IoOptions = {},
-): Promise<void> {
+export async function maybeSpawnSuccessor(collection: LoadedCollection, sourceItem: CollectionItem, sourceId: string, ioOpts: IoOptions = {}): Promise<void> {
+  const { slug, schema } = collection;
   const { spawn } = schema;
   if (!spawn || !schema.triggerField) return;
   if (!matchesWhen(spawn.when, schema, sourceItem)) return;
@@ -233,7 +238,15 @@ export async function maybeSpawnSuccessor(
     return;
   }
   try {
-    const result = await writeItem(dataDir, computed.id, computed.record, { ...ioOpts, refuseOverwrite: true, slug });
+    // Store-mediated write: works for any writable backend (file, sqlite).
+    // A read-only store can't spawn — schema validation forbids `spawn` on
+    // dataSource collections, so an absent `write` is defense in depth.
+    const { write } = storeFor(collection, ioOpts);
+    if (!write) {
+      log.warn("collections", "spawn skipped: collection store is read-only", { slug, sourceId });
+      return;
+    }
+    const result = await write(computed.id, computed.record, { refuseOverwrite: true });
     if (result.kind === "ok") {
       log.info("collections", "spawned successor", { slug, sourceId, successorId: computed.id });
     } else if (result.kind !== "conflict") {

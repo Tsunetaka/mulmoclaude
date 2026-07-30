@@ -22,6 +22,8 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { log, getWorkspaceRoot, isPresetSlug, skillsStagingDir, archiveDir as archiveRelDir } from "./host";
 import { isContainedInRoot } from "./paths";
+import { checkpointSqliteDatabase } from "./sqliteStore";
+import { ingestStatePath } from "../../feeds/paths";
 import type { LoadedCollection } from "./discoveredCollection";
 
 export type DeleteCollectionResult =
@@ -81,7 +83,13 @@ function todayStamp(): string {
 /** Every directory the delete will touch must resolve under the
  *  workspace root — guards against a symlinked ancestor escaping it. */
 function deleteTargets(collection: LoadedCollection, workspaceRoot: string): string[] {
-  return [stagingSkillDir(workspaceRoot, collection.slug), collection.skillDir, collection.dataDir];
+  return [
+    stagingSkillDir(workspaceRoot, collection.slug),
+    collection.skillDir,
+    collection.dataDir,
+    ingestStatePath(collection.slug, workspaceRoot),
+    ...(collection.storageFile !== undefined ? [collection.storageFile] : []),
+  ];
 }
 
 /** The records directory the delete recursively archives + removes
@@ -110,6 +118,30 @@ function isDataDirSafe(dataDir: string, slug: string, workspaceRoot: string): bo
   return acceptableRoots.some((root) => resolved === root || resolved.startsWith(root + path.sep));
 }
 
+/** Step 2 of the restore doc — how to bring the records back. A
+ *  `dataSource` collection has no record files to copy (its rows live in
+ *  the external data file, which the delete never touches). */
+function restoreRecordsStep(schema: LoadedCollection["schema"]): string {
+  if (schema.storage !== undefined) {
+    return `2. Records: copy the archived database file
+   \`${path.basename(schema.storage.path)}\` (next to this document) back to
+   \`${schema.storage.path}\` (workspace-relative, \`cp\`). It holds every
+   record. If \`-wal\`/\`-journal\` sidecar files were archived alongside
+   it, copy them back too.`;
+  }
+  if (schema.dataPath === undefined) {
+    return `2. Records: nothing to copy. This is a \`dataSource\` collection —
+   its records are the rows of \`${schema.dataSource?.path}\`, which the
+   delete never touched.`;
+  }
+  return `2. Copy the item data: \`cp\` every file under \`records/\` into
+   \`${schema.dataPath}/\`. The records are part of the collection and
+   must be restored. They are plain data files (NOT bridged), so use
+   \`cp\` — the Write-tool rule in step 1 applies ONLY to the skill
+   files, not to these records (there may be many; copy them, do not
+   Write them one by one).`;
+}
+
 function buildRestoreDoc(collection: LoadedCollection): string {
   const { slug, schema } = collection;
   return `# Restore "${schema.title}" (collection \`${slug}\`)
@@ -130,18 +162,13 @@ Follow these steps to restore it.
    \`.claude/skills/\` directly is not an option either: that path is
    permission-gated.)
 
-2. Copy the item data: \`cp\` every file under \`records/\` into
-   \`${schema.dataPath}/\`. The records are part of the collection and
-   must be restored. They are plain data files (NOT bridged), so use
-   \`cp\` — the Write-tool rule in step 1 applies ONLY to the skill
-   files, not to these records (there may be many; copy them, do not
-   Write them one by one).
+${restoreRecordsStep(schema)}
 
 3. Confirm the collection reappears at \`/collections/${slug}\`.
 
 - slug: \`${slug}\`
 - title: ${schema.title}
-- dataPath: \`${schema.dataPath}\`
+- dataPath: \`${schema.dataPath ?? (schema.storage !== undefined ? `(storage) ${schema.storage.path}` : `(dataSource) ${schema.dataSource?.path}`)}\`
 `;
 }
 
@@ -155,6 +182,24 @@ async function writeArchive(collection: LoadedCollection, archiveDir: string, wo
   if (await pathExists(collection.dataDir)) {
     await cp(collection.dataDir, path.join(archiveDir, "records"), { recursive: true });
   }
+  // A `storage` collection's records live in its database file (the
+  // dataDir is a phantom) — archive it under its own basename so RESTORE
+  // can point `storage.path` back at it. Checkpoint first so the main file
+  // alone is a complete snapshot (in WAL mode, committed rows can live
+  // only in `<db>-wal`); if the checkpoint fails (older Node, locked db),
+  // archive the sidecars too — either way no committed data is lost.
+  // (`dataSourceFile` is deliberately NOT archived or removed: an external
+  // dataSource file is user-owned.)
+  if (collection.storageFile !== undefined && (await pathExists(collection.storageFile))) {
+    const checkpointed = await checkpointSqliteDatabase(collection.storageFile);
+    await cp(collection.storageFile, path.join(archiveDir, path.basename(collection.storageFile)));
+    if (!checkpointed) {
+      for (const suffix of ["-wal", "-journal", "-shm"]) {
+        const sidecar = `${collection.storageFile}${suffix}`;
+        if (await pathExists(sidecar)) await cp(sidecar, path.join(archiveDir, path.basename(sidecar)));
+      }
+    }
+  }
   await writeFile(path.join(archiveDir, "RESTORE.md"), buildRestoreDoc(collection), "utf-8");
 }
 
@@ -166,6 +211,22 @@ async function removeLocations(collection: LoadedCollection, workspaceRoot: stri
   await rm(collection.skillDir, { recursive: true, force: true });
   await rm(collection.dataDir, { recursive: true, force: true });
   await rmdir(path.dirname(collection.dataDir)).catch(() => undefined);
+  // The retrieval cursor lives in a SHARED dir (`data/ingest-state/<slug>.json`),
+  // outside every per-collection location above, so nothing else would remove
+  // it. Left behind, a collection recreated under the same slug inherits the old
+  // `lastFetchedAt` and takes the "wait for the interval" branch in
+  // `isDailyAtHourDue` instead of fetching immediately — it just sits empty
+  // (#2550). Deliberately not archived: the archive restores user data, and
+  // restoring a stale cursor would reintroduce exactly this bug.
+  await rm(ingestStatePath(collection.slug, workspaceRoot), { force: true });
+  // The archived copy above is the backup; remove the live db (+ sqlite
+  // sidecars) so a deleted collection doesn't leave orphaned data behind.
+  if (collection.storageFile !== undefined) {
+    await rm(collection.storageFile, { force: true });
+    await rm(`${collection.storageFile}-wal`, { force: true });
+    await rm(`${collection.storageFile}-journal`, { force: true });
+    await rm(`${collection.storageFile}-shm`, { force: true });
+  }
 }
 
 export async function deleteCollection(collection: LoadedCollection, opts: DeleteCollectionOptions = {}): Promise<DeleteCollectionResult> {

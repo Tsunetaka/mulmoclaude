@@ -1,6 +1,6 @@
 {
   "name": "@mulmobridge/client",
-  "version": "0.1.5",
+  "version": "1.0.1",
   "description": "Socket.io client library for MulmoBridge — shared by all bridge implementations",
   "type": "module",
   "main": "./dist/index.js",
@@ -45,11 +45,28 @@
   "license": "MIT",
   "author": "Receptron Team",
   "dependencies": {
-    "@mulmobridge/protocol": "^0.1.4",
+    "@mulmobridge/protocol": "^1.0.1",
+    "@mulmoclaude/common": "^1.1.1",
     "socket.io-client": "^4.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "typescript": "^6.0.3"
+  },
+  "homepage": "https://github.com/receptron/mulmoclaude/tree/main/packages/client#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/receptron/mulmoclaude.git",
+    "directory": "packages/client"
+  },
+  "keywords": [
+    "mulmobridge",
+    "socket.io-client",
+    "bridge",
+    "chat",
+    "ai-agent"
+  ],
+  "bugs": {
+    "url": "https://github.com/receptron/mulmoclaude/issues"
   }
 }

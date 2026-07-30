@@ -17,7 +17,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
-import { parseFrontmatter, serializeWithFrontmatter } from "../../utils/markdown/frontmatter.js";
+import { parseFrontmatter, serializeWithFrontmatter } from "@mulmoclaude/markdown-utils/markdown/frontmatter";
 import { writeFileAtomic } from "../../utils/files/atomic.js";
 import { readDirSafeAsync, readTextSafe } from "../../utils/files/safe.js";
 import { log } from "../../system/logger/index.js";
@@ -31,10 +31,6 @@ export function topicMemoryRoot(workspaceRoot: string): string {
 
 export function topicMemoryIndexPath(workspaceRoot: string): string {
   return path.join(workspaceRoot, WORKSPACE_FILES.memoryIndex);
-}
-
-export function topicFilePath(workspaceRoot: string, type: MemoryType, topic: string): string {
-  return path.join(topicMemoryRoot(workspaceRoot), type, `${topic}.md`);
 }
 
 // Both loaders walk types in `MEMORY_TYPES` order (a stable

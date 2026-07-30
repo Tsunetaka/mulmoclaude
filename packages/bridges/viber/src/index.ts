@@ -16,10 +16,10 @@
 //   VIBER_ALLOWED_USERS — CSV of sender user IDs allowed (empty = all)
 
 import "dotenv/config";
-import crypto from "crypto";
-import express, { type Request, type Response as ExpressResponse } from "express";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import type { Request, Response as ExpressResponse } from "express";
 import { createBridgeClient, chunkText } from "@mulmobridge/client";
+import { createWebhookApp, createWebhookRateLimit, verifyHmacSignature } from "@mulmobridge/webhook-runtime";
+import { isRecord, parseCsvSet } from "@mulmoclaude/common";
 
 const TRANSPORT_ID = "viber";
 const MAX_VIBER_TEXT = 7_000;
@@ -38,12 +38,7 @@ function readRequiredEnv(): { authToken: string } {
 const { authToken } = readRequiredEnv();
 
 const senderName = process.env.VIBER_SENDER_NAME ?? "MulmoClaude";
-const allowedUsers = new Set(
-  (process.env.VIBER_ALLOWED_USERS ?? "")
-    .split(",")
-    .map((user) => user.trim())
-    .filter(Boolean),
-);
+const allowedUsers = parseCsvSet(process.env.VIBER_ALLOWED_USERS);
 const allowAll = allowedUsers.size === 0;
 
 const mulmo = createBridgeClient({ transportId: TRANSPORT_ID });
@@ -101,25 +96,7 @@ async function sendViber(receiverId: string, text: string): Promise<void> {
   }
 }
 
-// ── Signature verification ─────────────────────────────────────
-
-function verifySignature(rawBody: string, signature: string): boolean {
-  const expected = crypto.createHmac("sha256", authToken).update(rawBody).digest("hex");
-  if (expected.length !== signature.length) return false;
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-  } catch {
-    return false;
-  }
-}
-
 // ── Webhook handler ────────────────────────────────────────────
-
-type JsonRecord = Record<string, unknown>;
-
-function isObj(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null;
-}
 
 interface IncomingViber {
   // Raw Viber user id, e.g. "01234567890A=". Kept so allowlist /
@@ -130,10 +107,10 @@ interface IncomingViber {
 }
 
 function parseMessageEvent(body: unknown): IncomingViber | null {
-  if (!isObj(body)) return null;
+  if (!isRecord(body)) return null;
   if (body.event !== "message") return null;
-  const sender = isObj(body.sender) ? body.sender : null;
-  const message = isObj(body.message) ? body.message : null;
+  const sender = isRecord(body.sender) ? body.sender : null;
+  const message = isRecord(body.message) ? body.message : null;
   if (!sender || !message) return null;
   const rawSenderId = typeof sender.id === "string" ? sender.id : "";
   const textFieldOk = message.type === "text" && typeof message.text === "string";
@@ -142,51 +119,9 @@ function parseMessageEvent(body: unknown): IncomingViber | null {
   return { rawSenderId, text };
 }
 
-const app = express();
-app.disable("x-powered-by");
-
-// Honour an explicit `trust proxy` setting so `req.ip` (the
-// rate-limit key below) reflects the real client IP rather than
-// the load balancer's. Default `false` for safety; operators
-// behind a known LB choose from:
-//   - hop count:  BRIDGE_TRUST_PROXY=1
-//   - boolean:    BRIDGE_TRUST_PROXY=true / false
-//   - preset:     BRIDGE_TRUST_PROXY=loopback
-//   - CIDR list:  BRIDGE_TRUST_PROXY=10.0.0.0/8,192.168.0.0/16
-// Without this every webhook looks like it comes from one IP and
-// the limiter degrades into a global throttle. The boolean branch
-// is required because Express does NOT auto-convert string
-// "true"/"false" — without this, `BRIDGE_TRUST_PROXY=true` is read
-// as a (never-matching) CIDR rule (Codex reviews on #1326).
-const trustProxyEnv = process.env.BRIDGE_TRUST_PROXY;
-if (trustProxyEnv) {
-  const lower = trustProxyEnv.toLowerCase();
-  const numeric = Number(trustProxyEnv);
-  const value: boolean | number | string =
-    lower === "true" ? true : lower === "false" ? false : Number.isInteger(numeric) && numeric >= 0 ? numeric : trustProxyEnv;
-  app.set("trust proxy", value);
-}
-
-// Parse as raw text so HMAC runs on the exact bytes Viber signed.
-app.use(express.text({ type: "application/json", limit: "1mb" }));
-
-// Per-IP throttle on the webhook. CodeQL's
-// `js/missing-rate-limiting` rule recognises `express-rate-limit`
-// specifically. 120 req/min/IP is well above Viber's normal
-// delivery rate; the cap bounds a flood / stuck retry loop.
-const webhookRateLimit = rateLimit({
-  windowMs: 60_000,
-  limit: 120,
-  standardHeaders: "draft-7",
-  legacyHeaders: false,
-  // Explicit keyGenerator routed through `ipKeyGenerator(...)` so
-  // IPv6 clients get folded to their /56 subnet (a raw `req.ip` key
-  // would let IPv6 rotation within a prefix evade the per-client
-  // limit). `req.ip` itself is trust-proxy-aware via the
-  // `app.set("trust proxy", ...)` block elsewhere in this file.
-  // (Codex reviews iter-1 + iter-2 on #1326.)
-  keyGenerator: (req) => ipKeyGenerator(req.ip ?? "", 56),
-});
+// bodyLimit 1mb: Viber can send larger payloads than Express's 100kb default.
+const app = createWebhookApp({ bodyLimit: "1mb" });
+const webhookRateLimit = createWebhookRateLimit();
 
 app.get("/health", (__req, res) => {
   res.json({ status: "ok", transport: TRANSPORT_ID });
@@ -196,7 +131,7 @@ app.post("/viber", webhookRateLimit, async (req: Request, res: ExpressResponse) 
   const signature = typeof req.headers["x-viber-content-signature"] === "string" ? req.headers["x-viber-content-signature"] : "";
   const rawBody = typeof req.body === "string" ? req.body : "";
 
-  if (!signature || !verifySignature(rawBody, signature)) {
+  if (!signature || !verifyHmacSignature(rawBody, signature, authToken, "sha256", "hex")) {
     console.warn("[viber] AUTH_FAILED: signature mismatch");
     res.status(401).send("Invalid signature");
     return;

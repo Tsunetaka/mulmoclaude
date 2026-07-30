@@ -9,7 +9,7 @@ import "../../server/workspace/collections/configure.js"; // configure @mulmocla
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -244,6 +244,21 @@ describe("manageCollection — putItems", () => {
     assert.deepEqual(result.written, []);
     const embed = await runJson({ action: "putItems", slug: "portfolio", items: [record("c", { owner: { id: "me" } })] });
     assert.match((embed.rejected as { problem: string }[])[0]?.problem ?? "", /'owner' is an embed/);
+    writeSkill("quotes-linked", {
+      title: "Quotes Linked",
+      icon: "trending_up",
+      dataPath: "data/quotes-linked/items",
+      primaryKey: "symbol",
+      fields: {
+        symbol: { type: "string", label: "Symbol", primary: true, required: true },
+        holders: { type: "backlinks", label: "Holders", from: "portfolio", via: "ticker", display: ["shares"] },
+        totalShares: { type: "rollup", label: "Total shares", from: "portfolio", via: "ticker", op: "sum", column: "shares" },
+      },
+    });
+    const backlinks = await runJson({ action: "putItems", slug: "quotes-linked", items: [{ symbol: "x", holders: [] }] });
+    assert.match((backlinks.rejected as { problem: string }[])[0]?.problem ?? "", /'holders' is a backlinks view/);
+    const rollup = await runJson({ action: "putItems", slug: "quotes-linked", items: [{ symbol: "y", totalShares: 15 }] });
+    assert.match((rollup.rejected as { problem: string }[])[0]?.problem ?? "", /'totalShares' is a rollup/);
   });
 
   it("rejects path-shaped ids before any write", async () => {
@@ -307,6 +322,27 @@ describe("manageCollection — putItems", () => {
     const computed = await runJson({ action: "putItems", slug: "portfolio", items: [{ id: "h1", value: 1 }], mode: "merge" });
     assert.match((computed.rejected as { problem: string }[])[0]?.problem ?? "", /'value' is derived/);
   });
+
+  it('mode "merge" rejects a malformed stored file per-row instead of aborting the batch', async () => {
+    // readItem throws on non-ENOENT (broken JSON); merge must downgrade that
+    // to a row rejection so the healthy rows in the same batch still write.
+    writeRecord("data/portfolio/items", "h1", record("h1", { notes: "keep me" }));
+    writeFileSync(path.join(workdir, "data/portfolio/items/bad.json"), '{ "id": "bad", broken');
+    const result = await runJson({
+      action: "putItems",
+      slug: "portfolio",
+      items: [
+        { id: "bad", status: "closed" },
+        { id: "h1", status: "closed" },
+      ],
+      mode: "merge",
+    });
+    assert.deepEqual(result.written, ["h1"]);
+    const [rejectedRow] = result.rejected as { id: string; problem: string }[];
+    assert.equal(rejectedRow?.id, "bad");
+    assert.match(rejectedRow?.problem ?? "", /malformed stored file/);
+    assert.equal(stored("h1").status, "closed"); // the healthy row landed
+  });
 });
 
 describe("manageCollection — dotted record ids", () => {
@@ -334,11 +370,125 @@ describe("manageCollection — dotted record ids", () => {
   });
 });
 
+describe("manageCollection — getOntology", () => {
+  interface OntologyEntry {
+    slug: string;
+    primaryKey: string;
+    displayField: string;
+    recordCount: number;
+    relations: Record<string, unknown>[];
+  }
+  const getOntology = async () => (await runJson({ action: "getOntology" })).collections as OntologyEntry[];
+  const entryFor = (entries: OntologyEntry[], slug: string) => entries.find((entry) => entry.slug === slug) as OntologyEntry;
+
+  it("needs no slug and lists every discovered collection", async () => {
+    const result = await runJson({ action: "getOntology" });
+    assert.equal(result.count, 3);
+    assert.deepEqual(
+      (result.collections as OntologyEntry[]).map((entry) => entry.slug),
+      ["portfolio", "profile", "stock-quotes"],
+    );
+  });
+
+  it("reports outbound ref/embed relations in field declaration order, skipping non-relation fields", async () => {
+    const portfolio = entryFor(await getOntology(), "portfolio");
+    assert.deepEqual(portfolio.relations, [
+      { field: "ticker", kind: "ref", to: "stock-quotes" },
+      { field: "owner", kind: "embed", to: "profile" },
+    ]);
+    assert.deepEqual(entryFor(await getOntology(), "stock-quotes").relations, []);
+  });
+
+  it("reports table sub-refs with a dotted field path, and backlinks with their source", async () => {
+    writeSkill("invoice", {
+      title: "Invoices",
+      icon: "receipt",
+      dataPath: "data/invoice/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        payments: { type: "backlinks", label: "Payments", from: "portfolio", via: "invoiceId", display: ["shares"] },
+        paidTotal: { type: "rollup", label: "Paid", from: "portfolio", via: "invoiceId", op: "sum", column: "shares" },
+        lines: { type: "table", label: "Lines", of: { clientId: { type: "ref", label: "Client", to: "portfolio" } } },
+      },
+    });
+    const invoice = entryFor(await getOntology(), "invoice");
+    assert.deepEqual(invoice.relations, [
+      { field: "payments", kind: "backlinks", to: "portfolio", via: "invoiceId" },
+      { field: "paidTotal", kind: "rollup", to: "portfolio", via: "invoiceId" },
+      { field: "lines.clientId", kind: "ref", to: "portfolio" },
+    ]);
+  });
+
+  it("counts record files without parsing them, and falls back displayField to the primaryKey", async () => {
+    writeFileSync(path.join(workdir, "data/stock-quotes/items", "broken.json"), "not json {");
+    // A symlinked record is unreadable through the collection APIs
+    // (listItems' lstat defense skips it), so it must not count either.
+    symlinkSync(path.join(workdir, "data/profile/items/me.json"), path.join(workdir, "data/stock-quotes/items", "linked.json"));
+    const entries = await getOntology();
+    const quotes = entryFor(entries, "stock-quotes");
+    assert.equal(quotes.recordCount, 2); // aapl + the malformed file — a summary counts files, not parses; symlink excluded
+    assert.equal(quotes.displayField, "symbol");
+    assert.equal(entryFor(entries, "portfolio").recordCount, 0);
+  });
+});
+
 describe("manageCollection — schemaDocs", () => {
   it("returns the bundled authoring reference when the workspace has none", async () => {
     const docs = await run({ action: "schemaDocs" });
     assert.doesNotMatch(docs, /could not read/);
     assert.match(docs, /Collection skills/); // heading from the bundled collection-skills.md
+  });
+
+  // The full doc outgrew the agent's per-tool-result limit, so the default
+  // reply is the core authoring guide + a table of contents (see
+  // @mulmoclaude/core collection/server/schemaDocs.ts for the unit-level
+  // rules; these pin the wiring against the real bundled doc).
+  it("defaults to the core guide + table of contents, not the full doc", async () => {
+    const docs = await run({ action: "schemaDocs" });
+    assert.match(docs, /### Field types/, "field DSL served by default");
+    assert.match(docs, /Sections \(call schemaDocs/, "table of contents present");
+    assert.match(docs, /- Kanban view/, "advanced sections listed in the TOC");
+    assert.doesNotMatch(docs, /gains a \*\*Kanban board\*\* toggle/, "advanced section BODIES stay topic-only");
+    assert.ok(docs.length < 40_000, `default reply must stay well under the full doc (${docs.length} chars)`);
+  });
+
+  // #2312: the agent authored Google Calendar collections with an MCP
+  // connector + an `ingest: { kind: "agent" }` worker because the DEFAULT
+  // reply — the only part it reads before writing a schema — never named the
+  // LLM-free `googleCalendar` block. A mention in a `###` subsection would
+  // not fix that: renderDefault serves only the core sections' own prose, so
+  // the pointer has to live in the top-level shape table.
+  it("names the googleCalendar block in the default reply and routes to its help file", async () => {
+    const docs = await run({ action: "schemaDocs" });
+    assert.match(docs, /`googleCalendar`/, "the sync block is discoverable without a topic");
+    assert.match(docs, /config\/helps\/google-calendar-collection\.md/, "the default reply routes to the full contract");
+    assert.match(docs, /- Google Calendar sync \(`googleCalendar`\)/, "the section is listed in the TOC");
+  });
+
+  it("serves a single section by topic", async () => {
+    const docs = await run({ action: "schemaDocs", topic: "kanban" });
+    assert.match(docs, /gains a \*\*Kanban board\*\* toggle/);
+    assert.doesNotMatch(docs, /### Field types/);
+  });
+
+  it('serves the Google Calendar sync section for topic "google calendar"', async () => {
+    const docs = await run({ action: "schemaDocs", topic: "google calendar" });
+    assert.match(docs, /### Google Calendar sync \(`googleCalendar`\)/);
+    assert.match(docs, /"map": \{ "title": "summary"/, "the block example is included");
+    assert.doesNotMatch(docs, /### Field types/, "one section, not the whole doc");
+  });
+
+  it('serves the full doc for topic "all"', async () => {
+    const docs = await run({ action: "schemaDocs", topic: "all" });
+    assert.match(docs, /billing suite/i, "tail of the full doc present");
+    assert.ok(docs.length > 60_000, "the whole reference");
+  });
+
+  it("reports an unmatched topic and repeats the table of contents", async () => {
+    const docs = await run({ action: "schemaDocs", topic: "zebra crossings" });
+    assert.match(docs, /no schemaDocs section matches 'zebra crossings'/);
+    assert.match(docs, /Sections \(call schemaDocs/);
   });
 
   it("prefers the workspace copy over the bundled asset", async () => {
@@ -442,5 +592,72 @@ describe("manageCollection — putSchema", () => {
     const issueBullets = bullets.filter((line) => !line.includes("…and"));
     assert.equal(issueBullets.length, MAX_SCHEMA_ISSUES, "issue bullets capped at MAX_SCHEMA_ISSUES");
     assert.match(msg, /…and \d+ more issue\(s\)/);
+  });
+});
+
+describe("manageCollection — deleteItems", () => {
+  beforeEach(() => {
+    writeRecord("data/portfolio/items", "h1", { id: "h1", name: "Apple", ticker: "aapl", shares: 10, status: "open" });
+    writeRecord("data/portfolio/items", "h2", { id: "h2", name: "Cash", status: "closed" });
+  });
+
+  const recordPath = (itemId: string) => path.join(workdir, "data/portfolio/items", `${itemId}.json`);
+
+  it("deletes a record and removes its file", async () => {
+    const result = await runJson({ action: "deleteItems", slug: "portfolio", ids: ["h1"] });
+    assert.deepEqual(result.deleted, ["h1"]);
+    assert.deepEqual(result.rejected, []);
+    assert.equal(existsSync(recordPath("h1")), false);
+    assert.equal(existsSync(recordPath("h2")), true, "unrelated records survive");
+  });
+
+  it("deletes several ids in one call", async () => {
+    const result = await runJson({ action: "deleteItems", slug: "portfolio", ids: ["h1", "h2"] });
+    assert.deepEqual((result.deleted as string[]).sort(), ["h1", "h2"]);
+    assert.equal(existsSync(recordPath("h1")), false);
+    assert.equal(existsSync(recordPath("h2")), false);
+  });
+
+  it("rejects an id that does not exist instead of reporting it deleted", async () => {
+    const result = await runJson({ action: "deleteItems", slug: "portfolio", ids: ["ghost"] });
+    assert.deepEqual(result.deleted, []);
+    const rejected = result.rejected as { id: string; problem: string }[];
+    assert.equal(rejected.length, 1);
+    assert.equal(rejected[0].id, "ghost");
+    assert.match(rejected[0].problem, /not found/);
+  });
+
+  it("keeps a partially-bad batch partial — good ids still go", async () => {
+    const result = await runJson({ action: "deleteItems", slug: "portfolio", ids: ["h1", "ghost"] });
+    assert.deepEqual(result.deleted, ["h1"]);
+    assert.equal((result.rejected as unknown[]).length, 1);
+    assert.equal(existsSync(recordPath("h1")), false);
+  });
+
+  it("rejects a path-traversal id without touching the filesystem", async () => {
+    const result = await runJson({ action: "deleteItems", slug: "portfolio", ids: ["../../../etc/passwd"] });
+    assert.deepEqual(result.deleted, []);
+    assert.match((result.rejected as { problem: string }[])[0].problem, /not a valid record id/);
+    assert.equal(existsSync(recordPath("h1")), true, "nothing else was deleted");
+  });
+
+  it("requires a non-empty ids array", async () => {
+    assert.match(await run({ action: "deleteItems", slug: "portfolio" }), /`ids` is required for deleteItems/);
+    assert.match(await run({ action: "deleteItems", slug: "portfolio", ids: [] }), /`ids` is required for deleteItems/);
+    assert.match(await run({ action: "deleteItems", slug: "portfolio", ids: [42] }), /`ids` is required for deleteItems/);
+    assert.match(await run({ action: "deleteItems", slug: "portfolio", ids: ["  "] }), /`ids` is required for deleteItems/);
+  });
+
+  it("refuses a read-only dataSource collection", async () => {
+    writeSkill("students", {
+      title: "Students",
+      icon: "school",
+      dataSource: { type: "csv", path: "data/students.csv" },
+      primaryKey: "student_id",
+      fields: { student_id: { type: "string", label: "ID", primary: true }, name: { type: "string", label: "Name" } },
+    });
+    mkdirSync(path.join(workdir, "data"), { recursive: true });
+    writeFileSync(path.join(workdir, "data/students.csv"), "student_id,name\ns1,Ada\n");
+    assert.match(await run({ action: "deleteItems", slug: "students", ids: ["s1"] }), /read-only/);
   });
 });

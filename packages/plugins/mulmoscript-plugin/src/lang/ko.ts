@@ -1,0 +1,36 @@
+import type { Messages } from "./messages";
+
+const ko: Messages = {
+  beatCount: (count) => `${count}개 비트`,
+  movie: "영상",
+  generating: "생성 중…",
+  rendering: "렌더링 중…",
+  saving: "저장 중…",
+  update: "업데이트",
+  characters: "캐릭터",
+  drop: "드롭",
+  gen: "생성",
+  play: "▶ 재생",
+  stop: "■ 정지",
+  playPresentation: "프레젠테이션 재생",
+  regenerateMovie: "동영상 재생성",
+  movieGenerationFailed: "동영상 생성에 실패했습니다",
+  pdf: "PDF",
+  regeneratePdf: "PDF 재생성",
+  generatingPdf: "PDF 생성 중…",
+  retry: "다시 시도",
+  errPrefix: "⚠ 오류",
+  noBeats: "스크립트에서 비트를 찾을 수 없습니다",
+  editSource: "스크립트 원본 편집",
+  applyChanges: "변경 사항 적용",
+  generateAll: "전체 생성",
+  orDropImage: "또는 이미지 드롭",
+  generate: "생성",
+  generateAudio: "♪ 생성",
+  saveErrorInvalidJson: (error) => `⚠ 잘못된 JSON: ${error}`,
+  saveErrorSaveFailed: (error) => `⚠ 저장 실패: ${error}`,
+  close: "닫기",
+  cancel: "취소",
+};
+
+export default ko;

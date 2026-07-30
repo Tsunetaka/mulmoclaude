@@ -1,0 +1,36 @@
+import type { Messages } from "./messages";
+
+const de: Messages = {
+  beatCount: (count) => (count === 1 ? `${count} Beat` : `${count} Beats`),
+  movie: "Video",
+  generating: "Wird generiert…",
+  rendering: "Wird gerendert…",
+  saving: "Wird gespeichert…",
+  update: "Aktualisieren",
+  characters: "Charaktere",
+  drop: "Ablegen",
+  gen: "Generieren",
+  play: "▶ Abspielen",
+  stop: "■ Stoppen",
+  playPresentation: "Präsentation abspielen",
+  regenerateMovie: "Video neu generieren",
+  movieGenerationFailed: "Videoerstellung fehlgeschlagen",
+  pdf: "PDF",
+  regeneratePdf: "PDF neu generieren",
+  generatingPdf: "PDF wird erstellt…",
+  retry: "Erneut versuchen",
+  errPrefix: "⚠ Fehler",
+  noBeats: "Keine Beats im Skript gefunden",
+  editSource: "Skript-Quelle bearbeiten",
+  applyChanges: "Änderungen übernehmen",
+  generateAll: "Alle generieren",
+  orDropImage: "oder Bild ablegen",
+  generate: "Generieren",
+  generateAudio: "♪ Generieren",
+  saveErrorInvalidJson: (error) => `⚠ Ungültiges JSON: ${error}`,
+  saveErrorSaveFailed: (error) => `⚠ Speichern fehlgeschlagen: ${error}`,
+  close: "Schließen",
+  cancel: "Abbrechen",
+};
+
+export default de;

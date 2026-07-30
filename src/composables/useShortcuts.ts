@@ -10,7 +10,9 @@
 import { computed, ref, type ComputedRef } from "vue";
 import { API_ROUTES } from "../config/apiRoutes";
 import { apiGet, apiPut } from "../utils/api";
+import { createMutationQueue } from "../utils/mutationQueue";
 import { sameShortcut, type Shortcut, type ShortcutKind } from "../types/shortcuts";
+import { moveShortcutByIdentity, type MoveDirection } from "./shortcutReorder";
 
 const shortcuts = ref<Shortcut[]>([]);
 const loadError = ref<string | null>(null);
@@ -46,24 +48,10 @@ async function load(force = false): Promise<void> {
   return loadPromise;
 }
 
-// Every mutation runs through this chain so the replace-all PUTs never
-// overlap. `PUT /api/shortcuts` rewrites the whole array, so two in-flight
-// saves could land out of order and resurrect a removed pin or drop a new
-// one — both in the UI and on disk. Serializing also fixes the cold-load
-// race: each task awaits `load()` first, so the initial server list is in
-// the ref before any task reads `previous` (otherwise a click during the
-// boot GET would persist `[]` + the new pin, wiping existing pins).
-let mutationChain: Promise<unknown> = Promise.resolve();
-
-function enqueue<T>(task: () => Promise<T>): Promise<T> {
-  const run = mutationChain.then(task, task);
-  // Keep the chain alive regardless of any single task's outcome.
-  mutationChain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
-}
+// `PUT /api/shortcuts` rewrites the whole array, so every mutation runs
+// through this queue and the replace-all PUTs never overlap. See
+// `createMutationQueue` for the races that prevents.
+const { enqueue } = createMutationQueue();
 
 /** Persist the given list, rolling the local ref back to `previous` on
  *  failure. Returns true on success. Call only from inside `enqueue`. */
@@ -113,6 +101,24 @@ function unpin(kind: ShortcutKind, slug: string): Promise<boolean> {
   });
 }
 
+/** Move one pinned shortcut a single slot up/down, identified by
+ *  (kind, slug). The new order is resolved INSIDE the queue against the
+ *  authoritative list at execution time — never a snapshot the caller
+ *  captured earlier — so rapid clicks compose (two "down"s move it two
+ *  slots) even when the queue is busy behind a `reconcile()`, and each
+ *  entry keeps its current title/icon. No-op (returns true) at an end or
+ *  if the slug isn't pinned. */
+function movePinned(kind: ShortcutKind, slug: string, direction: MoveDirection): Promise<boolean> {
+  return enqueue(async () => {
+    await load();
+    if (!loaded.value) return false; // never overwrite an unread list
+    const previous = shortcuts.value;
+    const next = moveShortcutByIdentity(previous, kind, slug, direction);
+    if (next === previous) return true; // at an end / not pinned — nothing to persist
+    return persist(next, previous);
+  });
+}
+
 /** Bulk reconcile one kind against the authoritative `{slug,title,icon}`
  *  list an index just fetched: prune dead slugs, refresh survivors'
  *  title/icon. If anything drifted, PUT the corrected list so the file
@@ -148,6 +154,7 @@ export function useShortcuts(): {
   isPinned: (kind: ShortcutKind, slug: string) => boolean;
   pin: (shortcut: Shortcut) => Promise<boolean>;
   unpin: (kind: ShortcutKind, slug: string) => Promise<boolean>;
+  movePinned: (kind: ShortcutKind, slug: string, direction: MoveDirection) => Promise<boolean>;
   reconcile: (kind: ShortcutKind, live: { slug: string; title: string; icon: string }[]) => Promise<void>;
 } {
   void load();
@@ -158,6 +165,7 @@ export function useShortcuts(): {
     isPinned,
     pin,
     unpin,
+    movePinned,
     reconcile,
   };
 }

@@ -44,8 +44,6 @@ const accountingPlugin: ToolPlugin<AccountingActionData> = {
   previewComponent: wrapWithScope("accounting", AccountingPreview),
 };
 
-export default accountingPlugin;
-
 export const REGISTRATION: PluginRegistration = {
   toolName: META.toolName,
   entry: accountingPlugin,

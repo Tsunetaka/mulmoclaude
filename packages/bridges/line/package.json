@@ -1,6 +1,6 @@
 {
   "name": "@mulmobridge/line",
-  "version": "0.1.1",
+  "version": "1.0.1",
   "description": "LINE bridge for MulmoBridge — connect a LINE bot to MulmoClaude",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,21 +16,41 @@
     "build": "tsc",
     "prepack": "yarn build",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/test_*.ts"
+    "test": "tsx --test test/test_*.ts",
+    "lint": "eslint src test"
   },
   "license": "MIT",
   "author": "Receptron Team",
   "dependencies": {
-    "@mulmobridge/client": "^0.1.4",
-    "@mulmobridge/protocol": "^0.1.4",
+    "@mulmobridge/client": "^1.0.1",
+    "@mulmobridge/protocol": "^1.0.1",
+    "@mulmobridge/webhook-runtime": "^1.0.2",
     "dotenv": "^17.0.0",
     "express": "^5.1.0",
-    "express-rate-limit": "^8.5.2"
+    "express-rate-limit": "^8.6.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "tsx": "^4.23.1",
     "typescript": "^6.0.3"
+  },
+  "homepage": "https://github.com/receptron/mulmoclaude/tree/main/packages/bridges/line#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/receptron/mulmoclaude.git",
+    "directory": "packages/bridges/line"
+  },
+  "keywords": [
+    "line",
+    "line-messaging-api",
+    "mulmobridge",
+    "chatbot",
+    "bridge",
+    "ai-agent",
+    "mulmoclaude"
+  ],
+  "bugs": {
+    "url": "https://github.com/receptron/mulmoclaude/issues"
   }
 }

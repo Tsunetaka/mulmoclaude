@@ -1,8 +1,4 @@
-import {
-  readJournalState as readJournalStateRaw,
-  writeJournalState as writeJournalStateRaw,
-  journalStateExists as journalStateExistsRaw,
-} from "../../utils/files/journal-io.js";
+import { readJournalState as readJournalStateRaw, writeJournalState as writeJournalStateRaw } from "../../utils/files/journal-io.js";
 import { ONE_HOUR_MS, ONE_DAY_MS } from "../../utils/time.js";
 import { log } from "../../system/logger/index.js";
 import { isRecord } from "../../utils/types.js";
@@ -105,8 +101,4 @@ export async function readState(workspaceRoot: string): Promise<JournalState> {
 
 export async function writeState(workspaceRoot: string, state: JournalState): Promise<void> {
   await writeJournalStateRaw(state, workspaceRoot);
-}
-
-export function stateFileExists(workspaceRoot: string): boolean {
-  return journalStateExistsRaw(workspaceRoot);
 }

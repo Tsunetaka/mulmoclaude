@@ -80,11 +80,16 @@ description: The user's personal todo list. Use whenever they add, list, edit,
 - Do NOT write a `done` field — it's a projection of `status`.
 
 ## What to do
-- **Add**: derive an id, default `status: "todo"`, Write the JSON.
-- **List**: read `data/todos/items/`, answer from the files; point the user at
-  `/collections/todos` rather than reciting the table.
-- **Mark done**: Read → set `status: "done"` → Write.
-- **Edit / Delete**: Read → mutate / remove the file (preserve untouched fields).
+- **Add**: derive an id, default `status: "todo"`, write via `manageCollection`
+  `putItems` (`mode: "create"`; a rejected row comes back with a `problem` to
+  fix and retry).
+- **List**: `manageCollection` `getItems` (the only way to see the computed
+  `done` toggle); point the user at `/collections/todos` rather than reciting
+  the table.
+- **Mark done**: `putItems` with `mode: "merge"` and `{ id, status: "done" }`.
+- **Edit**: `putItems` `mode: "merge"` with a partial row — the default upsert
+  replaces the whole record. **Delete**: `deleteItems` with `ids` (an id that
+  doesn't exist comes back in `rejected`, not `deleted`).
 - After a change, call `presentCollection` with slug `todos` (and the id) to show
   it inline.
 ```
@@ -131,8 +136,9 @@ single array) with the columns in the sibling `columns.json`. Convert them:
    the legacy list had.
 3. **Fold `completed` into `status`.** A legacy `completed: true` item belongs in
    the done column; don't carry a separate boolean.
-4. **One file per item.** Split the array into `data/todos/items/<id>.json`,
-   preserving each legacy `id` verbatim.
+4. **One record per item.** Split the array into one `putItems` row per item
+   (stored as `data/todos/items/<id>.json`), preserving each legacy `id`
+   verbatim.
 5. **Convert `createdAt`.** The legacy value is Unix milliseconds — convert it to
    a `YYYY-MM-DD` `date` field. Carry `priority`, `dueDate`, `note` straight
    across.

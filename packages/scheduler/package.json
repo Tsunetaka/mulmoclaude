@@ -1,6 +1,6 @@
 {
   "name": "@receptron/task-scheduler",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "Persistent task scheduler with catch-up — schedule recurring tasks, survive restarts, recover missed runs",
   "type": "module",
   "main": "./dist/index.js",
@@ -27,7 +27,24 @@
   "license": "MIT",
   "author": "Receptron Team",
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "typescript": "^6.0.3"
+  },
+  "homepage": "https://github.com/receptron/mulmoclaude/tree/main/packages/scheduler#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/receptron/mulmoclaude.git",
+    "directory": "packages/scheduler"
+  },
+  "keywords": [
+    "scheduler",
+    "task-scheduler",
+    "cron",
+    "recurring-tasks",
+    "catch-up",
+    "zero-dependency"
+  ],
+  "bugs": {
+    "url": "https://github.com/receptron/mulmoclaude/issues"
   }
 }

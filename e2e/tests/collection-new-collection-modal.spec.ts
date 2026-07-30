@@ -55,6 +55,7 @@ test.describe("new collection modal", () => {
     await expect(page.getByTestId("new-collection-starter-portfolio")).toBeVisible();
 
     // Merely opening the chooser must not launch anything.
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: opening the modal must start no chat; the absence of an /api/agent POST has no observable signal.
     await page.waitForTimeout(0.2 * ONE_SECOND_MS);
     expect(agentRuns).toHaveLength(0);
   });
@@ -82,6 +83,7 @@ test.describe("new collection modal", () => {
     // and nothing is sent until the user hits Send.
     await expect(page).not.toHaveURL(/\/collections$/);
     await expect(page.getByTestId("user-input")).toHaveValue(/todo-collection\.md/);
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: a starter seeds a draft and must NOT auto-send; the absence of an /api/agent POST has no observable signal.
     await page.waitForTimeout(0.25 * ONE_SECOND_MS);
     expect(agentRuns).toHaveLength(0);
   });
@@ -97,6 +99,7 @@ test.describe("new collection modal", () => {
     // an editable draft, pointing the LLM at collection-skills.md, and auto-sends nothing.
     await expect(page).not.toHaveURL(/\/collections$/);
     await expect(page.getByTestId("user-input")).toHaveValue(/collection-skills\.md/);
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: free-form seeds a draft and must NOT auto-send; the absence of an /api/agent POST has no observable signal.
     await page.waitForTimeout(0.25 * ONE_SECOND_MS);
     expect(agentRuns).toHaveLength(0);
   });

@@ -28,8 +28,6 @@ import { ONE_HOUR_MS } from "../../utils/time.js";
 
 export type ViewCapability = "read" | "write";
 
-const CAPABILITIES: readonly ViewCapability[] = ["read", "write"];
-
 function isCapability(value: unknown): value is ViewCapability {
   return value === "read" || value === "write";
 }
@@ -133,14 +131,27 @@ export function requireViewToken(action: ViewCapability) {
 // Matches a view-data request path with or without the `/api` mount prefix:
 // the global CSRF middleware sees `/api/collections/<slug>/view-data` while
 // the `/api`-mounted bearer closure sees `/collections/<slug>/view-data`.
-// Anchored both ends; `[^/]+` is the slug segment.
+// Anchored both ends; `[^/]+` is the slug segment. Two separate regexes
+// (base path / the token-scoped mutate-action endpoint) rather than one
+// with an optional tail — the combined form trips the unsafe-regex lint.
 const VIEW_DATA_PATH_RE = /^\/(?:api\/)?collections\/[^/]+\/view-data$/;
+const VIEW_DATA_ACTION_PATH_RE = /^\/(?:api\/)?collections\/[^/]+\/view-data\/actions\/[^/]+$/;
+const VIEW_DATA_QUERY_PATH_RE = /^\/(?:api\/)?collections\/[^/]+\/view-data\/query$/;
+const VIEW_DATA_IMAGE_PATH_RE = /^\/(?:api\/)?collections\/[^/]+\/view-data\/image$/;
 
-/** True for the view-data endpoint path (either mount base). Used in
- *  `server/index.ts` to exempt these routes from the global bearer + CSRF
- *  guards — they are guarded instead by {@link requireViewToken}. */
+/** True for the view-data endpoint paths (either mount base): the record
+ *  read/write base path, the token-scoped mutate-action endpoint, and the
+ *  aggregation-query endpoint. Used in `server/index.ts` to exempt these
+ *  routes from the global bearer + CSRF guards — they are guarded instead
+ *  by {@link requireViewToken}. A path missing here makes its endpoint
+ *  UNREACHABLE from a sandboxed view (the global guards reject first) —
+ *  add every new `/view-data/...` route to this matcher AND to the
+ *  coverage in `test/server/test_viewToken.ts`. */
 export function isViewDataPath(pathname: string): boolean {
-  return VIEW_DATA_PATH_RE.test(pathname);
+  return (
+    VIEW_DATA_PATH_RE.test(pathname) ||
+    VIEW_DATA_ACTION_PATH_RE.test(pathname) ||
+    VIEW_DATA_QUERY_PATH_RE.test(pathname) ||
+    VIEW_DATA_IMAGE_PATH_RE.test(pathname)
+  );
 }
-
-export { CAPABILITIES as VIEW_CAPABILITIES };

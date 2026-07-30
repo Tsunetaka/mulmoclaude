@@ -253,8 +253,11 @@ describe("resolveWithinRoot — symlinked root directory (A1 regression)", () =>
     removeScratch(realRoot);
   });
 
-  it("resolves child paths against the realpath of a symlinked root", () => {
-    if (!existsSync(symlinkRoot)) return; // platform skip
+  it("resolves child paths against the realpath of a symlinked root", (ctx) => {
+    if (!existsSync(symlinkRoot)) {
+      ctx.skip("symlink creation unsupported on this platform");
+      return;
+    }
     // Caller realpaths the root once at module load — this is the
     // pattern routes/mulmo-script.ts uses for ensureStoriesReal().
     const rootReal = realpathSync(symlinkRoot);
@@ -263,15 +266,21 @@ describe("resolveWithinRoot — symlinked root directory (A1 regression)", () =>
     assert.equal(out, path.join(realRoot, "story.json"));
   });
 
-  it("resolves nested paths under a symlinked root", () => {
-    if (!existsSync(symlinkRoot)) return;
+  it("resolves nested paths under a symlinked root", (ctx) => {
+    if (!existsSync(symlinkRoot)) {
+      ctx.skip("symlink creation unsupported on this platform");
+      return;
+    }
     const rootReal = realpathSync(symlinkRoot);
     const out = resolveWithinRoot(rootReal, "sub/nested.mp4");
     assert.equal(out, path.join(realRoot, "sub", "nested.mp4"));
   });
 
-  it("rejects traversal even when the root is the realpath of a symlink", () => {
-    if (!existsSync(symlinkRoot)) return;
+  it("rejects traversal even when the root is the realpath of a symlink", (ctx) => {
+    if (!existsSync(symlinkRoot)) {
+      ctx.skip("symlink creation unsupported on this platform");
+      return;
+    }
     const rootReal = realpathSync(symlinkRoot);
     assert.equal(resolveWithinRoot(rootReal, "../../etc/passwd"), null);
   });

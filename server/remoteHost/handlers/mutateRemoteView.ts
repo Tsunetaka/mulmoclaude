@@ -1,5 +1,5 @@
 // mutateRemoteViewItem command handler (remote-host phase 4 —
-// plans/feat-remote-writable-view.md).
+// plans/done/feat-remote-writable-view.md).
 //
 // Applies one update/delete requested by a `target: "mobile"` custom view on
 // the phone, authorized by that view's OWN declared surface
@@ -11,9 +11,10 @@
 //
 // Factory (createMutateRemoteView-backed) keeps the mapping unit-testable with
 // the engine stubbed; the default export wires the real functions.
-import { normalizeMutate } from "@mulmoclaude/core/remote-view";
+import { normalizeMutate, readIdParam } from "@mulmoclaude/core/remote-view";
 import { loadCollection } from "../../workspace/collections/index.js";
 import { mutateRemoteView, mutateRemoteViewFailureMessage } from "../../workspace/collections/remoteView.js";
+import { toJsonObject } from "../commandChannel.js";
 import type { CommandHandler, JsonObject } from "../commandChannel.js";
 
 export interface MutateRemoteViewHandlerDeps {
@@ -24,17 +25,21 @@ export interface MutateRemoteViewHandlerDeps {
 export const createMutateRemoteViewHandler =
   (deps: MutateRemoteViewHandlerDeps): CommandHandler =>
   async (params: JsonObject) => {
-    const slug = String(params.slug ?? "");
-    const viewId = String(params.viewId ?? "");
+    const slug = readIdParam(params.slug);
+    const viewId = readIdParam(params.viewId);
     const request = normalizeMutate({ op: params.op, id: params.id, patch: params.patch });
     if (!request) throw new Error("invalid mutate request — expected { op: 'update'|'delete', id, patch? }");
     const collection = await deps.loadCollection(slug);
     if (!collection) throw new Error(`collection '${slug}' not found`);
     const result = await deps.mutateRemoteView(collection, viewId, request);
     if (result.kind !== "ok") throw new Error(mutateRemoteViewFailureMessage(result, slug));
-    // Plain JSON, but the interface lacks an index signature — cast like the
-    // other phase-2/3 handlers.
-    return (result.op === "delete" ? { op: "delete", id: result.id } : { op: "update", item: result.item }) as unknown as JsonObject;
+    // The delete branch is all strings, so it type-checks. The update branch
+    // carries a `CollectionItem`, whose values are `unknown` — JSON by the
+    // record loader's invariant, but not provably so. Same irreducible gap as
+    // `pageResult` / `getRemoteViewItems`, kept visible per branch rather than
+    // blanketing both.
+    if (result.op === "delete") return toJsonObject({ op: "delete", id: result.id });
+    return { op: "update", item: result.item } as unknown as JsonObject;
   };
 
 export const mutateRemoteViewItem = createMutateRemoteViewHandler({ loadCollection, mutateRemoteView });

@@ -101,6 +101,10 @@ const deMessages = {
     intraBody:
       "Die Plugins „{first}“ und „{second}“ registrieren beide {dimension} „{key}“. „{first}“ hat ihn zuerst beansprucht, daher wird die Registrierung von „{second}“ ignoriert.",
   },
+  shadowedEnv: {
+    title: "Shell-Umgebung überschreibt .env",
+    body: "Sowohl in der Shell als auch in .env gesetzt: {keys}. Der Wert aus der Shell gewinnt, daher wird .env ignoriert. Wenn Sie .env bearbeitet haben, aktualisieren oder entfernen Sie den Wert in der Shell und starten Sie neu.",
+  },
   optionalDeps: {
     // Generischer `title` aus Abwärtskompatibilität für persistierte
     // History-Einträge vor der Aufteilung nach Grund; neue Pfade
@@ -129,6 +133,11 @@ const deMessages = {
     hideDetails: "Details ausblenden",
     retry: "Erneut versuchen",
   },
+  remoteHostOffline: {
+    title: "Remote-Host getrennt",
+    body: "Ihr Telefon kann erst nach dem erneuten Verbinden an dieses Gerät senden.",
+    reconnect: "Erneut verbinden",
+  },
   remoteHost: {
     title: "Remote-Host",
     online: "Remote-Host online",
@@ -149,6 +158,7 @@ const deMessages = {
     qrHint: "Oder scanne diesen QR-Code mit der Handykamera.",
   },
   sidebarHeader: {
+    newMessages: "Neue Nachrichten",
     home: "Zum neuesten Chat",
     toolCallHistory: "Tool-Aufrufverlauf",
     settings: "Einstellungen",
@@ -196,6 +206,12 @@ const deMessages = {
       "Zeigt agent-interne Top-Level-Verzeichnisse (conversations/, feeds/ usw.) zusätzlich zu den Nutzer-Daten (data/, artifacts/, config/) an.",
   },
   fileTree: {
+    dropHint: "Dateien hier ablegen, um sie in diesem Ordner zu speichern",
+    upload: {
+      progress: "Hochladen {done} von {total}…",
+      done: "{count} Datei(en) gespeichert",
+      failed: "{count} Datei(en) konnten nicht gespeichert werden",
+    },
     workspace: "(Arbeitsbereich)",
     recentlyChanged: "Kürzlich geändert",
     newFileMenuItem: "Neue Datei",
@@ -243,6 +259,7 @@ const deMessages = {
       refs: "Referenzverzeichnisse",
       map: "Karte",
       photos: "Fotos",
+      google: "Google",
       model: "Modell",
       voice: "Sprache",
       chatIndex: "Chat-Index",
@@ -250,6 +267,7 @@ const deMessages = {
       notifications: "Web Push",
       skills: "Skills",
       roles: "Rollen",
+      quit: "Beenden",
     },
     groups: {
       llm: "LLM",
@@ -258,8 +276,24 @@ const deMessages = {
       notifications: "Benachrichtigungen",
       plugins: "Plugins",
       management: "Verwaltung",
+      server: "Server",
     },
     navAriaLabel: "Einstellungsbereiche",
+    googleTab: {
+      description:
+        "Verknüpfe dein Google-Konto, damit dieser Rechner Google-APIs direkt aufrufen kann (zuerst Kalender). Das Refresh-Token wird nur auf diesem Rechner gespeichert und außer an Google an keinen Server gesendet.",
+      statusLinked: "Verknüpft",
+      statusNotLinked: "Nicht verknüpft",
+      statusPending: "Warte auf Abschluss der Einwilligung im Browser…",
+      connect: "Google-Konto verknüpfen",
+      unlink: "Verknüpfung aufheben",
+      unlinkConfirm: "Google-Konto-Verknüpfung aufheben? Das gespeicherte Token wird widerrufen und von diesem Rechner gelöscht.",
+      clientSecretAmbiguous:
+        "In ~/.secrets/ wurden mehrere client_secret_*.json-Dateien gefunden. Behalte genau eine, damit das gespeicherte Token dem richtigen OAuth-Client zugeordnet bleibt.",
+      loadError: "Der Google-Verknüpfungsstatus konnte nicht geladen werden.",
+      connectError: "Der Google-Autorisierungsablauf konnte nicht gestartet werden.",
+      unlinkError: "Die Google-Verknüpfung konnte nicht aufgehoben werden.",
+    },
     mapTab: {
       description:
         "Legt den Google-Maps-API-Schlüssel fest, den das Karten-Plugin verwendet. Der Schlüssel wird lokal gespeichert und nur an Google Maps gesendet.",
@@ -284,6 +318,21 @@ const deMessages = {
       loadError: "Einstellungen konnten nicht geladen werden",
       saveError: "Speichern fehlgeschlagen",
     },
+    quitTab: {
+      description:
+        "Beendet den MulmoClaude-Server auf diesem Rechner. Über das Symbol gestartet, läuft er weiter, auch wenn du diesen Tab schließt — hier beendest du ihn ohne Terminal.",
+      // Message function form — skips vue-i18n's message compiler so the
+      // literal `@` in `mulmoclaude@latest` is not parsed as a linked-message
+      // reference (the compiler throws, and the whole tab renders as nothing).
+      restartHint: () => "Zum erneuten Starten doppelklicke auf das MulmoClaude-Symbol (oder führe `npx mulmoclaude@latest` aus).",
+      quitLabel: "MulmoClaude beenden",
+      confirmBody: "Der Server hält an und diese Seite funktioniert nicht mehr. Laufende Vorgänge werden abgebrochen.",
+      confirmLabel: "Beenden",
+      stopping: "Wird beendet…",
+      stoppedTitle: "MulmoClaude wurde beendet",
+      stoppedBody: "Du kannst diesen Tab schließen. Doppelklicke auf das Symbol, um neu zu starten.",
+      error: "Server konnte nicht beendet werden",
+    },
     notificationsTab: {
       description:
         "Erhalte eine Push-Benachrichtigung auf deinen registrierten Geräten, wenn eine hier gestartete Aufgabe abgeschlossen ist — praktisch, wenn du etwas fragst, weggehst und wissen willst, sobald die Antwort fertig ist.",
@@ -291,6 +340,11 @@ const deMessages = {
       enableHint: "Wird ausgelöst, wenn ein hier gestarteter Chat abgeschlossen ist. Geplante und Hintergrundaufgaben lösen es nicht aus.",
       remoteHostNote:
         "Erfordert die RemoteHost-Verbindung (sie liefert die Anmeldung) und mindestens ein registriertes Gerät. Fehlt eines davon, passiert nichts.",
+      macosRemindersLabel: "Bei Aufgabenende eine macOS-Erinnerung anlegen",
+      macosRemindersHint:
+        "Legt die erledigte Aufgabe in deiner Standard-Erinnerungsliste an. Die iCloud-Synchronisierung spiegelt sie auf dein iPhone, das die Mitteilung zustellt.",
+      macosRemindersForcedOff:
+        "Beim Start durch --disable-macos-reminders oder DISABLE_MACOS_REMINDER_NOTIFICATIONS deaktiviert. Entferne die Option oder die Umgebungsvariable und starte neu, um sie hier zu steuern.",
       statusOn: "Web Push ist AN",
       statusOff: "Web Push ist AUS",
       loadError: "Einstellungen konnten nicht geladen werden",
@@ -447,6 +501,12 @@ const deMessages = {
     pin: "An Launcher anheften",
     unpin: "Vom Launcher lösen",
     zoneAriaLabel: "Angeheftete Verknüpfungen",
+    reorder: {
+      open: "Verknüpfungen neu anordnen",
+      title: "Neu anordnen",
+      moveUp: "Nach oben",
+      moveDown: "Nach unten",
+    },
   },
   fileContentHeader: {
     showRendered: "Gerendertes Markdown anzeigen",
@@ -758,6 +818,12 @@ const deMessages = {
     detailsToggle: "Details anzeigen",
     promptLabel: "Prompt",
     roleLabel: "Rolle",
+    confirmDelete: "Aufgabe {name} löschen? Dies kann nicht rückgängig gemacht werden.",
+    hintNewsRss: "News- / RSS-Abruf",
+    hintJournal: "Täglicher Journallauf",
+    hintWiki: "Wiki-Wartung",
+    hintMemory: "Speicherextraktion",
+    hintCalendar: "Kalender- / Kontaktsynchronisierung",
   },
   pluginCanvas: {
     undo: "Rückgängig",
@@ -766,6 +832,7 @@ const deMessages = {
     styleLabel: "Stil:",
     stylePromptWithPath: "Wandle das Bild unter `{path}` in ein Bild im {style}-Stil um.",
     stylePromptNoPath: "Wandle meine Zeichnung auf dem Canvas in ein Bild im {style}-Stil um.",
+    saveFailed: "Nicht gespeichert",
   },
   pluginWiki: {
     backToIndex: "Zurück zum Index",
@@ -794,6 +861,7 @@ const deMessages = {
     metadataEditor: "Bearbeiter",
     pageEditHeader: "Wiki-Bearbeitung",
     snapshotExpired: "Snapshot abgelaufen — aktuelle Seite wird angezeigt",
+    snapshotLoadError: "Snapshot konnte nicht geladen werden — die Seite existiert möglicherweise noch. Bitte aktualisieren.",
     pageDeleted: "Seite gelöscht",
     history: {
       tabContent: "Inhalt",
@@ -950,63 +1018,11 @@ const deMessages = {
     errDeleteFailed: "Löschen fehlgeschlagen",
     errNetworkError: "Netzwerkfehler",
     errServerError: "Serverfehler: {status}",
+    errRefreshFailed: "Gespeichert, aber die Liste konnte nicht aktualisiert werden.",
+    confirmDelete: "Rolle {name} löschen? Dies kann nicht rückgängig gemacht werden.",
   },
   pluginUiImage: {
     promptLabel: "{label}:",
-  },
-  pluginMulmoScript: {
-    beatCount: "{count} Beat | {count} Beats",
-    movie: "Video",
-    generating: "Wird generiert…",
-    rendering: "Wird gerendert…",
-    saving: "Wird gespeichert…",
-    update: "Aktualisieren",
-    characters: "Charaktere",
-    drop: "Ablegen",
-    gen: "Generieren",
-    play: "▶ Abspielen",
-    stop: "■ Stoppen",
-    playPresentation: "Präsentation abspielen",
-    regenerateMovie: "Video neu generieren",
-    movieGenerationFailed: "Videoerstellung fehlgeschlagen",
-    pdf: "PDF",
-    regeneratePdf: "PDF neu generieren",
-    generatingPdf: "PDF wird erstellt…",
-    retry: "Erneut versuchen",
-    errPrefix: "⚠ Fehler",
-    noBeats: "Keine Beats im Skript gefunden",
-    editSource: "Skript-Quelle bearbeiten",
-    applyChanges: "Änderungen übernehmen",
-    generateAll: "Alle generieren",
-    orDropImage: "oder Bild ablegen",
-    generate: "Generieren",
-    generateAudio: "♪ Generieren",
-    saveErrorInvalidJson: "⚠ Ungültiges JSON: {error}",
-    saveErrorSaveFailed: "⚠ Speichern fehlgeschlagen: {error}",
-  },
-  pluginMarkdown: {
-    loading: "Dokument wird geladen...",
-    loadFailed: "⚠ Laden des Dokuments fehlgeschlagen: {error}",
-    refreshFailed: "⚠ Aktualisieren des Dokuments fehlgeschlagen: {error} — es wird der zuletzt erfolgreich geladene Inhalt angezeigt.",
-    noContent: "Kein Markdown-Inhalt verfügbar",
-    pdf: "PDF",
-    pdfFailedShort: "⚠ PDF fehlgeschlagen",
-    editSource: "Markdown-Quelle bearbeiten",
-    saving: "Wird gespeichert...",
-    applyChanges: "Änderungen übernehmen",
-    cancel: "Abbrechen",
-    saveFailed: "Speichern fehlgeschlagen: {error}",
-    saveError: "⚠ {error}",
-    copyLabel: "Kopieren",
-    copiedLabel: "Kopiert!",
-    taskCountMismatch:
-      "Die Anzahl der Aufgaben in der Markdown-Quelle und im gerenderten Ergebnis stimmt nicht überein. Das Umschalten wurde abgelehnt, um eine Beschädigung der Datei zu vermeiden.",
-    marpSlidesMode: "Marp-Folien · {count}",
-    marpExportPdf: "Als PDF exportieren",
-    marpRenderFailed: "⚠ Rendern der Marp-Folien fehlgeschlagen: {error}",
-    marpSplitEnter: "Quelle neben der Vorschau bearbeiten",
-    marpSplitExit: "Quelleneditor schließen",
-    marpSplitEditorLabel: "Quelle",
   },
   markdownMermaid: {
     loadFailed: "⚠ Mermaid konnte nicht geladen werden: {error}",
@@ -1018,6 +1034,9 @@ const deMessages = {
     editContent: "Textinhalt bearbeiten",
     applyChanges: "Änderungen übernehmen",
     copyLabel: "Kopieren",
+    speakerSystem: "System",
+    speakerUser: "Sie",
+    speakerAssistant: "Assistent",
     copiedLabel: "Kopiert!",
     cancel: "Abbrechen",
     seededByPlugin: "von {pkg}",

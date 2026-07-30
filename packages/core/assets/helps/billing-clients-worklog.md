@@ -103,18 +103,20 @@ Don't push for fields the user hasn't given you — leave optional fields out of
 the JSON entirely.
 
 ## What to do
-**Add**: derive an `id`, build the record, Write `data/clients/items/<id>.json`.
-List the directory first and pick a fresh slug if the file already exists — don't
-silently overwrite.
+**Add**: derive an `id`, build the record, write via `manageCollection`
+`putItems` with `mode: "create"` — an id collision comes back as a `rejected`
+row instead of silently overwriting; pick a fresh slug and retry.
 
-**List / look up**: read `data/clients/items/`, answer from those files. Don't
+**List / look up**: `manageCollection` `getItems`, answer from the rows. Don't
 recite the whole table in chat — the user sees it at `/collections/clients`. A
 one-line confirmation ("Added Acme Corp.") is enough.
 
-**Update**: Read → merge changes → Write back. Preserve fields you weren't asked
-to change.
+**Update**: `putItems` with `mode: "merge"` and a partial row
+(`{ id, <changed fields> }`) — the default upsert replaces the whole record.
 
-**Delete**: confirm once if the request is ambiguous, then remove the file.
+**Delete**: confirm once if the request is ambiguous, then `deleteItems` with
+`ids`. Check `rejected` in the result — an id that didn't exist is reported
+there, not as deleted.
 
 ## Linking to a client in chat
 Link to the collection view, not the raw JSON path:
@@ -179,18 +181,20 @@ description: A simple timesheet — log billable / non-billable hours per client
 ## clientId resolution
 `clientId` is a `ref` to the `clients` collection — write the raw client slug.
 When the user says "log 2 hours for Acme":
-- List `data/clients/items/` and find the slug whose `name` matches "Acme"
-  (case-insensitive substring is fine).
+- `manageCollection` `getItems` on `clients` (`fields: ["id", "name"]`) and
+  find the slug whose `name` matches "Acme" (case-insensitive substring is
+  fine).
 - If no match: ask whether to create the client first (via the `clients` skill)
   or use a literal slug they supply. Never invent a clientId that doesn't exist —
   it renders as a broken link.
 
 ## What to do
 **Log hours**: derive `id`, default `billable: true`, default `date` to today if
-unspecified, Write the JSON. (This skill tracks total hours per day per client —
-not start/end times.)
+unspecified, write via `manageCollection` `putItems` (`mode: "create"`; fix any
+`rejected` row from its `problem` text and retry). (This skill tracks total
+hours per day per client — not start/end times.)
 
-**List / summarize**: read `data/worklog/items/`, answer from the files. Don't
+**List / summarize**: `manageCollection` `getItems`, answer from the rows. Don't
 recite the table — point at `/collections/worklog`. For aggregates ("how many
 hours did I bill Acme last month?") group by clientId + date range and answer in
 one line.

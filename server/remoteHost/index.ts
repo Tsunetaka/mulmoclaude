@@ -10,7 +10,15 @@
 // Single-account, single-host (HOST_ID = "mulmoclaude"). The Firebase session is
 // parked in the browser (case A', mulmoserver#50), so a server restart doesn't
 // force a re-login: the client reconnects from its stored blob.
-import { createRemoteHost, startHostRunner } from "@mulmoclaude/core/remote-host/server";
+import {
+  createPresenceProbe,
+  createRemoteHost,
+  presenceStaleAfterMs,
+  startHostRunner,
+  startResilientHostRunner,
+  type HostRunnerOptions,
+} from "@mulmoclaude/core/remote-host/server";
+import type { Channel, CommandHandlers } from "@mulmoclaude/core/remote-host";
 
 import { log } from "../system/logger/index.js";
 import { HOST_ID } from "./commandChannel.js";
@@ -23,6 +31,29 @@ export { exportSession, RemoteHostSessionExpiredError } from "./session.js";
 
 const PREFIX = "remote-host";
 
+const hostLog = {
+  info: (msg: string) => log.info(PREFIX, msg),
+  warn: (msg: string) => log.warn(PREFIX, msg),
+  debug: (msg: string) => log.debug(PREFIX, msg),
+};
+
+// The command channel, wrapped in the recovery ring that outlives a single runner
+// (#2633): core re-subscribes in place and gives up after minutes, the outer ring
+// relaunches the whole runner, and only when that stops helping does `onClosed`
+// reach the lifecycle — which is what makes the client re-auth from its parked
+// blob. Both rings now live in core (#2643), so raising one's timing cannot leave
+// the other applying a rule that no longer holds.
+const startRunner = (channel: Channel, hostHandlers: CommandHandlers, options: HostRunnerOptions): (() => void) =>
+  startResilientHostRunner({
+    start: (runnerOptions) => startHostRunner(currentFirestore(), channel, hostHandlers, runnerOptions),
+    options,
+    // The probe judges freshness against the SAME threshold the runner beats on —
+    // derived from the options it is about to run with, so a custom `heartbeatMs`
+    // can never leave the two applying different rules.
+    checkAlive: createPresenceProbe({ firestore: currentFirestore, channel, staleAfterMs: presenceStaleAfterMs(options) }),
+    log: hostLog,
+  });
+
 // Default singleton wired to the session-backed Firebase deps — imported by the
 // route. The runner reads the CURRENT session's firestore (it changes each
 // (re)connect); the logger adapts the factory's plain-string calls to the host
@@ -33,14 +64,10 @@ const instance = createRemoteHost({
   restore,
   signOut,
   currentUid,
-  startRunner: (channel, hostHandlers, options) => startHostRunner(currentFirestore(), channel, hostHandlers, options),
+  startRunner,
   handlers,
   onExpire,
-  log: {
-    info: (msg) => log.info(PREFIX, msg),
-    warn: (msg) => log.warn(PREFIX, msg),
-    debug: (msg) => log.debug(PREFIX, msg),
-  },
+  log: hostLog,
 });
 
 export const { connect, reconnect, disconnect, status } = instance;

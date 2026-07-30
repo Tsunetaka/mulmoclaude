@@ -55,6 +55,7 @@ test.describe("collection Contribute button", () => {
     await expect.poll(() => agentRuns.length, { timeout: 2000 }).toBe(1);
     // A double-fire would arrive right after the first; give it a beat, then
     // confirm there was only one launch.
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: a second /api/agent POST would arrive right after the first; "no double-fire" has no observable signal, so a bounded wait is required.
     await page.waitForTimeout(250);
     expect(agentRuns).toHaveLength(1);
     expect(agentRuns[0]).toContain("reading-list");
@@ -74,7 +75,9 @@ test.describe("collection Contribute button", () => {
     await expect(page.getByTestId("host-confirm-modal")).toBeVisible();
     await page.getByTestId("host-confirm-cancel").click();
 
-    await page.waitForTimeout(300);
+    // Cancel dismisses the modal without starting an agent run; a launch would
+    // have fired synchronously with the cancel handler, before the modal hides.
+    await expect(page.getByTestId("host-confirm-modal")).toBeHidden();
     expect(agentRuns).toHaveLength(0);
     await expect(page).not.toHaveURL(/\/collections\/reading-list/);
   });
@@ -91,6 +94,7 @@ test.describe("collection Contribute button", () => {
     await page.getByTestId("host-confirm-ok").click();
 
     await expect.poll(() => agentRuns.length, { timeout: 2000 }).toBe(1);
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: a keyboard-activation double-fire would arrive right after the first POST; "no second POST" has no observable signal.
     await page.waitForTimeout(250);
     expect(agentRuns).toHaveLength(1);
     expect(agentRuns[0]).toContain("reading-list");

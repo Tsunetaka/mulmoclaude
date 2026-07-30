@@ -65,8 +65,8 @@ test.describe("session-history side panel", () => {
 
     await page.goto("/chat");
     await expect(page.getByText("MulmoClaude")).toBeVisible();
-    // Let onMount fetches settle.
-    await page.waitForTimeout(200);
+    // Wait for the onMount /api/sessions GET to land before snapshotting the baseline.
+    await expect.poll(() => sessionFetchCount).toBeGreaterThan(0);
     const countAfterMount = sessionFetchCount;
 
     await page.getByTestId("session-history-toggle-off").click();

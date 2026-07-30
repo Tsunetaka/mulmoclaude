@@ -4,53 +4,56 @@
 // implementation. No Vue, no I/O — every function maps a draft + schema
 // to a value, so the omission/validation semantics are unit-testable.
 
+import { fieldText } from "./fieldText";
 import { fieldVisible } from "./actionVisible";
+import { COMPUTED_TYPES } from "./schema";
 import type { CollectionFieldSpec as FieldSpec, CollectionFieldType as FieldType, CollectionItem, CollectionSchema } from "./schema";
 import type { EditState, TableRowDraft } from "./uiTypes";
 
-/** A fresh, empty row draft for a `table` field's sub-schema. */
-export function emptyRow(subFields: Record<string, FieldSpec>): TableRowDraft {
+/** Build a row draft, reading each sub-field's persisted value via
+ *  `readSub`. An empty row passes a reader that always returns
+ *  `undefined`; a row-from-item reads the source record. Boolean
+ *  presence uses `typeof raw === "boolean"` so an existing explicit
+ *  `false` is recorded as present and round-trips on a no-op save. */
+function buildTableRowDraft(subFields: Record<string, FieldSpec>, readSub: (subKey: string) => unknown): TableRowDraft {
   const text: Record<string, string> = {};
   const bool: Record<string, boolean> = {};
   const boolOriginallyPresent: Record<string, boolean> = {};
   const boolTouched: Record<string, boolean> = {};
   for (const [subKey, subField] of Object.entries(subFields)) {
+    const raw = readSub(subKey);
     if (subField.type === "boolean") {
-      bool[subKey] = false;
-      boolOriginallyPresent[subKey] = false; // brand-new row
+      bool[subKey] = raw === true;
+      boolOriginallyPresent[subKey] = typeof raw === "boolean";
       boolTouched[subKey] = false;
     } else {
-      text[subKey] = "";
+      text[subKey] = fieldText(raw);
     }
   }
   return { text, bool, boolOriginallyPresent, boolTouched };
 }
 
+/** A fresh, empty row draft for a `table` field's sub-schema. */
+export function emptyRow(subFields: Record<string, FieldSpec>): TableRowDraft {
+  return buildTableRowDraft(subFields, () => undefined);
+}
+
 /** Build a row draft from an existing persisted row. */
 export function rowFromItem(item: Record<string, unknown>, subFields: Record<string, FieldSpec>): TableRowDraft {
-  const text: Record<string, string> = {};
-  const bool: Record<string, boolean> = {};
-  const boolOriginallyPresent: Record<string, boolean> = {};
-  const boolTouched: Record<string, boolean> = {};
-  for (const [subKey, subField] of Object.entries(subFields)) {
-    const raw = item[subKey];
-    if (subField.type === "boolean") {
-      bool[subKey] = raw === true;
-      // `typeof raw === "boolean"` so an existing explicit `false` is
-      // recorded as present and round-trips on a no-op save.
-      boolOriginallyPresent[subKey] = typeof raw === "boolean";
-      boolTouched[subKey] = false;
-    } else {
-      text[subKey] = raw === undefined || raw === null ? "" : String(raw);
-    }
-  }
-  return { text, bool, boolOriginallyPresent, boolTouched };
+  return buildTableRowDraft(subFields, (subKey) => item[subKey]);
+}
+
+/** Own-property boolean read: a field named `toString` / `constructor` /
+ *  `__proto__` must read `false` here, not inherit a truthy Object.prototype
+ *  member and force an untouched boolean into every saved record. */
+function ownFlag(flags: Record<string, boolean>, key: string): boolean {
+  return Object.hasOwn(flags, key) && flags[key] === true;
 }
 
 /** Decide whether a boolean field's draft value should be emitted (vs.
  *  omitted so a downstream default applies). */
 function shouldEmitBoolean(state: EditState, key: string, field: FieldSpec): boolean {
-  return Boolean(state.boolOriginallyPresent[key] || state.boolTouched[key] || field.required);
+  return ownFlag(state.boolOriginallyPresent, key) || ownFlag(state.boolTouched, key) || Boolean(field.required);
 }
 
 /** Convert a scalar draft slot to its persisted form. `undefined` = omit. */
@@ -68,8 +71,8 @@ function rowDraftToRecord(rowDraft: TableRowDraft, subFields: Record<string, Fie
   const row: Record<string, unknown> = {};
   for (const [subKey, subField] of Object.entries(subFields)) {
     if (subField.type === "boolean") {
-      const value = rowDraft.bool[subKey] === true;
-      if (rowDraft.boolOriginallyPresent[subKey] || rowDraft.boolTouched[subKey] || value || subField.required) row[subKey] = value;
+      const value = ownFlag(rowDraft.bool, subKey);
+      if (ownFlag(rowDraft.boolOriginallyPresent, subKey) || ownFlag(rowDraft.boolTouched, subKey) || value || subField.required) row[subKey] = value;
       continue;
     }
     const value = scalarDraftToValue(rowDraft.text[subKey], subField.type);
@@ -82,9 +85,9 @@ function rowDraftToRecord(rowDraft: TableRowDraft, subFields: Record<string, Fie
 export function draftToRecord(state: EditState, schema: CollectionSchema): CollectionItem {
   const record: CollectionItem = {};
   for (const [key, field] of Object.entries(schema.fields)) {
-    if (field.type === "derived" || field.type === "embed" || field.type === "toggle") continue; // never persisted (toggle projects an enum field)
+    if (COMPUTED_TYPES.has(field.type)) continue; // never persisted (toggle projects an enum field)
     if (field.type === "boolean") {
-      if (shouldEmitBoolean(state, key, field)) record[key] = state.bool[key] === true;
+      if (shouldEmitBoolean(state, key, field)) record[key] = ownFlag(state.bool, key);
       continue;
     }
     if (field.type === "table" && field.of) {
@@ -125,7 +128,7 @@ function isMissingDraftValue(value: unknown): boolean {
 
 /** Label of the first required table sub-field empty in any row, else null. */
 function firstMissingTableSubField(field: FieldSpec, rows: TableRowDraft[] | undefined): string | null {
-  if (!field.of || !rows) return null;
+  if (field.type !== "table" || !rows) return null;
   for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
     const row = rows[rowIdx];
     for (const [subKey, subField] of Object.entries(field.of)) {
@@ -135,6 +138,12 @@ function firstMissingTableSubField(field: FieldSpec, rows: TableRowDraft[] | und
   }
   return null;
 }
+
+/** Field types the required check never flags: booleans always hold a
+ *  value, and the computed/projected kinds (COMPUTED_TYPES — the shared
+ *  set, so a future computed type can't drift past this check) have no
+ *  draft input at all. */
+const NEVER_MISSING_TYPES: ReadonlySet<FieldType> = new Set<FieldType>(["boolean", ...COMPUTED_TYPES]);
 
 function validateOneField(key: string, field: FieldSpec, draft: EditState, record: CollectionItem): string | null {
   // A `when`-hidden field has no input the user can fill — never missing.
@@ -146,7 +155,7 @@ function validateOneField(key: string, field: FieldSpec, draft: EditState, recor
   }
   if (!field.required) return null;
   if (draft.mode === "create" && field.primary === true) return null; // server auto-generates id
-  if (field.type === "boolean" || field.type === "derived" || field.type === "embed" || field.type === "toggle") return null;
+  if (NEVER_MISSING_TYPES.has(field.type)) return null;
   return isMissingDraftValue(draft.text[key]) ? field.label : null;
 }
 

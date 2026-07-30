@@ -35,20 +35,30 @@ export type SaveResult =
   | { kind: "missing-field"; field: "description" | "body" }
   | { kind: "exists"; name: string };
 
+// The slug + required-field checks shared by save and update. Returns
+// the error variant to return verbatim, or null when the input is
+// valid. Its variants are a subset of both SaveResult and UpdateResult.
+type SkillInputProblem = { kind: "invalid-slug"; slug: string } | { kind: "missing-field"; field: "description" | "body" };
+
+function validateSkillInput(input: SaveSkillInput): SkillInputProblem | null {
+  if (!isValidSlug(input.name)) return { kind: "invalid-slug", slug: input.name };
+  if (typeof input.description !== "string" || input.description.trim().length === 0) {
+    return { kind: "missing-field", field: "description" };
+  }
+  if (typeof input.body !== "string") {
+    return { kind: "missing-field", field: "body" };
+  }
+  return null;
+}
+
 /**
  * Write a new SKILL.md atomically. Refuses to overwrite — if the
  * skill already exists at either scope, returns `kind: "exists"`.
  */
 export async function saveProjectSkill(input: SaveSkillInput): Promise<SaveResult> {
+  const problem = validateSkillInput(input);
+  if (problem) return problem;
   const { workspaceRoot, name, description, body } = input;
-
-  if (!isValidSlug(name)) return { kind: "invalid-slug", slug: name };
-  if (typeof description !== "string" || description.trim().length === 0) {
-    return { kind: "missing-field", field: "description" };
-  }
-  if (typeof body !== "string") {
-    return { kind: "missing-field", field: "body" };
-  }
 
   // Conflict check across BOTH scopes — we don't want to shadow a
   // user-scope skill with the same name (project would silently
@@ -87,15 +97,9 @@ export type UpdateResult =
  * user-scope skills and rejects names that don't exist.
  */
 export async function updateProjectSkill(input: SaveSkillInput): Promise<UpdateResult> {
+  const problem = validateSkillInput(input);
+  if (problem) return problem;
   const { workspaceRoot, name, description, body } = input;
-
-  if (!isValidSlug(name)) return { kind: "invalid-slug", slug: name };
-  if (typeof description !== "string" || description.trim().length === 0) {
-    return { kind: "missing-field", field: "description" };
-  }
-  if (typeof body !== "string") {
-    return { kind: "missing-field", field: "body" };
-  }
 
   const existing = await discoverSkills({ workspaceRoot });
   const skill = existing.find((candidate) => candidate.name === name);

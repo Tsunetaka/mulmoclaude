@@ -4,6 +4,10 @@
          it's the first thing the user sees when the server isn't
          reachable. Self-hiding when fetchHealth succeeds. -->
     <BackendOfflineBanner :on-retry="fetchHealth" />
+    <!-- Remote-host disconnect notice (#2535) — shown when the host was meant to
+         be connected (a session is parked) but dropped and a silent reconnect
+         couldn't restore it. Offers a one-click re-login. -->
+    <RemoteHostOfflineBanner />
     <!-- CSP-blocked-resource notice (#1989) — a sandboxed view tried to load a
          host not allowed by config/csp.json. Tells the user the exact host +
          directive so they can extend the policy (if they trust it). -->
@@ -135,10 +139,12 @@
           :session-role-icon="sessionRoleIcon"
           :layout-mode="layoutMode"
           :show-right-sidebar="showRightSidebar"
+          :has-new-messages="hasNewWhileDetached"
           @select="onSidebarItemClick"
           @activate="activePane = 'sidebar'"
           @update:layout-mode="setLayoutMode"
           @toggle-right-sidebar="toggleRightSidebar"
+          @jump-to-latest="jumpToLatest"
         />
 
         <!-- Shared Thinking indicator. Sits between the sidebar and
@@ -339,7 +345,22 @@
       @update:open="onSettingsOpenChange"
       @ask-gemini="handleAskGemini"
       @saved="refreshGoogleMapsApiKey"
+      @stopped="onServerStopped"
     />
+
+    <!-- Rendered on the response to POST /api/shutdown, i.e. while the
+         server is still answering. Once it is gone the page cannot be
+         navigated anywhere, so this has to be up first (#2616). -->
+    <div v-if="serverStopped" class="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/80 p-6" data-testid="server-stopped-overlay">
+      <!-- `role="alert"` (assertive by definition) rather than a dialog:
+           there is nothing here to focus or dismiss, and this is the one
+           state a screen-reader user most needs told — the app is gone
+           and no further interaction will do anything. -->
+      <div class="max-w-md rounded-lg bg-white p-6 text-center shadow-xl" role="alert" aria-live="assertive">
+        <p class="text-base font-medium text-gray-900">{{ t("settingsModal.quitTab.stoppedTitle") }}</p>
+        <p class="mt-2 text-sm text-gray-600">{{ t("settingsModal.quitTab.stoppedBody") }}</p>
+      </div>
+    </div>
 
     <!-- Global confirm dialog. Renders the module-global confirm state opened
          via useConfirm()/the collection plugin's confirm() capability — mounted
@@ -352,10 +373,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onScopeDispose, reactive } from "vue";
 import { useI18n } from "vue-i18n";
-import { v4 as uuidv4 } from "uuid";
 import { getPlugin } from "./tools";
 import type { ToolResultComplete } from "gui-chat-protocol/vue";
 import BackendOfflineBanner from "./components/BackendOfflineBanner.vue";
+import RemoteHostOfflineBanner from "./components/RemoteHostOfflineBanner.vue";
 import RightSidebar from "./components/RightSidebar.vue";
 import SidebarHeader from "./components/SidebarHeader.vue";
 import SessionHeaderControls from "./components/SessionHeaderControls.vue";
@@ -385,17 +406,18 @@ import PluginScopedRoot from "./components/PluginScopedRoot.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import { PAGE_ROUTES, type PageRouteName } from "./router";
 import type { SseEvent } from "./types/sse";
-import type { SessionEntry, ActiveSession } from "./types/session";
+import type { ActiveSession } from "./types/session";
 import { EVENT_TYPES } from "./types/events";
 import { buildAgentRequestBody, postAgentRun } from "./utils/agent/request";
 import { resolvePastedAttachment } from "./utils/agent/pastedAttachment";
 import { applyAgentEvent, type AgentEventContext } from "./utils/agent/eventDispatch";
 import { pushErrorMessage, beginUserTurn, updateResult, applyToolResultToSession } from "./utils/session/sessionHelpers";
+import { createEmptySession } from "./utils/session/sessionFactory";
+import { v4 as uuidv4 } from "uuid";
 import { parseCollectionSlashSeed, makeSyntheticCollectionResult, hasRealCollectionResult } from "./utils/collections/presentSeed";
 import { mergeBufferedIntoDraft } from "./utils/chat/buffer";
+import { createInFlightShare } from "./utils/inFlightShare";
 import { roleName, roleIcon } from "./utils/role/icon";
-import { createEmptySession } from "./utils/session/sessionFactory";
-import { buildLoadedSession, parseSessionEntries } from "./utils/session/sessionEntries";
 import { usePendingCalls } from "./composables/usePendingCalls";
 import { loadCspExtra } from "./composables/useCspExtra";
 import { cspViolations, dismissCspViolations, installCspViolationListener } from "./composables/useCspViolations";
@@ -406,6 +428,7 @@ import { useChatScroll } from "./composables/useChatScroll";
 import { useFileDropZone } from "./composables/useFileDropZone";
 import { useViewLayout } from "./composables/useViewLayout";
 import { useSessionSync } from "./composables/useSessionSync";
+import { useSessionLifecycle } from "./composables/useSessionLifecycle";
 import { useSessionDerived } from "./composables/useSessionDerived";
 import { useFaviconState } from "./composables/useFaviconState";
 import { useGlobalImageErrorRepair } from "./composables/useImageErrorRepair";
@@ -471,35 +494,6 @@ const { subscribe: pubsubSubscribe, onReconnect: pubsubOnReconnect } = usePubSub
 const route = useRoute();
 const router = useRouter();
 
-function navigateToSession(sessionId: string, replace = false): void {
-  currentSessionId.value = sessionId;
-  const method = replace ? router.replace : router.push;
-  method({
-    name: PAGE_ROUTES.chat,
-    params: { sessionId },
-  }).catch((err) => {
-    if (err?.type !== 16) {
-      console.error("[navigateToSession] push failed:", err);
-    }
-  });
-}
-
-// External URL changes (back/forward button, typed URL) → update ref.
-// If the session isn't in memory, load it from the server.
-watch(
-  () => route.params.sessionId,
-  async (newId) => {
-    if (typeof newId !== "string" || newId === currentSessionId.value) return;
-    currentSessionId.value = newId;
-    if (!sessionMap.has(newId)) {
-      await loadSession(newId);
-      if (!sessionMap.has(newId)) {
-        createNewSession();
-      }
-    }
-  },
-);
-
 // --- Global state ---
 // `roles` is the merged list (built-in + custom). `currentRoleId`
 // is the role-selector dropdown's current pick — App.vue reads it
@@ -534,17 +528,6 @@ const currentBufferedMessages = computed<string[]>({
 const activePane = ref<"sidebar" | "main">("sidebar");
 
 const { sessions, historyError, fetchSessions, setBookmark, deleteSession: deleteSessionFromHistory } = useSessionHistory();
-const { markSessionRead, refreshSessionStates } = useSessionSync({
-  sessionMap,
-  currentSessionId,
-  fetchSessions,
-  // Another tab hard-deleted the chat we're currently viewing. The
-  // sessionMap eviction has already cleared the in-memory state; the
-  // URL still points at the dead id. Mirror the URL→404 fallback on
-  // line ~366 by spinning up a fresh session so the user lands on a
-  // working /chat instead of a blank pane.
-  onCurrentSessionDeleted: () => createNewSession(),
-});
 const { geminiAvailable, sandboxEnabled, cpuLoadRatio, fetchHealth } = useHealth();
 
 const { activeSession, toolResults, sidebarResults, isRunning, activeSessionRunning, statusMessage, toolCallHistory, activeSessionCount, unreadCount } =
@@ -623,11 +606,12 @@ const chatInputRef = ref<{
   refreshVoiceAvailability: () => Promise<void>;
 } | null>(null);
 
-const { focusChatInput } = useChatScroll({
+const { focusChatInput, jumpToLatest, hasNewWhileDetached } = useChatScroll({
   sessionSidebarRef,
   toolResults,
   isRunning: activeSessionRunning,
   chatInputRef,
+  sessionId: computed(() => activeSession.value?.id ?? null),
 });
 
 // Panel-wide file drop (#1289 Step 2). The handlers are bound on
@@ -652,6 +636,16 @@ const {
 const { showRightSidebar, toggleRightSidebar } = useRightSidebar();
 const showSettings = ref(false);
 const showMulmoPointPopup = ref(false);
+// Set when the server acknowledged POST /api/shutdown. One-way: nothing
+// can clear it, because there is no server left to talk to (#2616).
+const serverStopped = ref(false);
+function onServerStopped(): void {
+  // Close the modal too: leaving it open puts a live-looking settings
+  // pane behind the "stopped" card, which reads as if something still
+  // works. Nothing does — the server is gone.
+  showSettings.value = false;
+  serverStopped.value = true;
+}
 
 // When the Settings modal closes, re-check voice-input availability: the
 // user may have just enabled it / started the model download, and the
@@ -689,6 +683,50 @@ const currentPage = computed<PageRouteName | null>(() => {
 // pick → edit transition, and any future ribbon button shows up in both
 // places by editing only SlideEditorRibbon's button list.
 const isSlideEditorChrome = computed(() => currentPage.value === PAGE_ROUTES.slides || currentPage.value === PAGE_ROUTES.workFiles);
+
+// Session lifecycle (create / switch / load / resume). The event-stream
+// hook `ensureSessionSubscription` (a hoisted function below) is injected
+// so this composable stays out of the pub/sub concern.
+const { removeCurrentIfEmpty, createNewSession, onRoleChange, loadSession, refreshSessionTranscript, resumeOrCreateChatSession } = useSessionLifecycle({
+  sessionMap,
+  currentSessionId,
+  isChatPage,
+  roles,
+  currentRoleId,
+  sessions,
+  mergedSessions,
+  ensureSessionSubscription,
+  focusChatInput,
+  collapseChatSuggestions: () => chatInputRef.value?.collapseSuggestions(),
+});
+
+const { markSessionRead, refreshSessionStates } = useSessionSync({
+  sessionMap,
+  currentSessionId,
+  fetchSessions,
+  // Another tab hard-deleted the chat we're currently viewing. The
+  // sessionMap eviction has already cleared the in-memory state; the
+  // URL still points at the dead id. Mirror the URL→404 fallback in
+  // loadSession by spinning up a fresh session so the user lands on a
+  // working /chat instead of a blank pane.
+  onCurrentSessionDeleted: () => createNewSession(),
+});
+
+// External URL changes (back/forward button, typed URL) → update ref.
+// If the session isn't in memory, load it from the server.
+watch(
+  () => route.params.sessionId,
+  async (newId) => {
+    if (typeof newId !== "string" || newId === currentSessionId.value) return;
+    currentSessionId.value = newId;
+    if (!sessionMap.has(newId)) {
+      await loadSession(newId);
+      if (!sessionMap.has(newId)) {
+        createNewSession();
+      }
+    }
+  },
+);
 
 // Refresh the files tree after each agent run so newly written files
 // appear without a manual reload.
@@ -908,151 +946,6 @@ function onSidebarItemClick(uuid: string) {
   selectedResultUuid.value = uuid;
 }
 
-// Remove the current session from sessionMap if it's empty (no messages).
-// Returns true if a session was removed, so the caller can use
-// router.replace instead of router.push to keep the empty session out
-// of browser navigation history.
-function removeCurrentIfEmpty(): boolean {
-  const sessionId = currentSessionId.value;
-  if (!sessionId) return false;
-  const session = sessionMap.get(sessionId);
-  if (session && session.toolResults.length === 0) {
-    sessionMap.delete(sessionId);
-    return true;
-  }
-  return false;
-}
-
-// Replace vs push is derived from state, not chosen by the caller:
-// replace only when we just discarded an empty session AND we're
-// currently on that same /chat/:emptyId URL — otherwise there's
-// something worth keeping in history (a real chat transcript, or
-// a non-chat page like /wiki the user came from).
-function createNewSession(roleId?: string): ActiveSession {
-  const removedEmpty = removeCurrentIfEmpty();
-  const replace = removedEmpty && isChatPage.value;
-  // The "+" button and role-change handler always supply roleId
-  // (read from SessionHeaderControls). When omitted (plugin-driven
-  // startNewChat, initial bootstrap, post-failure recovery) inherit
-  // the dropdown's current selection so the new chat uses the role
-  // the user last picked. Final fallback to roles[0] only matters
-  // before the dropdown has seeded (very early bootstrap).
-  const rId = roleId ?? (currentRoleId.value || roles.value[0]?.id || "");
-  const session = createEmptySession(uuidv4(), rId);
-  sessionMap.set(session.id, session);
-  navigateToSession(session.id, replace);
-  chatInputRef.value?.collapseSuggestions();
-  nextTick(() => focusChatInput());
-  return session;
-}
-
-function onRoleChange(roleId: string) {
-  // On non-chat pages (wiki, files, etc.) the user is just picking
-  // the role that future new-chat actions should use — don't yank
-  // them onto /chat by creating a session here. The new selection
-  // is preserved inside SessionHeaderControls (useCurrentRole) and
-  // future "+" clicks will read it from there.
-  if (!isChatPage.value) return;
-  createNewSession(roleId);
-}
-
-// Land on /chat with no specific session in mind (initial load or
-// home-button click). Prefer the most-recent session so the user
-// resumes where they left off; only create a fresh session when they
-// have no chat history at all. Explicit "+" clicks and role switches
-// still create a new session via createNewSession() directly.
-async function resumeOrCreateChatSession(): Promise<void> {
-  const topId = mergedSessions.value[0]?.id;
-  if (!topId) {
-    createNewSession();
-    return;
-  }
-  if (sessionMap.has(topId)) {
-    activateSession(topId, false);
-    return;
-  }
-  await loadSession(topId);
-  // loadSession silently returns on fetch failure (stale summary,
-  // transient API error). Without a fallback, /chat is left with no
-  // active session and sendMessage becomes a no-op.
-  if (!sessionMap.has(topId)) {
-    createNewSession();
-  }
-}
-
-function activateSession(sessionId: string, replace: boolean): void {
-  const reactiveSession = sessionMap.get(sessionId);
-  if (reactiveSession) ensureSessionSubscription(reactiveSession);
-  // Skip the redundant navigateToSession when we're already on the
-  // matching /chat/:sessionId URL. The route-watcher path arrives
-  // here AFTER the URL has changed (notification permalink, browser
-  // back/forward, manual paste), and re-pushing the same path would
-  // strip query strings — `?result=<uuid>` for the
-  // notification-permalink case (#762) — because navigateToSession
-  // builds the location object with `params` only.
-  const onTargetSession = route.name === PAGE_ROUTES.chat && route.params.sessionId === sessionId;
-  if (!onTargetSession) {
-    navigateToSession(sessionId, replace);
-  }
-  // Closing the history popup is no longer explicit — navigating to
-  // /chat/:id via navigateToSession changes the route, and the
-  // canvas-column branches away from SessionHistoryPanel naturally.
-}
-
-async function loadSession(sessionId: string) {
-  // currentSessionId is `""` on non-chat pages, so clicking a session
-  // in the history panel from /wiki never matches and always navigates
-  // to /chat. On /chat this guard just avoids re-navigating to the
-  // session we're already displaying.
-  const alreadyOnThatChat = sessionId === currentSessionId.value && sessionMap.has(sessionId);
-  if (alreadyOnThatChat) return;
-  // Mirror createNewSession: only replace when we just discarded an
-  // empty session AND we're on that /chat/:emptyId URL. On any
-  // non-chat page selecting a session must push, otherwise the
-  // current entry would be skipped when the last chat happened to
-  // be empty.
-  const removedEmpty = removeCurrentIfEmpty();
-  const replaced = removedEmpty && isChatPage.value;
-
-  const live = sessionMap.get(sessionId);
-  if (live) {
-    activateSession(sessionId, replaced);
-    return;
-  }
-
-  const response = await apiGet<SessionEntry[]>(API_ROUTES.sessions.detail.replace(":id", encodeURIComponent(sessionId)));
-  if (!response.ok) return;
-
-  const newSession = buildLoadedSession({
-    id: sessionId,
-    entries: response.data,
-    defaultRoleId: roles.value[0]?.id ?? "",
-    serverSummary: sessions.value.find((summary) => summary.id === sessionId),
-    nowIso: new Date().toISOString(),
-  });
-  sessionMap.set(sessionId, newSession);
-  activateSession(sessionId, replaced);
-}
-
-// Re-fetch the transcript from the server and patch any entries the
-// client missed (e.g. due to a pub-sub disconnect during a long
-// Docker build). Called on session_finished so the user sees the
-// full response even if mid-run events were lost. See issue #350.
-async function refreshSessionTranscript(sessionId: string): Promise<void> {
-  const session = sessionMap.get(sessionId);
-  if (!session) return;
-  const response = await apiGet<SessionEntry[]>(API_ROUTES.sessions.detail.replace(":id", encodeURIComponent(sessionId)));
-  if (!response.ok) return;
-  const summary = sessions.value.find((entry) => entry.id === sessionId);
-  const serverResults = parseSessionEntries(response.data, summary?.origin);
-  // Only patch if the server knows more than we do — avoids
-  // replacing a richer in-flight state with a stale snapshot when
-  // session_finished races with the last few events.
-  if (serverResults.length > session.toolResults.length) {
-    session.toolResults = serverResults;
-  }
-}
-
 function buildAgentEventContext(session: ActiveSession): AgentEventContext {
   const sessionId = session.id;
   return {
@@ -1104,22 +997,44 @@ function handleSessionFinished(sessionId: string): void {
 //     throttling — WS keeps `connected` on the server but delivery stops
 //     while the tab is backgrounded, and there's no `disconnect` event to
 //     hook on reconnect)
+// BOTH surfaces have to stay: neither detects every case the other does.
+// They do, however, fire together on the common path — Chrome throttles a
+// backgrounded tab until the socket drops, so returning to it reconnects
+// AND flips visibility at once. Sharing the pass keeps the coverage while
+// running the work once (#2584): `GET /api/sessions` walks every session
+// in the window with two stats + a meta read each, so a duplicate pass is
+// ~1500 syscalls on a 488-session workspace, for nothing.
+//
 // refreshSessionStates() carries its own sequence guard inside
 // useSessionSync so concurrent catch-ups can't overwrite newer live state
 // with an older-but-slower response. refreshSessionTranscript() only
 // upgrades toolResults when the server view is strictly larger, so it's
-// already idempotent against interleaving.
+// already idempotent against interleaving. Both guards stay — they cover
+// interleaving with LIVE events, which the share does not touch.
+// The transcript half is keyed by session, not shared globally: a pass
+// can take seconds on a large workspace, and `loadSession` reuses an
+// already-visited session WITHOUT re-fetching. A trigger arriving after
+// the user moved on must refresh the session they are now looking at,
+// not join the pass still fetching the previous one.
+const catchUpShare = createInFlightShare();
+const SESSION_LIST_KEY = "sessions";
+
 function catchUpMissedEvents(reason: "reconnect" | "visibility"): void {
-  console.info(`[chat-ui] catching up after ${reason}`);
-  refreshSessionStates().catch((err) => {
-    console.warn("[chat-ui] refreshSessionStates failed:", err);
-  });
   const currentId = currentSessionId.value;
-  if (currentId) {
-    refreshSessionTranscript(currentId).catch((err) => {
+  const joining = catchUpShare.isRunning(SESSION_LIST_KEY);
+  console.info(joining ? `[chat-ui] catch-up after ${reason} joined the pass already running` : `[chat-ui] catching up after ${reason}`);
+
+  void catchUpShare.run(SESSION_LIST_KEY, () =>
+    refreshSessionStates().catch((err: unknown) => {
+      console.warn("[chat-ui] refreshSessionStates failed:", err);
+    }),
+  );
+  if (!currentId) return;
+  void catchUpShare.run(`transcript:${currentId}`, () =>
+    refreshSessionTranscript(currentId).catch((err: unknown) => {
       console.warn("[chat-ui] refreshSessionTranscript failed:", err);
-    });
-  }
+    }),
+  );
 }
 
 // Capture the unsubscribe so remount / HMR doesn't accumulate stale

@@ -1,6 +1,6 @@
 {
   "name": "@mulmobridge/web-push",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "Auth-agnostic sender for the mulmoserver Web Push (sendPush) Cloud Function",
   "type": "module",
   "main": "./dist/index.js",
@@ -28,5 +28,21 @@
   "author": "Receptron Team",
   "devDependencies": {
     "typescript": "^6.0.3"
+  },
+  "homepage": "https://github.com/receptron/mulmoclaude/tree/main/packages/web-push#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/receptron/mulmoclaude.git",
+    "directory": "packages/web-push"
+  },
+  "keywords": [
+    "web-push",
+    "fcm",
+    "push-notification",
+    "mulmoterminal",
+    "mulmoclaude"
+  ],
+  "bugs": {
+    "url": "https://github.com/receptron/mulmoclaude/issues"
   }
 }

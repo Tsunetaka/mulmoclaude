@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isAbortCausedExit, buildExitErrorEvent, brokerNotReadyErrorEvent } from "../../server/agent/backend/claude-code.js";
+import { isAbortCausedExit, buildExitErrorEvent, brokerNotReadyErrorEvent, isBenignClaudeStderr } from "../../server/agent/backend/claude-code.js";
 
 // Regression coverage for the stop-button false-error fix (#1625).
 // readAgentEvents only suppresses the exit-error event when
@@ -79,4 +79,17 @@ test("brokerNotReadyErrorEvent complements buildExitErrorEvent on a clean exit",
   assert.equal(buildExitErrorEvent(0, null, undefined, raceStderr), null); // clean exit → no exit error
   assert.equal(brokerNotReadyErrorEvent(raceStderr)?.message, raceStderr); // …but the race is still surfaced
   assert.equal(brokerNotReadyErrorEvent("all good, no tools needed"), null);
+});
+
+test("isBenignClaudeStderr recognises the sandbox workspace-trust notice (#2055)", () => {
+  const trustLine =
+    'Ignoring 4 permissions.allow entries from .claude/settings.json: this workspace has not been trusted. Run Claude Code interactively here once and accept the trust dialog, or set projects["/home/node/mulmoclaude"].hasTrustDialogAccepted: true in /home/node/.claude.json.';
+  assert.equal(isBenignClaudeStderr(trustLine), true);
+});
+
+test("isBenignClaudeStderr does not swallow genuine errors", () => {
+  assert.equal(isBenignClaudeStderr("Error: ENOENT: no such file or directory"), false);
+  assert.equal(isBenignClaudeStderr("permission denied while writing config"), false);
+  assert.equal(isBenignClaudeStderr("MCP server crashed with exit code 1"), false);
+  assert.equal(isBenignClaudeStderr(""), false);
 });

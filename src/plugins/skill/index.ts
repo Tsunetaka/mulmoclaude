@@ -27,9 +27,6 @@ export { TOOL_NAME };
 
 export { View, Preview };
 
-const skillPlugin = { plugin };
-export default skillPlugin;
-
 export const REGISTRATION: PluginRegistration = {
   toolName: TOOL_NAME,
   entry: plugin,

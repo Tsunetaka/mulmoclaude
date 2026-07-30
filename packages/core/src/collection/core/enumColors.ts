@@ -15,6 +15,7 @@
 // (red = urgent, amber = nudge) rather than the rotating palette.
 // `resolveEnumColor` encapsulates that rule.
 
+import { fieldText, fieldTextOrNull } from "./fieldText";
 import type { CollectionSchema } from "./schema";
 
 export interface EnumColorClasses {
@@ -102,8 +103,11 @@ export function enumColorClasses(index: number): EnumColorClasses {
 /** Index of `value` within an enum field's declared `values`, or -1 when the
  *  value is empty / unknown (→ neutral). */
 export function enumValueIndex(values: readonly string[] | undefined, value: unknown): number {
-  if (value === undefined || value === null || value === "") return -1;
-  return values?.indexOf(String(value)) ?? -1;
+  // No text form (array/object) means no enum member — "[object Object]" must
+  // not index into the palette.
+  const text = fieldTextOrNull(value);
+  if (text === null || text === "") return -1;
+  return values?.indexOf(text) ?? -1;
 }
 
 /** The flagged values when `fieldKey` is the schema's `notifyWhen` target (the
@@ -121,10 +125,11 @@ function notifyValuesFor(schema: CollectionSchema, fieldKey: string): readonly s
 export function resolveEnumColor(schema: CollectionSchema, fieldKey: string, value: unknown): EnumColorClasses {
   const notifyValues = notifyValuesFor(schema, fieldKey);
   if (notifyValues) {
-    const str = value === undefined || value === null ? "" : String(value);
+    const str = fieldText(value);
     const rank = notifyValues.indexOf(str);
     if (rank < 0) return ENUM_NEUTRAL;
     return rank === 0 ? ENUM_ALERT : ENUM_NUDGE;
   }
-  return enumColorClasses(enumValueIndex(schema.fields[fieldKey]?.values, value));
+  const spec = schema.fields[fieldKey];
+  return enumColorClasses(enumValueIndex(spec?.type === "enum" ? spec.values : undefined, value));
 }

@@ -100,6 +100,10 @@ const frMessages = {
     intraBody:
       "Les plugins « {first} » et « {second} » enregistrent tous deux le {dimension} « {key} ». « {first} » l'a réclamé en premier, donc l'enregistrement de « {second} » est ignoré.",
   },
+  shadowedEnv: {
+    title: "Le shell remplace .env",
+    body: "Défini à la fois dans le shell et dans .env : {keys}. La valeur du shell l'emporte, donc .env est ignoré. Si vous avez modifié .env, mettez à jour ou supprimez la valeur du shell puis redémarrez.",
+  },
   optionalDeps: {
     // `title` générique conservé pour la compatibilité avec les
     // entrées d'historique persistées avant la séparation par motif ;
@@ -127,6 +131,11 @@ const frMessages = {
     hideDetails: "Masquer les détails",
     retry: "Réessayer",
   },
+  remoteHostOffline: {
+    title: "Hôte distant déconnecté",
+    body: "Votre téléphone ne pourra pas envoyer vers cet appareil tant que vous n'êtes pas reconnecté.",
+    reconnect: "Se reconnecter",
+  },
   remoteHost: {
     title: "Hôte distant",
     online: "Hôte distant en ligne",
@@ -147,6 +156,7 @@ const frMessages = {
     qrHint: "Ou scannez ce code QR avec l'appareil photo de votre téléphone.",
   },
   sidebarHeader: {
+    newMessages: "Nouveaux messages",
     home: "Aller à la dernière conversation",
     toolCallHistory: "Historique des appels d'outils",
     settings: "Paramètres",
@@ -194,6 +204,12 @@ const frMessages = {
       "Affiche les répertoires racine internes de l'agent (conversations/, feeds/, etc.) en plus des contenus utilisateur (data/, artifacts/, config/).",
   },
   fileTree: {
+    dropHint: "Déposez des fichiers ici pour les enregistrer dans ce dossier",
+    upload: {
+      progress: "Téléversement {done} sur {total}…",
+      done: "{count} fichier(s) enregistré(s)",
+      failed: "{count} fichier(s) n'ont pas pu être enregistrés",
+    },
     workspace: "(espace de travail)",
     recentlyChanged: "Modifiés récemment",
     newFileMenuItem: "Nouveau fichier",
@@ -241,6 +257,7 @@ const frMessages = {
       refs: "Répertoires de référence",
       map: "Carte",
       photos: "Photos",
+      google: "Google",
       model: "Modèle",
       voice: "Voix",
       chatIndex: "Index du chat",
@@ -248,6 +265,7 @@ const frMessages = {
       notifications: "Web Push",
       skills: "Skills",
       roles: "Rôles",
+      quit: "Quitter",
     },
     groups: {
       llm: "LLM",
@@ -256,8 +274,24 @@ const frMessages = {
       notifications: "Notifications",
       plugins: "Plugins",
       management: "Gestion",
+      server: "Serveur",
     },
     navAriaLabel: "Sections des paramètres",
+    googleTab: {
+      description:
+        "Associez votre compte Google pour que cette machine puisse appeler les API Google (Calendar en premier). Le jeton d'actualisation est stocké uniquement sur cette machine et n'est jamais envoyé à un autre serveur que Google.",
+      statusLinked: "Associé",
+      statusNotLinked: "Non associé",
+      statusPending: "En attente de la fin du consentement dans le navigateur…",
+      connect: "Associer le compte Google",
+      unlink: "Dissocier",
+      unlinkConfirm: "Dissocier le compte Google ? Le jeton enregistré sera révoqué et supprimé de cette machine.",
+      clientSecretAmbiguous:
+        "Plusieurs fichiers client_secret_*.json ont été trouvés dans ~/.secrets/. N'en conservez qu'un seul afin que le jeton enregistré reste associé au bon client OAuth.",
+      loadError: "Échec du chargement de l'état de l'association Google.",
+      connectError: "Échec du démarrage du flux d'autorisation Google.",
+      unlinkError: "Échec de la dissociation du compte Google.",
+    },
     mapTab: {
       description: "Définit la clé API Google Maps utilisée par le plugin de carte. La clé est stockée localement et n'est envoyée qu'à Google Maps.",
       apiKeyLabel: "Clé API Google Maps",
@@ -281,6 +315,21 @@ const frMessages = {
       loadError: "Échec du chargement des paramètres",
       saveError: "Échec de l'enregistrement",
     },
+    quitTab: {
+      description:
+        "Arrête le serveur MulmoClaude qui tourne sur cette machine. Lancé depuis l'icône, il continue de tourner même si vous fermez cet onglet — c'est ici qu'on l'arrête sans terminal.",
+      // Message function form — skips vue-i18n's message compiler so the
+      // literal `@` in `mulmoclaude@latest` is not parsed as a linked-message
+      // reference (the compiler throws, and the whole tab renders as nothing).
+      restartHint: () => "Pour le relancer, double-cliquez sur l'icône MulmoClaude (ou lancez `npx mulmoclaude@latest`).",
+      quitLabel: "Quitter MulmoClaude",
+      confirmBody: "Le serveur s'arrête et cette page cesse de fonctionner. Tout traitement en cours est interrompu.",
+      confirmLabel: "Quitter",
+      stopping: "Arrêt en cours…",
+      stoppedTitle: "MulmoClaude est arrêté",
+      stoppedBody: "Vous pouvez fermer cet onglet. Double-cliquez sur l'icône pour le relancer.",
+      error: "Échec de l'arrêt du serveur",
+    },
     notificationsTab: {
       description:
         "Recevez une notification push sur vos appareils enregistrés lorsqu'une tâche que vous avez lancée ici se termine — pratique quand vous posez une question, vous éloignez et voulez savoir dès que la réponse est prête.",
@@ -288,6 +337,11 @@ const frMessages = {
       enableHint: "Se déclenche à la fin d'une conversation que vous avez lancée ici. Les tâches planifiées et en arrière-plan ne la déclenchent pas.",
       remoteHostNote:
         "Nécessite la connexion RemoteHost (qui fournit l'authentification) et au moins un appareil enregistré. Si l'un manque, rien ne se passe.",
+      macosRemindersLabel: "Créer un rappel macOS à la fin d'une tâche",
+      macosRemindersHint:
+        "Ajoute la tâche terminée à votre liste de Rappels par défaut. La synchronisation iCloud la répercute sur votre iPhone, qui délivre la notification.",
+      macosRemindersForcedOff:
+        "Désactivé au démarrage par --disable-macos-reminders ou DISABLE_MACOS_REMINDER_NOTIFICATIONS. Retirez l'option ou supprimez la variable d'environnement, puis redémarrez pour le contrôler ici.",
       statusOn: "Web Push est ACTIVÉ",
       statusOff: "Web Push est DÉSACTIVÉ",
       loadError: "Échec du chargement des paramètres",
@@ -443,6 +497,12 @@ const frMessages = {
     pin: "Épingler au lanceur",
     unpin: "Détacher du lanceur",
     zoneAriaLabel: "Raccourcis épinglés",
+    reorder: {
+      open: "Réorganiser les raccourcis",
+      title: "Réorganiser",
+      moveUp: "Monter",
+      moveDown: "Descendre",
+    },
   },
   fileContentHeader: {
     showRendered: "Afficher le Markdown rendu",
@@ -748,6 +808,12 @@ const frMessages = {
     detailsToggle: "Afficher les détails",
     promptLabel: "Prompt",
     roleLabel: "Rôle",
+    confirmDelete: "Supprimer la tâche « {name} » ? Cette action est irréversible.",
+    hintNewsRss: "Récupération actualités / RSS",
+    hintJournal: "Passage quotidien du journal",
+    hintWiki: "Maintenance du wiki",
+    hintMemory: "Extraction de mémoire",
+    hintCalendar: "Synchronisation agenda / contacts",
   },
   pluginCanvas: {
     undo: "Annuler",
@@ -756,6 +822,7 @@ const frMessages = {
     styleLabel: "Style :",
     stylePromptWithPath: "Transforme l'image en `{path}` en une image de style {style}.",
     stylePromptNoPath: "Transforme mon dessin sur le canevas en une image de style {style}.",
+    saveFailed: "Non enregistré",
   },
   pluginWiki: {
     backToIndex: "Retour à l'index",
@@ -783,6 +850,7 @@ const frMessages = {
     metadataEditor: "Éditeur",
     pageEditHeader: "Édition du wiki",
     snapshotExpired: "Instantané expiré — affichage de la page actuelle",
+    snapshotLoadError: "Impossible de charger l'instantané — la page existe peut-être encore. Actualisez la page.",
     pageDeleted: "Page supprimée",
     history: {
       tabContent: "Contenu",
@@ -939,62 +1007,11 @@ const frMessages = {
     errDeleteFailed: "Échec de la suppression",
     errNetworkError: "Erreur réseau",
     errServerError: "Erreur du serveur : {status}",
+    errRefreshFailed: "Enregistré, mais l'actualisation de la liste a échoué.",
+    confirmDelete: "Supprimer le rôle « {name} » ? Cette action est irréversible.",
   },
   pluginUiImage: {
     promptLabel: "{label} :",
-  },
-  pluginMulmoScript: {
-    beatCount: "{count} beat | {count} beats",
-    movie: "Film",
-    generating: "Génération…",
-    rendering: "Rendu…",
-    saving: "Enregistrement…",
-    update: "Mettre à jour",
-    characters: "Personnages",
-    drop: "Déposer",
-    gen: "Générer",
-    play: "▶ Lire",
-    stop: "■ Arrêter",
-    playPresentation: "Lire la présentation",
-    regenerateMovie: "Régénérer la vidéo",
-    movieGenerationFailed: "Échec de la génération de la vidéo",
-    pdf: "PDF",
-    regeneratePdf: "Régénérer le PDF",
-    generatingPdf: "Génération du PDF…",
-    retry: "Réessayer",
-    errPrefix: "⚠ Erreur",
-    noBeats: "Aucun beat trouvé dans le script",
-    editSource: "Modifier la source du script",
-    applyChanges: "Appliquer les modifications",
-    generateAll: "Tout générer",
-    orDropImage: "ou déposez une image",
-    generate: "Générer",
-    generateAudio: "♪ Générer",
-    saveErrorInvalidJson: "⚠ JSON invalide : {error}",
-    saveErrorSaveFailed: "⚠ Échec de la sauvegarde : {error}",
-  },
-  pluginMarkdown: {
-    loading: "Chargement du document...",
-    loadFailed: "⚠ Échec du chargement du document : {error}",
-    refreshFailed: "⚠ Échec de l'actualisation du document : {error} — affichage du dernier contenu chargé avec succès.",
-    noContent: "Aucun contenu Markdown disponible",
-    pdf: "PDF",
-    pdfFailedShort: "⚠ Échec PDF",
-    editSource: "Modifier la source Markdown",
-    saving: "Enregistrement...",
-    applyChanges: "Appliquer les modifications",
-    cancel: "Annuler",
-    saveFailed: "Échec de l'enregistrement : {error}",
-    saveError: "⚠ {error}",
-    copyLabel: "Copier",
-    copiedLabel: "Copié !",
-    taskCountMismatch: "Le nombre de tâches diffère entre la source Markdown et le rendu. La modification a été refusée pour éviter de corrompre le fichier.",
-    marpSlidesMode: "Diapositives Marp · {count}",
-    marpExportPdf: "Exporter en PDF",
-    marpRenderFailed: "⚠ Échec du rendu des diapositives Marp : {error}",
-    marpSplitEnter: "Modifier la source en parallèle de l'aperçu",
-    marpSplitExit: "Fermer l'éditeur de source",
-    marpSplitEditorLabel: "Source",
   },
   markdownMermaid: {
     loadFailed: "⚠ Échec du chargement de Mermaid : {error}",
@@ -1006,6 +1023,9 @@ const frMessages = {
     editContent: "Modifier le contenu texte",
     applyChanges: "Appliquer les modifications",
     copyLabel: "Copier",
+    speakerSystem: "Système",
+    speakerUser: "Vous",
+    speakerAssistant: "Assistant",
     copiedLabel: "Copié !",
     cancel: "Annuler",
     seededByPlugin: "depuis {pkg}",

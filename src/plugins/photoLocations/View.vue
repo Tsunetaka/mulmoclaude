@@ -6,13 +6,15 @@
 // small + always-loadable regardless of whether the user has a
 // Google Maps API key set.
 
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { apiPost } from "../../utils/api";
 import { pluginEndpoints } from "../api";
 import type { ResolvedRoute } from "../meta-types";
 import { errorMessage as toErrorMessage } from "../../utils/errors";
-import { formatDate } from "../../utils/format/date";
+import { fmtCoord, fmtAltitude, fmtTakenAt, hasValidCoords } from "./format";
+import { usePubSub } from "../../composables/usePubSub";
+import { META } from "./meta";
 
 interface Sidecar {
   version: 1;
@@ -51,8 +53,11 @@ const locations = ref<ListedSidecar[]>([]);
 const loading = ref(true);
 const errorMessage = ref<string>("");
 
-async function refresh(): Promise<void> {
-  loading.value = true;
+// `silent` skips the loading flag so a pubsub-driven background refresh
+// doesn't replace the list with the spinner (and reset scroll) on every
+// captured photo — only the initial mount load shows the spinner.
+async function refresh(silent = false): Promise<void> {
+  if (!silent) loading.value = true;
   errorMessage.value = "";
   try {
     const result = await apiPost<ListResult>(endpoints.dispatch.url, { kind: "list" });
@@ -65,32 +70,21 @@ async function refresh(): Promise<void> {
   }
 }
 
-const withGps = computed(() => locations.value.filter((row) => hasFiniteCoords(row.sidecar.exif)));
+const withGps = computed(() => locations.value.filter((row) => hasValidCoords(row.sidecar.exif)));
+
+// Refetch when the server publishes a sidecar change (a new geotagged photo
+// was saved) so the list stays live without polling.
+const { subscribe } = usePubSub();
+let unsubscribe: (() => void) | null = null;
 
 onMounted(() => {
   void refresh();
+  unsubscribe = subscribe(META.staticChannels.locationsChanged, () => void refresh(true));
 });
 
-function fmtCoord(value: unknown): string {
-  // The handler validates lat/lng on write, but a hand-edited
-  // sidecar can still ship a string / null past the type — guard
-  // before calling `toFixed` so one bad row doesn't crash the View.
-  // (Codex review on PR #1250.)
-  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(5) : "—";
-}
-
-function fmtAltitude(value: unknown): string | null {
-  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(0) : null;
-}
-
-function fmtDate(iso: string | undefined): string {
-  if (!iso) return "—";
-  return formatDate(iso);
-}
-
-function hasFiniteCoords(exif: { lat?: unknown; lng?: unknown }): boolean {
-  return typeof exif.lat === "number" && Number.isFinite(exif.lat) && typeof exif.lng === "number" && Number.isFinite(exif.lng);
-}
+onUnmounted(() => {
+  unsubscribe?.();
+});
 </script>
 
 <template>
@@ -110,10 +104,10 @@ function hasFiniteCoords(exif: { lat?: unknown; lng?: unknown }): boolean {
       <li v-for="row in locations" :key="row.id" class="row" :data-testid="`photo-locations-row-${row.id}`">
         <div class="row-main">
           <code class="path">{{ row.sidecar.photo.relativePath }}</code>
-          <span class="taken">{{ fmtDate(row.sidecar.exif.takenAt) }}</span>
+          <span class="taken">{{ fmtTakenAt(row.sidecar.exif.takenAt) }}</span>
         </div>
         <div class="row-meta">
-          <span v-if="hasFiniteCoords(row.sidecar.exif)" class="coords">
+          <span v-if="hasValidCoords(row.sidecar.exif)" class="coords">
             <!-- eslint-disable @intlify/vue-i18n/no-raw-text -- coordinates emoji + decimal pair + altitude unit are language-neutral numeric formatters, not user-facing prose -->
             📍 {{ fmtCoord(row.sidecar.exif.lat) }}, {{ fmtCoord(row.sidecar.exif.lng) }}
             <span v-if="fmtAltitude(row.sidecar.exif.altitude)" class="altitude">({{ fmtAltitude(row.sidecar.exif.altitude) }}m)</span>

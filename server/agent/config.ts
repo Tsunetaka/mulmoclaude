@@ -10,6 +10,7 @@ import type { EffortLevel, McpServerSpec } from "../system/config.js";
 import { startStdioHttpShim, type ShimHandle } from "./stdioHttpShim.js";
 import { claudeConfigDir, claudeConfigJson } from "../utils/claudeConfigPath.js";
 import { getCurrentToken } from "../api/auth/token.js";
+import { ONE_MINUTE_MS } from "../utils/time.js";
 import type { Attachment } from "@mulmobridge/protocol";
 import { isImageMime, isNativeAttachmentMime } from "@mulmobridge/client";
 import { convertAttachment } from "./attachmentConverter.js";
@@ -297,11 +298,32 @@ const LOCAL_MCP_SERVER_PATH = join(dirname(fileURLToPath(import.meta.url)), "mcp
  *  with the SHIPPED command/args/env instead of a hand-copied duplicate —
  *  the drift that let #1974 and #1995 ship without the smoke test ever
  *  seeing them (#2052). */
+/** Connect-wait ceiling handed to the CLI inside the sandbox container.
+ *
+ *  This is a CEILING, not a delay: a fast environment still proceeds the moment
+ *  the broker answers, so raising it costs nothing there. It exists for the slow
+ *  bind-mount case (Windows / macOS Docker Desktop), where tsx transcodes the
+ *  broker's import graph over a 9p-class mount and cold boot overruns the CLI's
+ *  ~5s default, surfacing as an intermittent
+ *  `MCP tool mcp__mulmoclaude__handlePermission not found` (#2201, #2234).
+ *
+ *  Deliberately generous rather than tuned: the only cost of overshooting is a
+ *  slower report when the broker is genuinely dead, while undershooting brings
+ *  the flake back. #2233 will measure real cold-boot time and this can tighten
+ *  to that figure plus margin. */
+const MCP_CONNECT_TIMEOUT_MS = ONE_MINUTE_MS;
+
 export interface McpStdioServerSpec {
   type: "stdio";
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** Connect to this server at session start rather than lazily, so a resumed
+   *  turn doesn't race the broker's cold boot (#2234). Requires CLI ≥ 2.1.121;
+   *  older versions ignore the field. Inert on its own — the CLI still gives up
+   *  after its default connect wait, so this only helps together with the
+   *  raised `MCP_CONNECT_TIMEOUT_MS` in `buildDockerSpawnArgs`. */
+  alwaysLoad: boolean;
 }
 
 export function buildMulmoclaudeServer(params: { chatSessionId: string; port: number; activePlugins: string[]; useDocker: boolean }): McpStdioServerSpec {
@@ -333,6 +355,7 @@ export function buildMulmoclaudeServer(params: { chatSessionId: string; port: nu
     // when absent, which is why this worked through Apr 2026 and
     // started silently failing some time after the CLI update.
     type: "stdio",
+    alwaysLoad: true,
     command,
     // Docker path: register the ESM resolver hook that plugs the
     // Windows-junction gap in the ESM loader (#1946/#1982). Passed
@@ -394,7 +417,14 @@ export function userServerAllowedToolNames(userServers: Record<string, McpServer
 }
 
 export interface CliArgsParams {
-  systemPrompt: string;
+  /** Path handed to `--system-prompt-file` (the container-side path
+   *  under Docker — see `resolveSystemPromptPaths`). The prompt travels
+   *  as a file, never as an inline `--system-prompt` argument: on
+   *  Windows the argv collapses to a single CreateProcess command line
+   *  capped at ~32k chars, so a rich role + plugins + memory pushes the
+   *  prompt past the cap and the spawn fails with ENAMETOOLONG before
+   *  the CLI even starts (#2078). */
+  systemPromptPath: string;
   activePlugins: string[];
   claudeSessionId?: string;
   mcpConfigPath?: string;
@@ -407,7 +437,7 @@ export interface CliArgsParams {
 }
 
 export function buildCliArgs(params: CliArgsParams): string[] {
-  const { systemPrompt, activePlugins, claudeSessionId, mcpConfigPath, extraAllowedTools = [], effortLevel } = params;
+  const { systemPromptPath, activePlugins, claudeSessionId, mcpConfigPath, extraAllowedTools = [], effortLevel } = params;
 
   const mcpToolNames = activePlugins.map((pluginName) => `mcp__mulmoclaude__${pluginName}`);
   // DEBUG: also pass the wildcard form `mcp__mulmoclaude` so Claude
@@ -432,8 +462,8 @@ export function buildCliArgs(params: CliArgsParams): string[] {
     "stream-json",
     "--include-partial-messages",
     "--verbose",
-    "--system-prompt",
-    systemPrompt,
+    "--system-prompt-file",
+    systemPromptPath,
     "--allowedTools",
     allowedTools.join(","),
     "-p",
@@ -554,11 +584,12 @@ function buildNativeBlock(att: Attachment): Record<string, unknown> {
   };
 }
 
-export interface McpConfigPaths {
+export interface SessionFilePaths {
   // Where the file is actually written on the host filesystem.
   hostPath: string;
-  // What gets passed to claude --mcp-config (container path under
-  // docker, identical to hostPath when running natively).
+  // The path handed to the claude CLI (e.g. via --mcp-config or
+  // --system-prompt-file): the container path under docker, read
+  // through the workspace bind mount, identical to hostPath natively.
   argPath: string;
 }
 
@@ -570,7 +601,7 @@ function safeSessionSegment(sessionId: string): string {
   return basename(sessionId).replace(/[^A-Za-z0-9_-]/g, "_");
 }
 
-export function resolveMcpConfigPaths(opts: { workspacePath: string; sessionId: string; useDocker: boolean }): McpConfigPaths {
+export function resolveMcpConfigPaths(opts: { workspacePath: string; sessionId: string; useDocker: boolean }): SessionFilePaths {
   const sid = safeSessionSegment(opts.sessionId);
   if (opts.useDocker) {
     const hostPath = join(opts.workspacePath, ".mulmoclaude", `mcp-${sid}.json`);
@@ -578,6 +609,22 @@ export function resolveMcpConfigPaths(opts: { workspacePath: string; sessionId: 
     return { hostPath, argPath };
   }
   const hostPath = join(tmpdir(), `mulmoclaude-mcp-${sid}.json`);
+  return { hostPath, argPath: hostPath };
+}
+
+// Where the per-session system-prompt file lives — same host/container
+// split as resolveMcpConfigPaths. Under Docker the file must sit inside
+// the workspace bind mount so the container-side CLI can read it via
+// --system-prompt-file; natively the OS tmpdir is fine. One file per
+// chat session — successive turns overwrite it.
+export function resolveSystemPromptPaths(opts: { workspacePath: string; sessionId: string; useDocker: boolean }): SessionFilePaths {
+  const sid = safeSessionSegment(opts.sessionId);
+  if (opts.useDocker) {
+    const hostPath = join(opts.workspacePath, ".mulmoclaude", `system-prompt-${sid}.md`);
+    const argPath = `${CONTAINER_WORKSPACE_PATH}/.mulmoclaude/system-prompt-${sid}.md`;
+    return { hostPath, argPath };
+  }
+  const hostPath = join(tmpdir(), `mulmoclaude-system-prompt-${sid}.md`);
   return { hostPath, argPath: hostPath };
 }
 
@@ -823,6 +870,12 @@ export function buildDockerSpawnArgs(params: DockerSpawnArgsParams): string[] {
     // toolResult into its timeline.
     "-e",
     `MULMOCLAUDE_CHAT_SESSION_ID=${params.chatSessionId}`,
+    // How long the CLI *inside the container* waits for the MCP broker to
+    // connect. Set here because only the vars listed in this argv reach the
+    // container — a host-side `MCP_CONNECT_TIMEOUT_MS` never arrived, so the
+    // knob was unreachable in the one environment that needs it (#2234).
+    "-e",
+    `MCP_CONNECT_TIMEOUT_MS=${MCP_CONNECT_TIMEOUT_MS}`,
     ...dockerBindMountArgs({ projectRoot, packageRoot, workspacePath, homeDir, packagesMount, platform }),
     ...sandboxAuthArgs,
     ...extraHosts,

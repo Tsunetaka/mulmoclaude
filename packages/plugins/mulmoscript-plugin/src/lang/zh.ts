@@ -1,0 +1,36 @@
+import type { Messages } from "./messages";
+
+const zh: Messages = {
+  beatCount: (count) => `${count} 个 beat`,
+  movie: "视频",
+  generating: "生成中…",
+  rendering: "渲染中…",
+  saving: "保存中…",
+  update: "更新",
+  characters: "角色",
+  drop: "拖放",
+  gen: "生成",
+  play: "▶ 播放",
+  stop: "■ 停止",
+  playPresentation: "播放演示",
+  regenerateMovie: "重新生成视频",
+  movieGenerationFailed: "视频生成失败",
+  pdf: "PDF",
+  regeneratePdf: "重新生成 PDF",
+  generatingPdf: "生成 PDF…",
+  retry: "重试",
+  errPrefix: "⚠ 错误",
+  noBeats: "脚本中没有找到 beat",
+  editSource: "编辑脚本源",
+  applyChanges: "应用更改",
+  generateAll: "全部生成",
+  orDropImage: "或拖入图片",
+  generate: "生成",
+  generateAudio: "♪ 生成",
+  saveErrorInvalidJson: (error) => `⚠ JSON 无效: ${error}`,
+  saveErrorSaveFailed: (error) => `⚠ 保存失败: ${error}`,
+  close: "关闭",
+  cancel: "取消",
+};
+
+export default zh;

@@ -1,12 +1,20 @@
 <template>
-  <!-- eslint-disable-next-line vue/no-v-html -- marked.parse output of app-owned wiki page body; trusted in-process render -->
-  <div ref="rootRef" data-testid="wiki-page-body" class="px-6 py-4 prose prose-sm max-w-none wiki-content" @click="onClick" v-html="renderedHtml" />
+  <!-- eslint-disable vue/no-v-html -- marked.parse output of app-owned wiki page body; trusted in-process render. Multi-line element so disable/enable pair (CLAUDE.md UI rule). -->
+  <div
+    ref="rootRef"
+    data-testid="wiki-page-body"
+    class="px-6 py-4 prose prose-sm max-w-none wiki-content"
+    translate="yes"
+    @click="onClick"
+    v-html="renderedHtml"
+  />
+  <!-- eslint-enable vue/no-v-html -->
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { renderWikiPageHtml } from "../helpers";
-import { handleExternalLinkClick } from "../../../utils/dom/externalLink";
+import { handleExternalLinkClick } from "@mulmoclaude/markdown-utils/dom/externalLink";
 import { classifyWorkspacePath, resolveWikiHref } from "../../../utils/path/workspaceLinkRouter";
 import { useMermaidRenderer } from "../../../utils/markdown/useMermaid";
 

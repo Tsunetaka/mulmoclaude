@@ -125,6 +125,7 @@ Full layout + workspace tree + process map: [`docs/developer.md`](docs/developer
 | **Release the app** (`vX.Y.Z`) | `/release-app` skill |
 | **Publish `mulmoclaude` to npm** | `/publish-mulmoclaude` skill |
 | **Publish a shared `@mulmoclaude/*` or `@mulmobridge/*` npm package** | `/publish` skill — tag `@scope/name@X.Y.Z` (no `v`), GH release with `--latest=false` |
+| **Work out WHAT to publish** — who depends on what, whether a dependent needs republishing, why app code only ships via the launcher | [`docs/package-releases.md`](docs/package-releases.md). Start with `yarn audit:releases --code-only`. |
 | **Add / write an e2e test** (mock or live) | [`docs/developer.md#e2e-testing-playwright`](docs/developer.md#e2e-testing-playwright) for mock, [`docs/e2e-live-testing.md`](docs/e2e-live-testing.md) for live (must-read before adding a `e2e-live/tests/*.spec.ts`) |
 | **Manual-test scenarios that can't be automated** | [`docs/manual-testing.md`](docs/manual-testing.md) |
 | **Work on remote host** (drive MulmoClaude from a phone over the Firestore command channel) | [`docs/remote-host.md`](docs/remote-host.md) (auth model, command loop, handler table, mobile custom-view postMessage bridge) |
@@ -139,3 +140,68 @@ Rationale: the launcher-sync gate enforces `launcherRange.lowerBound == workspac
 When to bump `packages/mulmoclaude/package.json`'s `version`:
 - Inside the `/publish-mulmoclaude` flow, right before the actual `npm publish`. That commit becomes the identity of the release.
 - Never as part of a `chore(release)` that publishes only shared packages.
+
+### Publish order — always bottom-up, launcher last
+
+Publish a dependency BEFORE anything that imports it. Getting this backwards ships a
+package whose code calls an export that does not exist on npm yet.
+
+```text
+@mulmoclaude/common → @mulmoclaude/markdown-utils → @mulmoclaude/core → @mulmoclaude/*-plugin ─┐
+@mulmobridge/protocol → @mulmobridge/client → @mulmobridge/<service> ──────────────────────────┤
+@mulmobridge/webhook-runtime → the 6 webhook bridges ──────────────────────────────────────────┤
+                                                                                               ▼
+                                                                              mulmoclaude (launcher)
+```
+
+**The launcher is always last**, and it is not optional when app code moved: its `files`
+include `server/` and `src/`, so a change under those directories reaches npm users ONLY
+through `/publish-mulmoclaude` — no amount of package publishing delivers it.
+
+A dependent usually does NOT need republishing (a `1.x` caret floats across minors, so
+`^1.9.0` picks up `1.10.0` on its own). It DOES when it imports something the published
+dependency lacks. That case is load-bearing, not tidiness: in #2643, `server/remoteHost/`
+started importing `startResilientHostRunner`, which `@mulmoclaude/core@1.9.0` does not
+have — so core 1.10.0 had to ship, with every declared range swept, before the launcher
+could be published at all.
+
+Full graph, per-state drift detection and the tag rules → [`docs/package-releases.md`](docs/package-releases.md).
+
+### Before any release, ask what is actually drifting
+
+`yarn audit:releases --code-only` compares every publishable workspace against its
+release tag. A `version` equal to npm's latest does NOT mean the source matches what
+shipped — only the tag says that, which is why the tool reports a missing tag as its own
+finding rather than as "clean". This is not hypothetical: the polynomial-ReDoS fix in
+`@mulmoclaude/markdown-utils` (CodeQL #402) sat unpublished with nothing pointing at it,
+and `core` depends on that package at RUNTIME rather than bundling it — so every npm
+consumer kept resolving the unfixed copy.
+
+Full graph, the "does a dependent need republishing too?" rules, and the launcher's
+special role (app code under `server/` / `src/` ships ONLY through a `mulmoclaude`
+publish) → [`docs/package-releases.md`](docs/package-releases.md).
+
+### Internal dep ranges — always track the latest published version
+
+Every declared range on a workspace-internal package (`@mulmoclaude/*`, `@mulmobridge/*`, `mulmoclaude`) MUST equal `^<latest version published to npm>`, in **every** `package.json` that declares it — `dependencies`, `devDependencies` and `peerDependencies` alike, in bridges and plugins, not just the launcher.
+
+Whenever you publish a workspace package, sweep every consumer's range to the new version in the same PR.
+
+Rationale: a caret range on a `0.x` package does **not** float across minor versions — `^0.23.0` resolves to `>=0.23.0 <0.24.0`. So a stale range doesn't merely look untidy, it *pins consumers to an old line* and silently withholds everything published since. This is not hypothetical: `mulmoclaude@1.3.0` shipped `@mulmoclaude/core: ^0.23.0` while npm had already served 0.24 through 0.28, so npm-installed users could not receive any of it. The `launcherSync.mjs` gate only checks the launcher, so nothing catches the same drift in the other ~50 workspaces.
+
+To audit before a release:
+
+```bash
+# for each internal dep name, compare every declared range against npm's latest
+npm view <pkg> version --registry https://registry.npmjs.org/
+```
+
+A range update reaches users only through that consumer's own next release, so it does not force an immediate republish of all 50 packages — but it MUST be in the tree before the consumer is published next.
+
+### Tag every publish — no untagged releases
+
+Every `npm publish` of a workspace package MUST be accompanied by a git tag `@scope/name@X.Y.Z` (no `v` prefix) on the published commit, plus a GH release (`--latest=false`). The `/publish` skill does this — do NOT publish by hand and skip the tag.
+
+Rationale: the tag is the ONLY reliable marker of "what commit this npm version was cut from". Answering *"which packages changed since their last release and need republishing?"* is a `git diff <name>@<version> HEAD -- <dir>` — which is impossible when the tag is missing. This is not hypothetical: the `1.0.0` plugins (`@mulmoclaude/*-plugin`) were published to npm without `@…@1.0.0` tags (a bulk `0.x → 1.0.0` re-version), so release-drift detection for them had to fall back to guessing the version-bump commit. `version` in `package.json` == npm's latest tells you it was published, but NOT whether the current source differs from what shipped — only the tag does.
+
+When you discover a past publish that was never tagged, create the tag retroactively on the commit that bumped `version` to the published value (best effort), so future drift detection works.

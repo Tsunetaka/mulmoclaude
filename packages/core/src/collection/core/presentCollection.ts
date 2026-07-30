@@ -63,7 +63,12 @@ export const executePresentCollection = async (
     // `jsonData` is what the LLM sees. Same payload, two audiences.
     data,
     jsonData: data,
+    // Phrased to stay correct for BOTH storage kinds without loading the
+    // schema (this executor is deliberately pure/isomorphic): a writable
+    // collection offers edit/create/delete in the card; a read-only
+    // `dataSource` collection hides those and changes flow through its
+    // data file instead.
     instructions:
-      "The collection has been presented to the user as an interactive card. They can browse, open, edit, create, and delete records directly. No further action is needed unless they ask.",
+      "The collection has been presented to the user as an interactive card. They can browse and open records directly; on a writable collection they can also edit, create, and delete (a read-only dataSource collection shows no edit controls — its records change by editing the backing data file). No further action is needed unless they ask.",
   };
 };

@@ -101,6 +101,49 @@ toggles, embeds) — the same numbers the user sees elsewhere.
   / shows one record at a time. Combinable with `fields`.
 - The primary key is always returned regardless of `fields`.
 
+### Aggregation queries (`read` capability)
+
+A view can run structured aggregations over the collection — on a
+`dataSource` (CSV) collection this scans the WHOLE file (the record read
+above is row-capped at 5,000 there, so an aggregate computed from it would
+be silently wrong); on any other collection (file-backed or sqlite
+`storage`) it aggregates the ENRICHED records, so computed fields
+(`derived` / `rollup` / `toggle`) are queryable columns:
+
+```js
+const res = await fetch(dataUrl + "/query", {
+  method: "POST",
+  headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+  body: JSON.stringify({
+    query: {
+      groupBy: ["Category"],
+      aggregates: { total: { op: "sum", column: "Price" }, n: { op: "count" } },
+      where: [{ field: "Availability", op: "eq", value: "in_stock" }],
+      orderBy: [{ field: "total", dir: "desc" }],
+      limit: 100,
+    },
+  }),
+});
+const { rows } = await res.json(); // [{ Category, total, n }, ...] — chart these
+```
+
+- Ops: `count` (column optional) / `sum` / `avg` / `min` / `max`; `where`
+  ops: `eq/ne/in/gt/gte/lt/lte/contains`; at least one of
+  `groupBy`/`aggregates`; `orderBy` sorts by a groupBy column or an
+  aggregate alias; result rows clamp at 1,000 by default.
+- Aggregate aliases (the keys of `aggregates`) must be simple ASCII
+  identifiers (`/^[A-Za-z_]\w{0,63}$/`) — non-ASCII keys (e.g. Japanese)
+  are rejected by validation. This applies **only to aliases**: column
+  references (`column`, `groupBy`, `where.field`) accept the source's
+  headers as-is, including non-ASCII CSV headers like `価格`.
+- Structured JSON only — there is **no SQL surface**, by design.
+- Combine with `onChange` (below) to stay live: in the callback, re-run
+  **this POST query** (wrap it in your own `refresh()` and register that)
+  — NOT the `?fields=` record read from the section above, which would
+  silently repaint an aggregation view with non-aggregated data. A
+  replaced CSV or edited records then redraw the chart — that's a live
+  dashboard.
+
 ### Writing records (only with the `write` capability)
 
 ```js
@@ -122,6 +165,99 @@ const { written, rejected } = await res.json(); // fix & re-send any rejected ro
 
 Surface any `rejected` rows to the user with their `problem` text — don't fail
 silently.
+
+### Invoking a `kind: "mutate"` action (only with the `write` capability)
+
+If the schema declares a `kind: "mutate"` action (a declarative state
+transition — e.g. an `assign` button with `require`/`params`/`set`), invoke it
+instead of re-encoding the same field writes as a PUT: the server re-checks the
+action's `require` gate, validates the `params`, and applies the `set`
+atomically — one source of truth for the transition, in the schema.
+
+```js
+const res = await fetch(dataUrl + "/actions/assign", {
+  method: "POST",
+  headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+  body: JSON.stringify({ itemId: "task-3", params: { assignee: "kai" } }),
+});
+if (res.ok) {
+  const { item } = await res.json(); // the written record
+} else {
+  const { error } = await res.json(); // 400 bad param / 409 require not met — show it
+}
+```
+
+- `itemId` is the record's primary-key value; `params` only if the action
+  declares them.
+- **Mutate kind only.** `chat` / `agent` actions can never be invoked with a
+  view token (they start LLM work) — you get a 403.
+- A 409 means the record's current state fails the action's `require` — treat
+  it as "button disabled", not an error to retry.
+
+### Displaying images — `GET <dataUrl>/image`
+
+An `image`-type field stores a **workspace path** (`data/attachments/…`,
+`data/<name>/logos/…`) that a sandboxed view cannot load directly — the
+iframe has an opaque origin and `<img>` can't attach the bearer token. To
+render one, ask the host to resolve it into a downscaled thumbnail:
+
+```js
+// Request the image field in your projection so you have its path,
+// then resolve each path into a data: URL and assign it to the <img>.
+const res = await fetch(dataUrl + "/image?path=" + encodeURIComponent(item.photo) + "&maxEdge=256", {
+  headers: { Authorization: "Bearer " + token },
+});
+if (res.ok) {
+  const { dataUrl: src } = await res.json();
+  img.src = src; // "data:image/jpeg;base64,…"
+} // non-ok: leave the placeholder — 404 = not an image-field value / unresolvable
+```
+
+**Never fire one fetch per image in parallel** (`Promise.all` over every
+record) — the host caps in-flight `/image` + `/query` requests at **4 per
+collection** and answers the rest **429**, so a first paint of a dozen
+images half-fails. Resolve through a small worker pool instead:
+
+```js
+// Throttled resolver: N paths, at most 3 in flight, one retry on 429.
+async function resolveImages(paths, onResolved, workers = 3) {
+  const queue = [...paths];
+  const work = async () => {
+    for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
+      let res = await fetch(dataUrl + "/image?path=" + encodeURIComponent(path) + "&maxEdge=256", {
+        headers: { Authorization: "Bearer " + token },
+      });
+      if (res.status === 429) {
+        await new Promise((r) => setTimeout(r, 500));
+        res = await fetch(dataUrl + "/image?path=" + encodeURIComponent(path) + "&maxEdge=256", {
+          headers: { Authorization: "Bearer " + token },
+        });
+      }
+      if (res.ok) onResolved(path, (await res.json()).dataUrl);
+    }
+  };
+  await Promise.all(Array.from({ length: workers }, work));
+}
+```
+
+- **Only current image-field values resolve.** The host checks `path`
+  against the collection's records: it must be the CURRENT value of a
+  schema `image`-type field — the token cannot read arbitrary workspace
+  files. A stale or hand-built path answers 404.
+- `maxEdge` clamps to 64–1024 (default 512) — request the size you render.
+- **429 = concurrency/rate limit, not a bad path.** Both a shared in-flight
+  cap (4 per collection, shared with `/query`) and a per-minute budget guard
+  this endpoint; a 429'd path resolves fine on retry — never mark it failed
+  without one.
+- Cache the resolved `data:` URLs per path in your view (a simple `Map`)
+  and re-resolve inside your `onChange` callback only for paths you haven't
+  seen — each request re-scans the records server-side.
+- A record field holding a public **`https:` URL needs none of this** —
+  `<img src>` may load any https host directly (see the sandbox rules).
+- **Do NOT base64-embed images into the view HTML itself.** It bloats the
+  file, goes stale the moment a record's image changes, and needs manual
+  regeneration — this endpoint (or an https URL field) is always the
+  better answer.
 
 ### Staying live — `onChange`
 

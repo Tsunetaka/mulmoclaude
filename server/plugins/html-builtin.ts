@@ -6,13 +6,14 @@
 // publishes a file-change event after a save so subscribed View tabs refresh.
 // Imported for side effect at boot (server/index.ts) so the dispatch resolves.
 
-import { executeHtmlDispatch } from "@mulmoclaude/html-plugin";
-import type { HtmlDispatchArgs, PackHtmlArgs, PackHtmlResult } from "@mulmoclaude/html-plugin";
+import { executeHtmlDispatch, isHtmlDispatchArgs, isPackHtmlArgs } from "@mulmoclaude/html-plugin";
+import type { PackHtmlArgs, PackHtmlResult } from "@mulmoclaude/html-plugin";
 import { makeArtifactsFileOps } from "./runtime.js";
 import { publishFileChange } from "../events/file-change.js";
-import { registerBuiltinDispatch } from "./builtin-dispatch.js";
+import { describeKind, registerBuiltinDispatch } from "./builtin-dispatch.js";
 import { packHtmlZip } from "../utils/share/packHtml.js";
 import { isHtmlPath } from "../utils/files/html-store.js";
+import { makeByPathFileOps } from "../utils/files/by-path.js";
 
 /** Scope name — matches `wrapWithScope("html", …)` in
  *  `src/plugins/presentHtml/index.ts`, which is what the View's
@@ -28,12 +29,18 @@ async function packHtmlForDownload(args: PackHtmlArgs): Promise<PackHtmlResult> 
   return { filename, zipBase64: zip.toString("base64") };
 }
 
+// `args` is whatever the View put on the wire — untyped data, not a value the
+// compiler has vouched for. The package exports guards for its own shapes, so
+// the boundary narrows instead of asserting.
 registerBuiltinDispatch(HTML_SCOPE, async (args) => {
-  if ((args as { kind?: string }).kind === "packHtml") {
-    return packHtmlForDownload(args as unknown as PackHtmlArgs);
+  if (isPackHtmlArgs(args)) {
+    return packHtmlForDownload(args);
   }
-  const dispatchArgs = args as unknown as HtmlDispatchArgs;
-  const result = await executeHtmlDispatch({ files: { artifacts: makeArtifactsFileOps() } }, dispatchArgs);
+  if (!isHtmlDispatchArgs(args)) {
+    throw new Error(`html plugin: unrecognised dispatch payload (kind=${describeKind(args)})`);
+  }
+  const dispatchArgs = args;
+  const result = await executeHtmlDispatch({ files: { artifacts: makeArtifactsFileOps(), byPath: makeByPathFileOps([".html", ".htm"]) } }, dispatchArgs);
   // saveHtml changed bytes on disk → nudge subscribed View tabs (load is read-only).
   if (dispatchArgs.kind === "saveHtml") {
     void publishFileChange(dispatchArgs.path);

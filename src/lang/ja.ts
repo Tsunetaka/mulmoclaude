@@ -107,6 +107,10 @@ const jaMessages = {
     intraBody:
       "プラグイン「{first}」と「{second}」が同じ {dimension}「{key}」を登録しています。「{first}」が先に確保したため、「{second}」の登録は無視されます。",
   },
+  shadowedEnv: {
+    title: "シェルの環境変数が .env を上書きしています",
+    body: "シェルと .env の両方に設定されています: {keys}。シェル側の値が使われるため .env は無視されます。.env を編集した場合は、シェル側の値を更新するか解除して再起動してください。",
+  },
   optionalDeps: {
     // 旧来の `title` キーは、永続化済み履歴エントリの後方互換のため残す。
     // 新規発火は `titleNotFound` / `titleNotResponding` を使用。
@@ -132,6 +136,11 @@ const jaMessages = {
     hideDetails: "詳細を隠す",
     retry: "再試行",
   },
+  remoteHostOffline: {
+    title: "リモートホストが切断されました",
+    body: "再接続するまで、スマホからの送信はこの端末に届きません。",
+    reconnect: "再接続",
+  },
   remoteHost: {
     title: "リモートホスト",
     online: "リモートホスト: オンライン",
@@ -152,6 +161,7 @@ const jaMessages = {
     qrHint: "スマートフォンのカメラでこの QR コードを読み取っても開けます。",
   },
   sidebarHeader: {
+    newMessages: "新着",
     home: "最新のチャットに移動",
     toolCallHistory: "ツール呼び出し履歴",
     settings: "設定",
@@ -197,6 +207,12 @@ const jaMessages = {
       "エージェント内部の top-level ディレクトリ (conversations/ や feeds/ など) をユーザーデータ (data/ artifacts/ config/) と合わせて表示します。",
   },
   fileTree: {
+    dropHint: "ここにファイルをドロップするとこのフォルダに保存されます",
+    upload: {
+      progress: "アップロード中 {done}/{total}…",
+      done: "{count} 件のファイルを保存しました",
+      failed: "{count} 件のファイルを保存できませんでした",
+    },
     workspace: "（ワークスペース）",
     recentlyChanged: "最近変更されました",
     newFileMenuItem: "新規ファイル",
@@ -244,6 +260,7 @@ const jaMessages = {
       refs: "参照ディレクトリ",
       map: "地図",
       photos: "写真",
+      google: "Google",
       model: "モデル",
       voice: "音声",
       chatIndex: "チャットインデックス",
@@ -251,6 +268,7 @@ const jaMessages = {
       notifications: "Web Push",
       skills: "スキル",
       roles: "ロール",
+      quit: "終了",
     },
     groups: {
       llm: "LLM",
@@ -259,8 +277,24 @@ const jaMessages = {
       notifications: "通知",
       plugins: "プラグイン",
       management: "管理",
+      server: "サーバー",
     },
     navAriaLabel: "設定セクション",
+    googleTab: {
+      description:
+        "Google アカウントを連携すると、このマシンから Google API（まずはカレンダー）を直接呼び出せます。リフレッシュトークンはこのマシンにのみ保存され、Google 以外には送信されません。",
+      statusLinked: "連携済み",
+      statusNotLinked: "未連携",
+      statusPending: "ブラウザでの同意完了を待っています…",
+      connect: "Google アカウントを連携",
+      unlink: "連携を解除",
+      unlinkConfirm: "Google アカウントの連携を解除しますか？保存済みトークンは無効化され、このマシンから削除されます。",
+      clientSecretAmbiguous:
+        "~/.secrets/ に client_secret_*.json が複数見つかりました。保存済みトークンと OAuth クライアントの組み合わせがずれないよう、1つだけ残してください。",
+      loadError: "Google 連携状態の取得に失敗しました。",
+      connectError: "Google 認可フローの開始に失敗しました。",
+      unlinkError: "Google 連携の解除に失敗しました。",
+    },
     mapTab: {
       description: "地図プラグインで使う Google Maps API キーを設定します。キーはローカルに保存され、Google Maps への通信以外で送信されることはありません。",
       apiKeyLabel: "Google Maps API キー",
@@ -284,12 +318,31 @@ const jaMessages = {
       loadError: "設定の読み込みに失敗しました",
       saveError: "保存に失敗しました",
     },
+    quitTab: {
+      description:
+        "このマシンで動いている MulmoClaude サーバーを終了します。アイコンから起動した場合、このタブを閉じてもサーバーは動き続けます。ターミナルを使わずに止める手段がここです。",
+      // Message function form — skips vue-i18n's message compiler so the
+      // literal `@` in `mulmoclaude@latest` is not parsed as a linked-message
+      // reference (the compiler throws, and the whole tab renders as nothing).
+      restartHint: () => "もう一度起動するには、MulmoClaude のアイコンをダブルクリックしてください（または `npx mulmoclaude@latest`）。",
+      quitLabel: "MulmoClaude を終了",
+      confirmBody: "サーバーが停止し、このページは動かなくなります。実行中の処理は中断されます。",
+      confirmLabel: "終了する",
+      stopping: "終了しています…",
+      stoppedTitle: "MulmoClaude を終了しました",
+      stoppedBody: "このタブは閉じて構いません。もう一度使うにはアイコンをダブルクリックしてください。",
+      error: "サーバーの終了に失敗しました",
+    },
     notificationsTab: {
       description:
         "ここで開始したタスクが完了したときに、登録済みのデバイスへプッシュ通知を送ります。質問して席を外し、答えができた瞬間を知りたいときに便利です。",
       enableLabel: "タスク完了時に Web Push を送る",
       enableHint: "ここで開始したチャットが完了したときに発火します。スケジュール実行やバックグラウンドのタスクでは発火しません。",
       remoteHostNote: "RemoteHost 接続（サインインを供給）と、登録済みデバイスが1台以上必要です。どちらかが欠けている場合は何も起きません。",
+      macosRemindersLabel: "タスク完了時に macOS のリマインダーを作成する",
+      macosRemindersHint: "完了したタスクを既定のリマインダーリストに追加します。iCloud 同期が iPhone に反映し、そこで通知が届きます。",
+      macosRemindersForcedOff:
+        "起動時に --disable-macos-reminders または DISABLE_MACOS_REMINDER_NOTIFICATIONS で無効化されています。フラグを外すか環境変数を解除して再起動すると、ここから操作できます。",
       statusOn: "Web Push は ON",
       statusOff: "Web Push は OFF",
       loadError: "設定の読み込みに失敗しました",
@@ -443,6 +496,12 @@ const jaMessages = {
     pin: "ランチャーに固定",
     unpin: "ランチャーから外す",
     zoneAriaLabel: "固定したショートカット",
+    reorder: {
+      open: "ショートカットを並び替え",
+      title: "並び替え",
+      moveUp: "上へ",
+      moveDown: "下へ",
+    },
   },
   fileContentHeader: {
     showRendered: "レンダリング表示",
@@ -742,6 +801,12 @@ const jaMessages = {
     detailsToggle: "詳細を表示",
     promptLabel: "プロンプト",
     roleLabel: "ロール",
+    confirmDelete: "タスク「{name}」を削除しますか？この操作は取り消せません。",
+    hintNewsRss: "ニュース / RSS 取得",
+    hintJournal: "日次ジャーナル処理",
+    hintWiki: "Wiki メンテナンス",
+    hintMemory: "メモリー抽出",
+    hintCalendar: "カレンダー / 連絡先の同期",
   },
   pluginCanvas: {
     undo: "元に戻す",
@@ -750,6 +815,7 @@ const jaMessages = {
     styleLabel: "スタイル:",
     stylePromptWithPath: "`{path}` の画像を {style} スタイルの画像に変換してください。",
     stylePromptNoPath: "キャンバスに描いた絵を {style} スタイルの画像に変換してください。",
+    saveFailed: "未保存",
   },
   pluginWiki: {
     backToIndex: "インデックスに戻る",
@@ -777,6 +843,7 @@ const jaMessages = {
     metadataEditor: "編集者",
     pageEditHeader: "Wiki編集",
     snapshotExpired: "スナップショットが期限切れ — 現在のページを表示中",
+    snapshotLoadError: "スナップショットを読み込めませんでした — ページは存在する可能性があります。再読み込みしてください。",
     pageDeleted: "ページが削除されました",
     history: {
       tabContent: "本文",
@@ -935,62 +1002,11 @@ const jaMessages = {
     errDeleteFailed: "削除失敗",
     errNetworkError: "ネットワークエラー",
     errServerError: "サーバエラー: {status}",
+    errRefreshFailed: "保存しましたが、一覧の更新に失敗しました。",
+    confirmDelete: "ロール「{name}」を削除しますか？この操作は取り消せません。",
   },
   pluginUiImage: {
     promptLabel: "{label}:",
-  },
-  pluginMulmoScript: {
-    beatCount: "{count} ビート",
-    movie: "動画",
-    generating: "生成中…",
-    rendering: "レンダリング中…",
-    saving: "保存中…",
-    update: "更新",
-    characters: "キャラクター",
-    drop: "ドロップ",
-    gen: "生成",
-    play: "▶ 再生",
-    stop: "■ 停止",
-    playPresentation: "プレゼンテーション再生",
-    regenerateMovie: "動画を再生成",
-    movieGenerationFailed: "動画の生成に失敗しました",
-    pdf: "PDF",
-    regeneratePdf: "PDF を再生成",
-    generatingPdf: "PDF を生成中…",
-    retry: "再試行",
-    errPrefix: "⚠ エラー",
-    noBeats: "スクリプトにビートが見つかりません",
-    editSource: "スクリプトソースを編集",
-    applyChanges: "変更を適用",
-    generateAll: "すべて生成",
-    orDropImage: "画像をドロップ",
-    generate: "生成",
-    generateAudio: "♪ 生成",
-    saveErrorInvalidJson: "⚠ 不正な JSON: {error}",
-    saveErrorSaveFailed: "⚠ 保存失敗: {error}",
-  },
-  pluginMarkdown: {
-    loading: "ドキュメント読み込み中...",
-    loadFailed: "⚠ ドキュメントの読み込みに失敗: {error}",
-    refreshFailed: "⚠ ドキュメントの更新に失敗: {error} — 前回読み込んだ内容を表示しています。",
-    noContent: "Markdown コンテンツがありません",
-    pdf: "PDF",
-    pdfFailedShort: "⚠ PDF 失敗",
-    editSource: "Markdown ソースを編集",
-    saving: "保存中...",
-    applyChanges: "変更を適用",
-    cancel: "キャンセル",
-    saveFailed: "保存失敗: {error}",
-    saveError: "⚠ 保存失敗: {error}",
-    copyLabel: "コピー",
-    copiedLabel: "コピーしました！",
-    taskCountMismatch: "Markdown ソースと描画結果でタスク数が一致しないため、ファイル破損を避けるためトグル操作を中止しました。",
-    marpSlidesMode: "Marp スライド · {count}",
-    marpExportPdf: "PDFを書き出し",
-    marpRenderFailed: "⚠ Marp スライドの描画に失敗しました: {error}",
-    marpSplitEnter: "ソースを並べて編集",
-    marpSplitExit: "ソースエディタを閉じる",
-    marpSplitEditorLabel: "ソース",
   },
   markdownMermaid: {
     loadFailed: "⚠ Mermaid の読み込みに失敗しました: {error}",
@@ -1002,6 +1018,9 @@ const jaMessages = {
     editContent: "テキストを編集",
     applyChanges: "変更を適用",
     copyLabel: "コピー",
+    speakerSystem: "システム",
+    speakerUser: "あなた",
+    speakerAssistant: "アシスタント",
     copiedLabel: "コピーしました！",
     cancel: "キャンセル",
     seededByPlugin: "{pkg} から",

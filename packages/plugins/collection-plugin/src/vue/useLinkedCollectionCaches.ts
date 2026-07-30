@@ -7,7 +7,8 @@
 
 import { ref, type Ref } from "vue";
 import { collectionUi, type CollectionApiResult } from "./uiContext";
-import { buildRefDisplayMap, buildRefRecordMap, uniqueEmbedTargets, uniqueRefTargets } from "./useCollectionRendering.helpers";
+import { buildRefDisplayMap, buildRefRecordMap } from "./useCollectionRendering.helpers";
+import { uniqueBacklinkSources, uniqueEmbedTargets, uniqueRefTargets } from "@mulmoclaude/core/collection";
 import type { CollectionDetail, CollectionDetailResponse, CollectionSchema, EmbedCache, RefCache, RefRecordCache } from "@mulmoclaude/core/collection";
 
 export interface LinkedCollectionCaches {
@@ -33,10 +34,14 @@ export interface LinkedCachesSnapshot {
 type FetchCollectionDetail = (slug: string) => Promise<CollectionApiResult<CollectionDetailResponse>>;
 
 /** The de-duplicated ref + embed target slugs a schema links to. `allTargets`
- *  is the union (each target fetched once even when both ref'd and embedded). */
+ *  is the union (each target fetched once even when both ref'd and embedded).
+ *  `backlinks` SOURCE collections ride in `embedTargets`: a backlink needs
+ *  exactly what an embed target caches (the source's schema + items in
+ *  `embedCache`), so reverse sources reuse that cache rather than adding a
+ *  parallel one. */
 export function linkedTargets(schema: CollectionSchema): LinkedTargets {
   const refTargets = new Set(uniqueRefTargets(schema));
-  const embedTargets = new Set(uniqueEmbedTargets(schema));
+  const embedTargets = new Set([...uniqueEmbedTargets(schema), ...uniqueBacklinkSources(schema)]);
   const allTargets = [...new Set([...refTargets, ...embedTargets])];
   return { refTargets, embedTargets, allTargets };
 }

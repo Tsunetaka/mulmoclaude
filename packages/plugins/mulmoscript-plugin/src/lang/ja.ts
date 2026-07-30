@@ -1,0 +1,36 @@
+import type { Messages } from "./messages";
+
+const ja: Messages = {
+  beatCount: (count) => `${count} ビート`,
+  movie: "動画",
+  generating: "生成中…",
+  rendering: "レンダリング中…",
+  saving: "保存中…",
+  update: "更新",
+  characters: "キャラクター",
+  drop: "ドロップ",
+  gen: "生成",
+  play: "▶ 再生",
+  stop: "■ 停止",
+  playPresentation: "プレゼンテーション再生",
+  regenerateMovie: "動画を再生成",
+  movieGenerationFailed: "動画の生成に失敗しました",
+  pdf: "PDF",
+  regeneratePdf: "PDF を再生成",
+  generatingPdf: "PDF を生成中…",
+  retry: "再試行",
+  errPrefix: "⚠ エラー",
+  noBeats: "スクリプトにビートが見つかりません",
+  editSource: "スクリプトソースを編集",
+  applyChanges: "変更を適用",
+  generateAll: "すべて生成",
+  orDropImage: "画像をドロップ",
+  generate: "生成",
+  generateAudio: "♪ 生成",
+  saveErrorInvalidJson: (error) => `⚠ 不正な JSON: ${error}`,
+  saveErrorSaveFailed: (error) => `⚠ 保存失敗: ${error}`,
+  close: "閉じる",
+  cancel: "キャンセル",
+};
+
+export default ja;

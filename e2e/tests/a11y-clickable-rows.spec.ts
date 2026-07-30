@@ -71,6 +71,7 @@ test.describe("clickable-region a11y", () => {
       rowEl.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true, repeat: true }));
     });
 
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: an auto-repeat keydown must NOT navigate; the absence of a navigation has no observable signal to synchronize on.
     await page.waitForTimeout(100);
     expect(page.url()).toBe(startUrl);
   });
@@ -98,6 +99,7 @@ test.describe("clickable-region a11y", () => {
 
     // Give the event loop a chance to process a navigation that
     // would happen in the broken case.
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: a non-self-target Space keydown must NOT navigate; the absence of a navigation has no observable signal to synchronize on.
     await page.waitForTimeout(100);
     expect(page.url()).toBe(startUrl);
   });

@@ -248,28 +248,3 @@ export async function convertAttachment(att: Attachment): Promise<ConversionResu
   if (att.mimeType === PPTX_MIME) return tryConvertPptx(att);
   return { kind: "skipped", reason: `unsupported MIME type: ${att.mimeType}` };
 }
-
-/** MIME types that can be converted (for UI accept list).
- *  Must stay aligned with isTextMime() + the office constants. */
-export const CONVERTIBLE_MIME_TYPES = [
-  // Text
-  "text/plain",
-  "text/csv",
-  "text/html",
-  "text/xml",
-  "text/markdown",
-  "text/yaml",
-  "text/x-yaml",
-  "application/json",
-  "application/xml",
-  "application/x-yaml",
-  "application/toml",
-  // Office
-  DOCX_MIME,
-  XLSX_MIME,
-  PPTX_MIME,
-] as const;
-
-export function isConvertibleMime(mime: string): boolean {
-  return isTextMime(mime) || mime === DOCX_MIME || mime === XLSX_MIME || mime === PPTX_MIME;
-}

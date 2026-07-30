@@ -67,10 +67,13 @@ See [Wiki](config/helps/wiki.md) for details on how it works.
 - [Spreadsheet](config/helps/spreadsheet.md) — cell format, formulas, date handling, and format codes for the presentSpreadsheet plugin
 - [presentHtml](config/helps/presenthtml.md) — self-contained HTML rules and the three-`../` relative-path convention used by the presentHtml plugin to keep generated files portable under `file://`
 - [Sandbox](config/helps/sandbox.md) — how the Docker sandbox isolates the agent, what it can access, and how to disable it
-- [Error recovery](config/helps/error-recovery.md) — the lookup the agent reads on tool failures (gh/git/SSH inside the sandbox, Marp PDF, registry import, build/workspace, plugin runtime) before asking the user
+- [Error recovery](config/helps/error-recovery.md) — the lookup the agent reads on tool failures (gh/git/SSH in the sandbox, Marp PDF, registry import, build/workspace, plugin runtime), plus the four-step triage for when a user reports something broken
+- [Bug-report FAQ](config/helps/bug-report-faq.md) — symptoms that turn out to be configuration or by design (voice input, push, chat titles, journal, connector tools, preset skills, custom views); says where to read the live value, never what it is
 - [Telegram Bridge](config/helps/telegram.md) — how to talk to MulmoClaude from the Telegram app: creating a bot, starting the bridge, allowlisting chat IDs, commands, and troubleshooting
 - [Remote host](config/helps/remote-host.md) — drive MulmoClaude from a phone at mulmoserver.web.app: Google sign-in connect, host online vs. offline (queued chats, 7-day expiry), photo attachments, and the security model
 - [Feeds](config/helps/feeds.md) — register a self-refreshing data feed (RSS/Atom/JSON) by authoring `feeds/<slug>/schema.json`: schema shape, the `ingest` block, raw-item field mapping, and `maxItems` retention
+- [Google Calendar sync](config/helps/google-calendar-collection.md) — mirror a Google calendar into a collection with a `googleCalendar` block: field mapping, why the primary field holds the event id, and how deletions propagate
+- [The `google` tool](config/helps/google.md) — every `kind` for Calendar, Tasks and Drive: reading, creating, editing and deleting events and tasks, the timezone-offset rule, patch semantics, and what `drive.file` scope cannot see
 - [GitHub repositories in the workspace](config/helps/github.md) — clone-destination rules under `github/<name>/` and how to handle existing directories with matching or different remotes
 - [Collection skills](config/helps/collection-skills.md) — build a data app (model + UI + relations + computed fields + action buttons) by authoring a `schema.json` collection skill: the DSL, field types, derived formulas, actions, records
 - [Custom views](config/helps/custom-view.md) — give a collection a view the built-ins don't cover (year/quarter overview, Gantt): an HTML file under `views/`, registered in `schema.json`, rendered in a sandboxed iframe over the records
@@ -81,6 +84,7 @@ See [Wiki](config/helps/wiki.md) for details on how it works.
 - [Clients + Worklog](config/helps/billing-clients-worklog.md) — recipe for a client database and a per-client timesheet (Bundle A of the billing suite); set this up before invoicing
 - [Invoicing](config/helps/billing-invoice.md) — recipe for an invoice ledger + business profile with line items, host-computed totals, and PDF / bookkeeping action buttons (Bundle B; references the clients + worklog from Bundle A)
 - [Portfolio tracker](config/helps/portfolio-tracker.md) — recipe for a paired stock-quotes watchlist + holdings portfolio whose price/value are computed live from the quotes via a cross-collection derived ref
+- [Egress sync](config/helps/egress-sync.md) — push a collection's records OUT to an external system (Notion, Sheets, a REST API): snapshot-diff pattern for an agent "Sync" action, `externalId` write-back, reference template
 
 ## Workspace Layout
 

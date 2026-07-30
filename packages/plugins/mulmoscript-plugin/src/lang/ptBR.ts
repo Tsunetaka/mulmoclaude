@@ -1,0 +1,36 @@
+import type { Messages } from "./messages";
+
+const ptBR: Messages = {
+  beatCount: (count) => (count === 1 ? `${count} beat` : `${count} beats`),
+  movie: "Vídeo",
+  generating: "Gerando…",
+  rendering: "Renderizando…",
+  saving: "Salvando…",
+  update: "Atualizar",
+  characters: "Personagens",
+  drop: "Soltar",
+  gen: "Gerar",
+  play: "▶ Reproduzir",
+  stop: "■ Parar",
+  playPresentation: "Reproduzir apresentação",
+  regenerateMovie: "Regenerar vídeo",
+  movieGenerationFailed: "Falha ao gerar o vídeo",
+  pdf: "PDF",
+  regeneratePdf: "Regenerar PDF",
+  generatingPdf: "Gerando PDF…",
+  retry: "Tentar novamente",
+  errPrefix: "⚠ Erro",
+  noBeats: "Nenhum beat encontrado no script",
+  editSource: "Editar fonte do script",
+  applyChanges: "Aplicar alterações",
+  generateAll: "Gerar tudo",
+  orDropImage: "ou solte uma imagem",
+  generate: "Gerar",
+  generateAudio: "♪ Gerar",
+  saveErrorInvalidJson: (error) => `⚠ JSON inválido: ${error}`,
+  saveErrorSaveFailed: (error) => `⚠ Falha ao salvar: ${error}`,
+  close: "Fechar",
+  cancel: "Cancelar",
+};
+
+export default ptBR;

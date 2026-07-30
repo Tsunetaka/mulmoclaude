@@ -45,15 +45,21 @@
           :key="action.id"
           type="button"
           class="h-8 px-2.5 rounded border border-indigo-200 bg-indigo-50/50 text-indigo-600 hover:bg-indigo-600 hover:text-white hover:border-indigo-600 font-bold text-xs transition-all flex items-center gap-1 disabled:opacity-50"
-          :disabled="actionPending"
+          :disabled="actionPending || runningActionIds.includes(action.id)"
           :data-testid="`collections-detail-action-${action.id}`"
           @click="emit('runAction', action)"
         >
-          <span v-if="action.icon" class="material-icons text-sm">{{ action.icon }}</span>
+          <!-- A running `kind:"agent"` worker replaces the icon with a spinner
+               until the completion ping's refetch clears its run key. -->
+          <span v-if="runningActionIds.includes(action.id)" class="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+          <span v-else-if="action.icon" class="material-symbols-outlined text-sm">{{ action.icon }}</span>
           <span>{{ action.label }}</span>
         </button>
 
+        <!-- Edit/Delete are absent (not disabled) on a read-only dataSource
+             collection — the server would answer 405 anyway. -->
         <button
+          v-if="!readonly"
           type="button"
           class="h-8 px-2.5 rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-bold text-xs transition-all flex items-center gap-1"
           data-testid="collections-detail-edit"
@@ -64,6 +70,7 @@
         </button>
 
         <button
+          v-if="!readonly"
           type="button"
           class="h-8 px-2.5 rounded border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 font-bold text-xs transition-all flex items-center gap-1"
           data-testid="collections-detail-remove"
@@ -347,6 +354,26 @@
               <span v-else class="text-slate-300">—</span>
             </template>
 
+            <!-- Flag state (computed boolean predicate — total, so always
+                 yes or no; never stored, nothing to edit). -->
+            <template v-else-if="field.type === 'flag'">
+              <span
+                v-if="render.deriveRecord(detailRecord)[key] === true"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/40"
+                :data-testid="`collections-detail-flag-${key}`"
+              >
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                {{ t("common.yes") }}
+              </span>
+              <span
+                v-else
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-400 border border-slate-200/20"
+                :data-testid="`collections-detail-flag-${key}`"
+              >
+                {{ t("common.no") }}
+              </span>
+            </template>
+
             <!-- Ref details link -->
             <a
               v-else-if="field.type === 'ref' && field.to && typeof detailRecord[key] === 'string' && detailRecord[key]"
@@ -371,6 +398,14 @@
               v-else-if="field.type === 'derived'"
               class="inline-block truncate tabular-nums font-bold text-indigo-900 bg-indigo-50/50 px-2 py-0.5 rounded border border-indigo-100/50"
               >{{ render.derivedDisplay(field, render.evaluateDerivedAgainstItem(field, String(key), detailRecord), detailRecord) }}</span
+            >
+
+            <!-- Rollup aggregate badge (cross-collection) -->
+            <span
+              v-else-if="field.type === 'rollup'"
+              class="inline-block truncate tabular-nums font-bold text-indigo-900 bg-indigo-50/50 px-2 py-0.5 rounded border border-indigo-100/50"
+              :data-testid="`collections-detail-rollup-${key}`"
+              >{{ render.rollupDisplay(field, detailRecord) }}</span
             >
 
             <!-- Sub table -->
@@ -413,6 +448,9 @@
 
             <!-- Embed view -->
             <CollectionEmbedView v-else-if="field.type === 'embed' && embedViews[key]" :view="embedViews[key]" :field-key="String(key)" />
+
+            <!-- Backlinks: read-only reverse-ref sub-table -->
+            <CollectionBacklinksView v-else-if="field.type === 'backlinks' && backlinksViews[key]" :view="backlinksViews[key]" :field-key="String(key)" />
 
             <!-- Image (workspace-relative path → <img> via auth-exempt /api/files/raw) -->
             <img
@@ -503,8 +541,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useCollectionI18n } from "../lang";
+import CollectionBacklinksView from "./CollectionBacklinksView.vue";
 import CollectionEmbedView from "./CollectionEmbedView.vue";
-import { fieldVisible, resolveEnumColor, emptyRow } from "@mulmoclaude/core/collection";
+import { COMPUTED_TYPES, fieldVisible, resolveEnumColor, emptyRow } from "@mulmoclaude/core/collection";
 import { collectionUi } from "../uiContext";
 import { activateRefLink, activatePathLink } from "../refLink";
 import type { CollectionRendering } from "../useCollectionRendering";
@@ -532,12 +571,18 @@ const props = defineProps<{
   actionError: string | null;
   actionPending: boolean;
   visibleActions: CollectionAction[];
+  /** Ids of the open record's `kind: "agent"` actions whose hidden worker
+   *  is in flight — those buttons render a spinner, disabled. */
+  runningActionIds: string[];
   /** Live record computed from the draft (drives derived previews). */
   liveRecord: CollectionItem | null;
   /** Live record with derived fields resolved. */
   liveDerived: CollectionItem | null;
   viewTitle: string;
   isSingleton: boolean;
+  /** Read-only (dataSource) collection: hide the Edit/Delete buttons —
+   *  the record can only change by editing the external data file. */
+  readonly?: boolean;
   /** Shared rendering/derivation helpers + ref/embed caches. */
   render: CollectionRendering;
   locale: string;
@@ -591,6 +636,10 @@ const detailRecord = computed<CollectionItem>(() => (editing.value ? (props.live
 // whenever the open / draft record changes.
 const embedViews = computed(() => props.render.embedViewsFor(detailRecord.value));
 
+// Backlinks view-models resolve against the active record too (the row set
+// is "who points at THIS record"), so they follow the same recompute rule.
+const backlinksViews = computed(() => props.render.backlinksViewsFor(detailRecord.value));
+
 // Map each embed's storage field (`idField`) → the embed that owns it. The
 // embed hosts the picker (a dropdown in edit mode) and the read-only block, so
 // the raw storage field gets no standalone cell of its own — same spirit as a
@@ -618,19 +667,19 @@ const rootTestid = computed<string>(() => {
   return editing.value.mode === "create" ? "collections-create" : "collections-edit";
 });
 
-/** Whether a field gets an editable control in edit mode. Toggle (a
- *  projection of an enum that has its own input), derived (computed), and
- *  embed (a foreign record) stay read-only in both modes, so the cell
- *  geometry never changes on the view↔edit toggle. */
+/** Whether a field gets an editable control in edit mode. The computed /
+ *  projected kinds (COMPUTED_TYPES: derived, embed, backlinks, rollup,
+ *  toggle) stay read-only in both modes, so the cell geometry never
+ *  changes on the view↔edit toggle. */
 function isEditableType(type: FieldSpec["type"]): boolean {
-  return type !== "toggle" && type !== "derived" && type !== "embed";
+  return !COMPUTED_TYPES.has(type);
 }
 
 /** Wide field types span the full grid width in BOTH modes — keeping
  *  `image` full-width here (not just when viewing) is what stops a field
  *  from jumping columns when editing starts. */
 function colSpanClass(field: FieldSpec): "col-span-full" | "col-span-1" {
-  return ["table", "markdown", "embed", "image"].includes(field.type) ? "col-span-full" : "col-span-1";
+  return ["table", "markdown", "embed", "backlinks", "image"].includes(field.type) ? "col-span-full" : "col-span-1";
 }
 
 /** Whether to render a field's cell. Identical rule in both modes so no
@@ -661,7 +710,8 @@ function isFieldRequiredInUi(field: FieldSpec): boolean {
 /** Required flag for an embed's per-record picker — read off the storage
  *  field it writes (`idField`), since the embed itself stores nothing. */
 function embedPickerRequired(field: FieldSpec): boolean {
-  const target = field.idField ? props.collection.schema.fields[field.idField] : undefined;
+  const idField = field.type === "embed" ? field.idField : undefined;
+  const target = idField ? props.collection.schema.fields[idField] : undefined;
   return target ? isFieldRequiredInUi(target) : false;
 }
 

@@ -8,7 +8,11 @@
 // lives in the sibling `../collection` subpath alongside the schema contract, so
 // the package's schema validator can enforce it. Re-exported here so the feeds
 // engine's existing importers resolve them unchanged.
-import { type CollectionIngest, INGEST_KINDS, FEED_SCHEDULES, type IngestKind, type FeedSchedule } from "../collection/index.js";
+import { INGEST_KINDS, FEED_SCHEDULES, type IngestKind, type FeedSchedule } from "../collection/index.js";
+// Type-only: keeps zod out of this module's runtime graph (the feeds engine
+// imports it browser-free through `../collection`'s type surface).
+import type { z } from "zod";
+import type { AgentIngestZ, DeclarativeIngestZ } from "../collection/core/schemaZ";
 //
 // Two flavours: the declarative kinds (`rss`/`atom`/`http-json`) fetch-and-map,
 // and `agent` dispatches a hidden worker. The `code` kind (LLM-generated
@@ -39,49 +43,22 @@ export const DEFAULT_FEED_MAX_ITEMS = 100;
 export type IngestFieldMap = Record<string, string>;
 
 /** Declarative retrieval (`rss`/`atom`/`http-json`): the host fetches `url`
- *  and projects each item through `map`. The canonical schema (in
- *  `../collection`) only promises the minimal `CollectionIngest`; this
- *  feeds-only subtype narrows those + adds the retrieval fields the engine
- *  needs. */
-export interface DeclarativeIngestSpec extends CollectionIngest {
-  /** Which declarative retriever handles this feed. */
-  kind: IngestKind;
-  /** Endpoint to fetch (http/https). */
-  url: string;
-  /** Refresh cadence. */
-  schedule: FeedSchedule;
-  /** `http-json` only: dot/bracket path to the array of items in the
-   *  response (e.g. `"hourly[]"` or `"data.results[]"`). Ignored for
-   *  `rss`/`atom`, which yield items natively. */
-  itemsAt?: string;
-  /** target field → source path. Projects each raw item into a record
-   *  whose keys match the schema's `fields`. */
-  map: IngestFieldMap;
-  /** Optional source path used to derive the primaryKey value when the
-   *  mapped record's primaryKey is empty (e.g. `"feedId"`). Falls back
-   *  to a content hash of the record. */
-  idFrom?: string;
-  /** Cap on stored records. After each fetch the feed keeps only the
-   *  newest `maxItems` (ordered by the schema's first `date` field) and
-   *  deletes the rest. Defaults to {@link DEFAULT_FEED_MAX_ITEMS} when
-   *  omitted; `0` disables the cap (keep everything). Pruning is skipped
-   *  when the schema has no `date` field to order by. */
-  maxItems?: number;
-}
+ *  and projects each item through `map` (target field → source path; a
+ *  `http-json` feed may add `itemsAt`, a dot/bracket path to the items
+ *  array; `idFrom` derives the primaryKey; `maxItems` caps stored records,
+ *  default {@link DEFAULT_FEED_MAX_ITEMS}, `0` = keep everything). The
+ *  canonical loose contract stays the minimal `CollectionIngest`; this
+ *  feeds subtype is derived from the zod source of truth
+ *  (`collection/core/schemaZ` `DeclarativeIngestZ`), so the engine and the
+ *  schema validator can never drift. */
+export type DeclarativeIngestSpec = z.infer<typeof DeclarativeIngestZ>;
 
 /** Agent-performed retrieval (`kind: "agent"`). No `url`/`map`: the host seeds
  *  a hidden background worker (origin `system`) in `role` with `template` + a
  *  summary of every record, and the worker edits the records itself via the
- *  collections io layer. Valid on any collection (primarily skill-backed). */
-export interface AgentIngestSpec extends CollectionIngest {
-  kind: AgentIngestKind;
-  /** Refresh cadence (same vocabulary as declarative feeds). */
-  schedule: FeedSchedule;
-  /** Role id the scheduled hidden worker runs in. */
-  role: string;
-  /** Skill-relative template path (under `templates/`) seeding the worker. */
-  template: string;
-}
+ *  collections io layer. Valid on any collection (primarily skill-backed).
+ *  Derived from `AgentIngestZ` in `collection/core/schemaZ`. */
+export type AgentIngestSpec = z.infer<typeof AgentIngestZ>;
 
 /** The `ingest` block carried on a `CollectionSchema`, discriminated on `kind`. */
 export type IngestSpec = DeclarativeIngestSpec | AgentIngestSpec;

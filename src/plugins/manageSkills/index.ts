@@ -13,6 +13,16 @@ export interface SkillSummary {
   source: "user" | "project";
 }
 
+// Full active-skill detail returned by GET /api/skills/:name. Shared by
+// View.vue (fetch + edit state) and SkillDetailPane.vue (rendering).
+export interface SkillDetail {
+  name: string;
+  description: string;
+  body: string;
+  source: "user" | "project";
+  path: string;
+}
+
 export interface ManageSkillsData {
   skills: SkillSummary[];
 }
@@ -47,8 +57,6 @@ const manageSkillsPlugin: ToolPlugin<ManageSkillsData> = {
   viewComponent: wrapWithScope("skills", View),
   previewComponent: wrapWithScope("skills", Preview),
 };
-
-export default manageSkillsPlugin;
 export { TOOL_NAME };
 
 export const REGISTRATION: PluginRegistration = {

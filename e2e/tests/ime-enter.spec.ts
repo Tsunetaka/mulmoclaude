@@ -82,6 +82,7 @@ test.describe("IME Enter handling", () => {
       { kind: "composition", type: "compositionend" },
     ]);
 
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: an isComposing keydown must NOT send; the absence of an /api/agent POST has no observable signal.
     await page.waitForTimeout(100);
     expect(agentCalls).toHaveLength(0);
   });
@@ -102,6 +103,7 @@ test.describe("IME Enter handling", () => {
       { kind: "keydown", isComposing: false },
     ]);
 
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- the send is suppressed by the composable's 30 ms post-compositionend race window; asserting "not sent" requires waiting past it, and the absence of a POST has no observable signal.
     await page.waitForTimeout(100);
     expect(agentCalls).toHaveLength(0);
   });
@@ -118,12 +120,12 @@ test.describe("IME Enter handling", () => {
     ]);
 
     // Wait past the 30 ms race window, then send a real Enter.
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- must let the composable's 30 ms post-compositionend race window elapse before asserting no send; the window closing has no observable signal.
     await page.waitForTimeout(100);
     expect(agentCalls).toHaveLength(0);
 
     await dispatchImeSequence(input, [{ kind: "keydown", isComposing: false }]);
-    await page.waitForTimeout(100);
-    expect(agentCalls).toHaveLength(1);
+    await expect.poll(() => agentCalls.length).toBe(1);
   });
 
   test("Shift+Enter does not send", async ({ page }) => {
@@ -132,6 +134,7 @@ test.describe("IME Enter handling", () => {
 
     await dispatchImeSequence(input, [{ kind: "keydown", isComposing: false, shiftKey: true }]);
 
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: Shift+Enter must NOT send; the absence of an /api/agent POST has no observable signal.
     await page.waitForTimeout(100);
     expect(agentCalls).toHaveLength(0);
   });

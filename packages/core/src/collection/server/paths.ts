@@ -5,14 +5,11 @@
 import path from "node:path";
 import { realpathSync } from "node:fs";
 import { getWorkspaceRoot } from "./host";
+// The character rules live in ../core/ids so the isomorphic schema validator
+// (../core/schemaZ) gates on the SAME patterns these sanitisers do.
+import { SAFE_SLUG_PATTERN, SAFE_RECORD_ID_PATTERN } from "../core/ids";
 
 export const SCHEMA_FILE = "schema.json";
-
-// Same regex as `server/workspace/skills/catalog.ts#SAFE_SLUG_PATTERN`
-// — keep them in sync. Bounded character classes, no nested
-// quantifiers; ReDoS-safe.
-// eslint-disable-next-line security/detect-unsafe-regex -- non-overlapping character classes, no catastrophic backtracking
-const SAFE_SLUG_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9_-]*[a-zA-Z0-9])?$/;
 
 /** Sanitise a user-supplied slug into a safe directory-name leaf.
  *  Returns null for anything that fails the slug whitelist OR isn't a
@@ -26,17 +23,6 @@ export function safeSlugName(slug: string): string | null {
   if (basename !== slug) return null;
   return basename;
 }
-
-// Record ids are a superset of slugs: they're only ever filename stems
-// (`<id>.json`), never directory names or URL segments, so they may carry
-// dots — natural keys like a Slack ts (`1718900000.123456`), a SemVer
-// (`1.2.3`), or a decimal timestamp. The interior class adds `.` to the slug
-// set; the explicit `..` reject below keeps a parent-dir-looking segment out
-// while still allowing repeated `-`/`_` (`a--b`, `a__b`). Start/end stay
-// alphanumeric so leading/trailing dots (hidden files, the special `.`/`..`
-// names) and `..`-only ids are all excluded.
-// eslint-disable-next-line security/detect-unsafe-regex -- non-overlapping character classes, no catastrophic backtracking
-const SAFE_RECORD_ID_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
 
 /** Sanitise a user-supplied record id into a safe filename stem. Like
  *  `safeSlugName` but tolerates interior dots (so natural keys work),

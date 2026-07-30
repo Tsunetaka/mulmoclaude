@@ -107,6 +107,10 @@ const koMessages = {
     intraBody:
       '플러그인 "{first}"과(와) "{second}"이(가) 동일한 {dimension} "{key}"을(를) 등록합니다. "{first}"이(가) 먼저 등록했으므로 "{second}"의 등록은 무시됩니다.',
   },
+  shadowedEnv: {
+    title: "셸 환경 변수가 .env를 덮어쓰고 있습니다",
+    body: "셸과 .env 양쪽에 모두 설정되어 있습니다: {keys}. 셸의 값이 우선하므로 .env는 무시됩니다. .env를 수정했다면 셸의 값을 갱신하거나 해제한 뒤 다시 시작하세요.",
+  },
   optionalDeps: {
     // 영구 저장된 기존 히스토리 항목과의 호환을 위해 일반적인 `title` 키는
     // 그대로 둔다. 새 발화는 `titleNotFound` / `titleNotResponding` 사용.
@@ -133,6 +137,11 @@ const koMessages = {
     hideDetails: "세부 정보 숨기기",
     retry: "다시 시도",
   },
+  remoteHostOffline: {
+    title: "원격 호스트 연결 끊김",
+    body: "다시 연결하기 전에는 휴대폰에서 이 기기로 보낼 수 없습니다.",
+    reconnect: "다시 연결",
+  },
   remoteHost: {
     title: "원격 호스트",
     online: "원격 호스트 온라인",
@@ -153,6 +162,7 @@ const koMessages = {
     qrHint: "휴대폰 카메라로 이 QR 코드를 스캔해도 열 수 있습니다.",
   },
   sidebarHeader: {
+    newMessages: "새 메시지",
     home: "최신 채팅으로 이동",
     toolCallHistory: "도구 호출 기록",
     settings: "설정",
@@ -198,6 +208,12 @@ const koMessages = {
     showSystemFilesTitle: "사용자 콘텐츠(data/, artifacts/, config/)에 더해 에이전트 내부 최상위 디렉터리(conversations/, feeds/ 등)까지 표시합니다.",
   },
   fileTree: {
+    dropHint: "여기에 파일을 놓으면 이 폴더에 저장됩니다",
+    upload: {
+      progress: "업로드 중 {done}/{total}…",
+      done: "파일 {count}개를 저장했습니다",
+      failed: "파일 {count}개를 저장하지 못했습니다",
+    },
     workspace: "(워크스페이스)",
     recentlyChanged: "최근 변경됨",
     newFileMenuItem: "새 파일",
@@ -245,6 +261,7 @@ const koMessages = {
       refs: "참조 디렉터리",
       map: "지도",
       photos: "사진",
+      google: "Google",
       model: "모델",
       voice: "음성",
       chatIndex: "채팅 인덱스",
@@ -252,6 +269,7 @@ const koMessages = {
       notifications: "Web Push",
       skills: "스킬",
       roles: "역할",
+      quit: "종료",
     },
     groups: {
       llm: "LLM",
@@ -260,8 +278,24 @@ const koMessages = {
       notifications: "알림",
       plugins: "플러그인",
       management: "관리",
+      server: "서버",
     },
     navAriaLabel: "설정 섹션",
+    googleTab: {
+      description:
+        "Google 계정을 연결하면 이 컴퓨터에서 Google API(우선 캘린더)를 직접 호출할 수 있습니다. 리프레시 토큰은 이 컴퓨터에만 저장되며 Google 이외에는 전송되지 않습니다.",
+      statusLinked: "연결됨",
+      statusNotLinked: "연결되지 않음",
+      statusPending: "브라우저에서 동의가 완료되기를 기다리는 중…",
+      connect: "Google 계정 연결",
+      unlink: "연결 해제",
+      unlinkConfirm: "Google 계정 연결을 해제할까요? 저장된 토큰은 취소되고 이 컴퓨터에서 삭제됩니다.",
+      clientSecretAmbiguous:
+        "~/.secrets/에서 client_secret_*.json 파일이 여러 개 발견되었습니다. 저장된 토큰과 OAuth 클라이언트가 어긋나지 않도록 하나만 남겨 주세요.",
+      loadError: "Google 연결 상태를 불러오지 못했습니다.",
+      connectError: "Google 인증 절차를 시작하지 못했습니다.",
+      unlinkError: "Google 연결 해제에 실패했습니다.",
+    },
     mapTab: {
       description: "지도 플러그인에서 사용하는 Google Maps API 키를 설정합니다. 키는 로컬에 저장되며 Google Maps 외부로는 전송되지 않습니다.",
       apiKeyLabel: "Google Maps API 키",
@@ -284,12 +318,31 @@ const koMessages = {
       loadError: "설정을 불러오지 못했습니다",
       saveError: "저장에 실패했습니다",
     },
+    quitTab: {
+      description:
+        "이 컴퓨터에서 실행 중인 MulmoClaude 서버를 종료합니다. 아이콘으로 시작한 경우 이 탭을 닫아도 서버는 계속 실행됩니다. 터미널 없이 종료하는 방법이 여기입니다.",
+      // Message function form — skips vue-i18n's message compiler so the
+      // literal `@` in `mulmoclaude@latest` is not parsed as a linked-message
+      // reference (the compiler throws, and the whole tab renders as nothing).
+      restartHint: () => "다시 시작하려면 MulmoClaude 아이콘을 두 번 클릭하세요(또는 `npx mulmoclaude@latest`).",
+      quitLabel: "MulmoClaude 종료",
+      confirmBody: "서버가 멈추고 이 페이지는 동작하지 않게 됩니다. 진행 중인 작업은 중단됩니다.",
+      confirmLabel: "종료",
+      stopping: "종료하는 중…",
+      stoppedTitle: "MulmoClaude가 종료되었습니다",
+      stoppedBody: "이 탭을 닫아도 됩니다. 다시 시작하려면 아이콘을 두 번 클릭하세요.",
+      error: "서버를 종료하지 못했습니다",
+    },
     notificationsTab: {
       description:
         "여기서 시작한 작업이 완료되면 등록된 기기로 푸시 알림을 보냅니다. 질문을 남기고 자리를 비운 뒤 답변이 준비되는 순간을 알고 싶을 때 유용합니다.",
       enableLabel: "작업 완료 시 Web Push 보내기",
       enableHint: "여기서 시작한 채팅이 완료되면 실행됩니다. 예약 작업이나 백그라운드 작업에서는 실행되지 않습니다.",
       remoteHostNote: "RemoteHost 연결(로그인 제공)과 등록된 기기가 하나 이상 필요합니다. 둘 중 하나라도 없으면 아무 동작도 하지 않습니다.",
+      macosRemindersLabel: "작업 완료 시 macOS 미리 알림 만들기",
+      macosRemindersHint: "완료된 작업을 기본 미리 알림 목록에 추가합니다. iCloud를 통해 iPhone에 동기화되며, iPhone에서 알림이 전달됩니다.",
+      macosRemindersForcedOff:
+        "시작할 때 --disable-macos-reminders 또는 DISABLE_MACOS_REMINDER_NOTIFICATIONS로 꺼졌습니다. 플래그를 제거하거나 환경 변수를 해제한 뒤 다시 시작하면 여기서 제어할 수 있습니다.",
       statusOn: "Web Push 켜짐",
       statusOff: "Web Push 꺼짐",
       loadError: "설정을 불러오지 못했습니다",
@@ -441,6 +494,12 @@ const koMessages = {
     pin: "런처에 고정",
     unpin: "런처에서 고정 해제",
     zoneAriaLabel: "고정된 바로가기",
+    reorder: {
+      open: "바로가기 순서 변경",
+      title: "순서 변경",
+      moveUp: "위로",
+      moveDown: "아래로",
+    },
   },
   fileContentHeader: {
     showRendered: "렌더링된 Markdown 표시",
@@ -740,6 +799,12 @@ const koMessages = {
     detailsToggle: "상세 보기",
     promptLabel: "프롬프트",
     roleLabel: "역할",
+    confirmDelete: "작업 「{name}」을(를) 삭제하시겠습니까? 되돌릴 수 없습니다.",
+    hintNewsRss: "뉴스 / RSS 가져오기",
+    hintJournal: "일일 저널 처리",
+    hintWiki: "위키 유지 관리",
+    hintMemory: "메모리 추출",
+    hintCalendar: "캘린더 / 연락처 동기화",
   },
   pluginCanvas: {
     undo: "실행 취소",
@@ -748,6 +813,7 @@ const koMessages = {
     styleLabel: "스타일:",
     stylePromptWithPath: "`{path}`의 이미지를 {style} 스타일 이미지로 변환해 주세요.",
     stylePromptNoPath: "캔버스에 그린 그림을 {style} 스타일 이미지로 변환해 주세요.",
+    saveFailed: "저장 안 됨",
   },
   pluginWiki: {
     backToIndex: "목차로 돌아가기",
@@ -775,6 +841,7 @@ const koMessages = {
     metadataEditor: "편집자",
     pageEditHeader: "Wiki 편집",
     snapshotExpired: "스냅샷 만료됨 — 현재 페이지 표시 중",
+    snapshotLoadError: "스냅샷을 불러오지 못했습니다 — 페이지가 여전히 존재할 수 있습니다. 새로고침해 보세요.",
     pageDeleted: "페이지가 삭제되었습니다",
     history: {
       tabContent: "본문",
@@ -933,62 +1000,11 @@ const koMessages = {
     errDeleteFailed: "삭제 실패",
     errNetworkError: "네트워크 오류",
     errServerError: "서버 오류: {status}",
+    errRefreshFailed: "저장했지만 목록을 새로고침하지 못했습니다.",
+    confirmDelete: "역할 「{name}」을(를) 삭제하시겠습니까? 되돌릴 수 없습니다.",
   },
   pluginUiImage: {
     promptLabel: "{label}:",
-  },
-  pluginMulmoScript: {
-    beatCount: "{count}개 비트",
-    movie: "영상",
-    generating: "생성 중…",
-    rendering: "렌더링 중…",
-    saving: "저장 중…",
-    update: "업데이트",
-    characters: "캐릭터",
-    drop: "드롭",
-    gen: "생성",
-    play: "▶ 재생",
-    stop: "■ 정지",
-    playPresentation: "프레젠테이션 재생",
-    regenerateMovie: "동영상 재생성",
-    movieGenerationFailed: "동영상 생성에 실패했습니다",
-    pdf: "PDF",
-    regeneratePdf: "PDF 재생성",
-    generatingPdf: "PDF 생성 중…",
-    retry: "다시 시도",
-    errPrefix: "⚠ 오류",
-    noBeats: "스크립트에서 비트를 찾을 수 없습니다",
-    editSource: "스크립트 원본 편집",
-    applyChanges: "변경 사항 적용",
-    generateAll: "전체 생성",
-    orDropImage: "또는 이미지 드롭",
-    generate: "생성",
-    generateAudio: "♪ 생성",
-    saveErrorInvalidJson: "⚠ 잘못된 JSON: {error}",
-    saveErrorSaveFailed: "⚠ 저장 실패: {error}",
-  },
-  pluginMarkdown: {
-    loading: "문서를 불러오는 중...",
-    loadFailed: "⚠ 문서 불러오기 실패: {error}",
-    refreshFailed: "⚠ 문서 새로고침 실패: {error} — 마지막으로 성공적으로 불러온 내용을 표시합니다.",
-    noContent: "사용 가능한 Markdown 콘텐츠가 없습니다",
-    pdf: "PDF",
-    pdfFailedShort: "⚠ PDF 실패",
-    editSource: "Markdown 원본 편집",
-    saving: "저장 중...",
-    applyChanges: "변경 사항 적용",
-    cancel: "취소",
-    saveFailed: "저장 실패: {error}",
-    saveError: "⚠ 저장 실패: {error}",
-    copyLabel: "복사",
-    copiedLabel: "복사됨!",
-    taskCountMismatch: "Markdown 원본과 렌더링 결과의 작업 수가 일치하지 않아, 파일 손상을 방지하기 위해 토글이 거부되었습니다.",
-    marpSlidesMode: "Marp 슬라이드 · {count}",
-    marpExportPdf: "PDF로 내보내기",
-    marpRenderFailed: "⚠ Marp 슬라이드 렌더링 실패: {error}",
-    marpSplitEnter: "소스를 나란히 편집",
-    marpSplitExit: "소스 편집기 닫기",
-    marpSplitEditorLabel: "소스",
   },
   markdownMermaid: {
     loadFailed: "⚠ Mermaid 로드 실패: {error}",
@@ -1000,6 +1016,9 @@ const koMessages = {
     editContent: "텍스트 내용 편집",
     applyChanges: "변경 사항 적용",
     copyLabel: "복사",
+    speakerSystem: "시스템",
+    speakerUser: "나",
+    speakerAssistant: "어시스턴트",
     copiedLabel: "복사됨!",
     cancel: "취소",
     seededByPlugin: "{pkg}에서",

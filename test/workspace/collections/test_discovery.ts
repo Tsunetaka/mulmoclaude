@@ -16,6 +16,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { discoverCollections, loadCollection } from "@mulmoclaude/core/collection/server";
+import type { CollectionFieldSpec, CollectionSubFieldSpec } from "@mulmoclaude/core/collection";
+
+type AnyFieldSpec = CollectionFieldSpec | CollectionSubFieldSpec;
+
+/** Narrow a parsed field to one variant of the discriminated union so an
+ *  assertion can read its variant-specific keys (`formula`, `values`, …). */
+function fieldAs<T extends AnyFieldSpec["type"]>(field: AnyFieldSpec | undefined, type: T): Extract<AnyFieldSpec, { type: T }> | undefined {
+  return field?.type === type ? (field as Extract<AnyFieldSpec, { type: T }>) : undefined;
+}
 
 let workdir: string;
 let emptyUserDir: string;
@@ -187,8 +196,8 @@ describe("discoverCollections — field-type support", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.equal(collections[0]?.schema.fields.rateUsd?.currency, "USD");
-    assert.equal(collections[0]?.schema.fields.rateJpy?.currency, "JPY");
+    assert.equal(fieldAs(collections[0]?.schema.fields.rateUsd, "money")?.currency, "USD");
+    assert.equal(fieldAs(collections[0]?.schema.fields.rateJpy, "money")?.currency, "JPY");
   });
 
   it("rejects `money` with neither `currency` nor `currencyField`", async () => {
@@ -220,8 +229,8 @@ describe("discoverCollections — field-type support", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.equal(collections[0]?.schema.fields.rate?.currencyField, "currency");
-    assert.equal(collections[0]?.schema.fields.rate?.currency, undefined);
+    assert.equal(fieldAs(collections[0]?.schema.fields.rate, "money")?.currencyField, "currency");
+    assert.equal(fieldAs(collections[0]?.schema.fields.rate, "money")?.currency, undefined);
   });
 
   it("accepts `derived` displayed as money with a `currencyField`", async () => {
@@ -238,7 +247,7 @@ describe("discoverCollections — field-type support", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.equal(collections[0]?.schema.fields.total?.currencyField, "currency");
+    assert.equal(fieldAs(collections[0]?.schema.fields.total, "derived")?.currencyField, "currency");
   });
 
   it("rejects a `currencyField` that names a non-existent field", async () => {
@@ -301,7 +310,7 @@ describe("discoverCollections — field-type support", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.deepEqual(collections[0]?.schema.fields.status?.values, ["draft", "sent", "paid", "void"]);
+    assert.deepEqual(fieldAs(collections[0]?.schema.fields.status, "enum")?.values, ["draft", "sent", "paid", "void"]);
   });
 
   it("rejects `enum` with no values", async () => {
@@ -402,7 +411,7 @@ describe("discoverCollections — field-type support", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.equal(collections[0]?.schema.fields.lineItems?.of?.rate?.currencyField, "currency");
+    assert.equal(fieldAs(fieldAs(collections[0]?.schema.fields.lineItems, "table")?.of.rate, "money")?.currencyField, "currency");
   });
 
   it("rejects `table` with no `of`", async () => {
@@ -475,8 +484,8 @@ describe("discoverCollections — field-type support", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.equal(collections[0]?.schema.fields.subtotal?.formula, "sum(lineItems[].quantity * lineItems[].rate)");
-    assert.equal(collections[0]?.schema.fields.subtotal?.display, "money");
+    assert.equal(fieldAs(collections[0]?.schema.fields.subtotal, "derived")?.formula, "sum(lineItems[].quantity * lineItems[].rate)");
+    assert.equal(fieldAs(collections[0]?.schema.fields.subtotal, "derived")?.display, "money");
   });
 
   it("rejects `derived` with no formula", async () => {
@@ -522,7 +531,7 @@ describe("discoverCollections — field-type support", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1, "a derived field not displayed as money needs no currency");
-    assert.equal(collections[0]?.schema.fields.count?.display, "number");
+    assert.equal(fieldAs(collections[0]?.schema.fields.count, "derived")?.display, "number");
   });
 
   // ─── embed (feat-collections-embed PR) ───
@@ -575,6 +584,112 @@ describe("discoverCollections — field-type support", () => {
     assert.equal(collections.length, 0, "embed without `id` must be skipped");
   });
 
+  it("accepts `backlinks` with a valid `from`/`via`/`display` (+ optional filter)", async () => {
+    writeSkill("test-backlinks", {
+      title: "Clients-like",
+      icon: "people",
+      dataPath: "data/backlinks/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        openInvoices: {
+          type: "backlinks",
+          label: "Invoices",
+          from: "invoice",
+          via: "clientId",
+          display: ["issueDate", "total"],
+          filter: { field: "status", in: ["draft", "sent"] },
+        },
+      },
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 1);
+    const field = collections[0]?.schema.fields.openInvoices;
+    assert.equal(field?.type, "backlinks");
+    assert.equal(field?.type === "backlinks" && field.from, "invoice");
+  });
+
+  it("rejects `backlinks` whose `from` contains path traversal", async () => {
+    writeSkill("test-backlinks-traversal", {
+      title: "Traversal Backlinks",
+      icon: "warning",
+      dataPath: "data/backlinkstrav/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        rows: { type: "backlinks", label: "Rows", from: "../escape", via: "clientId", display: ["a"] },
+      },
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 0, "backlinks with a traversal `from` must be skipped");
+  });
+
+  it("rejects `backlinks` with an empty `display` and `backlinks` inside a table's `of`", async () => {
+    writeSkill("test-backlinks-nodisplay", {
+      title: "Bad Backlinks",
+      icon: "warning",
+      dataPath: "data/backlinksnod/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        rows: { type: "backlinks", label: "Rows", from: "invoice", via: "clientId", display: [] },
+      },
+    });
+    writeSkill("test-backlinks-in-table", {
+      title: "Nested Backlinks",
+      icon: "warning",
+      dataPath: "data/backlinkstab/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        lines: { type: "table", label: "Lines", of: { rows: { type: "backlinks", label: "Rows", from: "invoice", via: "clientId", display: ["a"] } } },
+      },
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 0, "both malformed backlinks schemas must be skipped");
+  });
+
+  it("accepts `rollup` (sum with column, count without) and reports it in the schema", async () => {
+    writeSkill("test-rollup", {
+      title: "Clients-like",
+      icon: "people",
+      dataPath: "data/rollup/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        unbilledHours: {
+          type: "rollup",
+          label: "Unbilled hours",
+          from: "worklog",
+          via: "clientId",
+          op: "sum",
+          column: "hours",
+          filter: { field: "billed", in: ["false"] },
+        },
+        entryCount: { type: "rollup", label: "Entries", from: "worklog", via: "clientId", op: "count" },
+      },
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 1);
+    const field = collections[0]?.schema.fields.unbilledHours;
+    assert.equal(field?.type === "rollup" && field.op, "sum");
+    assert.equal(collections[0]?.schema.fields.entryCount?.type, "rollup");
+  });
+
+  it("rejects rollup misdeclarations: sum without column, count with column, traversal from", async () => {
+    const base = {
+      title: "X",
+      icon: "warning",
+      primaryKey: "id",
+      fields: { id: { type: "string", label: "ID", primary: true, required: true } },
+    };
+    const withRollup = (spec: object) => ({ ...base, fields: { ...base.fields, agg: { type: "rollup", label: "Agg", ...spec } } });
+    writeSkill("test-rollup-nocol", { ...withRollup({ from: "worklog", via: "clientId", op: "sum" }), dataPath: "data/ru1/items" });
+    writeSkill("test-rollup-countcol", { ...withRollup({ from: "worklog", via: "clientId", op: "count", column: "hours" }), dataPath: "data/ru2/items" });
+    writeSkill("test-rollup-traversal", { ...withRollup({ from: "../escape", via: "clientId", op: "count" }), dataPath: "data/ru3/items" });
+    assert.equal((await listCollections()).length, 0, "every misdeclared rollup schema must be skipped");
+  });
+
   it("rejects `embed` whose `to` contains path traversal", async () => {
     writeSkill("test-embed-traversal", {
       title: "Traversal Embed",
@@ -606,7 +721,7 @@ describe("discoverCollections — field-type support", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.equal(collections[0]?.schema.fields.issuer?.idField, "issuerId");
+    assert.equal(fieldAs(collections[0]?.schema.fields.issuer, "embed")?.idField, "issuerId");
   });
 
   it("rejects `embed` that declares both `id` and `idField`", async () => {
@@ -791,9 +906,74 @@ describe("discoverCollections — actions", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.equal(collections[0]?.schema.actions?.[0]?.id, "pdf");
-    assert.equal(collections[0]?.schema.actions?.[0]?.role, "accounting");
-    assert.equal(collections[0]?.schema.actions?.[0]?.template, "templates/invoice.md");
+    const pdfAction = collections[0]?.schema.actions?.[0];
+    assert.equal(pdfAction?.id, "pdf");
+    // Narrow to the seeded variant — role/template only exist there.
+    assert.ok(pdfAction?.kind === "chat");
+    assert.equal(pdfAction.role, "accounting");
+    assert.equal(pdfAction.template, "templates/invoice.md");
+  });
+
+  it("accepts a schema with a valid agent action (record + collection level)", async () => {
+    writeSkill("test-agent-actions", {
+      title: "Quotes-like",
+      icon: "trending_up",
+      dataPath: "data/agentactions/items",
+      primaryKey: "id",
+      fields,
+      actions: [{ id: "reprice", label: "Refresh price", icon: "sync", kind: "agent", role: "finance", template: "templates/reprice.md" }],
+      collectionActions: [{ id: "sync", label: "Sync all", kind: "agent", role: "finance", template: "templates/sync.md" }],
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 1);
+    assert.equal(collections[0]?.schema.actions?.[0]?.kind, "agent");
+    assert.equal(collections[0]?.schema.collectionActions?.[0]?.kind, "agent");
+  });
+
+  it("accepts a mutate action (require + params + $params refs in set)", async () => {
+    writeSkill("test-mutate", {
+      title: "Tickets",
+      icon: "assignment",
+      dataPath: "data/mutate/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        status: { type: "enum", label: "Status", values: ["open", "assigned", "done"] },
+        assignee: { type: "string", label: "Assignee" },
+      },
+      actions: [
+        {
+          id: "assign",
+          label: "Assign",
+          kind: "mutate",
+          require: { field: "status", in: ["open"] },
+          params: { assignee: { type: "string", label: "Assignee", required: true } },
+          set: { assignee: "$params.assignee", status: "assigned" },
+        },
+      ],
+    });
+    const collections = await listCollections();
+    assert.equal(collections.length, 1);
+    const parsed = collections[0]?.schema.actions?.[0];
+    assert.equal(parsed?.kind, "mutate");
+    assert.equal(parsed?.kind === "mutate" && parsed.set.status, "assigned");
+  });
+
+  it("rejects mutate misdeclarations: computed/unknown/primaryKey set targets, undeclared $params, collection-level, empty set", async () => {
+    const fieldsWithComputed = {
+      id: { type: "string", label: "ID", primary: true, required: true },
+      count: { type: "number", label: "Count" },
+      doubled: { type: "derived", label: "Doubled", formula: "count * 2" },
+    };
+    const base = { title: "X", icon: "warning", primaryKey: "id", fields: fieldsWithComputed };
+    const mutate = (set: object, params?: object) => [{ id: "m", label: "M", kind: "mutate", set, ...(params ? { params } : {}) }];
+    writeSkill("test-mutate-computed", { ...base, dataPath: "data/mut1/items", actions: mutate({ doubled: 4 }) });
+    writeSkill("test-mutate-unknown", { ...base, dataPath: "data/mut2/items", actions: mutate({ nope: "x" }) });
+    writeSkill("test-mutate-primary", { ...base, dataPath: "data/mut3/items", actions: mutate({ id: "renamed" }) });
+    writeSkill("test-mutate-badref", { ...base, dataPath: "data/mut4/items", actions: mutate({ count: "$params.missing" }) });
+    writeSkill("test-mutate-empty-set", { ...base, dataPath: "data/mut5/items", actions: mutate({}) });
+    writeSkill("test-mutate-collection-level", { ...base, dataPath: "data/mut6/items", collectionActions: mutate({ count: 1 }) });
+    assert.equal((await listCollections()).length, 0, "every misdeclared mutate schema must be skipped");
   });
 
   it("rejects an action missing required fields (role)", async () => {
@@ -859,7 +1039,9 @@ describe("discoverCollections — actions", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.equal(collections[0]?.schema.actions?.[0]?.template, "templates/mail/welcome.md");
+    const mailAction = collections[0]?.schema.actions?.[0];
+    assert.ok(mailAction?.kind === "chat");
+    assert.equal(mailAction.template, "templates/mail/welcome.md");
   });
 
   it("rejects duplicate action ids", async () => {
@@ -890,7 +1072,9 @@ describe("discoverCollections — actions", () => {
     });
     const collections = await listCollections();
     assert.equal(collections.length, 1);
-    assert.deepEqual(collections[0]?.schema.actions?.[0]?.when, { field: "status", in: ["sent", "paid"] });
+    const gated = collections[0]?.schema.actions?.[0];
+    assert.ok(gated?.kind === "chat");
+    assert.deepEqual(gated.when, { field: "status", in: ["sent", "paid"] });
   });
 
   it("rejects a `when` missing `field`", async () => {
@@ -1500,6 +1684,159 @@ describe("discoverCollections — toggle field validation", () => {
   it("rejects a toggle whose offValue is not one of the enum's values", async () => {
     writeSkill("test-toggle-bad-off-value", toggleSchema({ field: "status", onValue: "Done", offValue: "Finished" }));
     assert.equal((await listCollections()).length, 0);
+  });
+});
+
+describe("discoverCollections — flag field validation", () => {
+  // An enum status + numeric score/budget with flag fields over them,
+  // cloned + mutated per case. `dueOn` supports the spawn cases.
+  function flagSchema(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      title: "Applicants",
+      icon: "person",
+      dataPath: "data/applicants/items",
+      primaryKey: "id",
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        status: { type: "enum", label: "Status", values: ["todo", "doing", "done", "canceled"] },
+        score: { type: "number", label: "Score" },
+        budget: { type: "number", label: "Budget" },
+        dueOn: { type: "date", label: "Due" },
+        total: { type: "derived", label: "Total", formula: "score * 2" },
+        isDone: { type: "flag", label: "Done", where: [{ field: "status", op: "in", value: ["done", "canceled"] }] },
+      },
+      ...extra,
+    };
+  }
+
+  /** Replace the `isDone` flag's spec (keeping the surrounding fields). */
+  function withFlag(flag: Record<string, unknown>, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    const schema = flagSchema(extra);
+    (schema.fields as Record<string, unknown>).isDone = { type: "flag", label: "Done", ...flag };
+    return schema;
+  }
+
+  it("accepts a membership flag and preserves it through parsing", async () => {
+    writeSkill("test-flag-ok", flagSchema());
+    const collection = await loadCollection("test-flag-ok", { workspaceRoot: workdir, userSkillsDir: emptyUserDir });
+    const flag = fieldAs(collection?.schema.fields.isDone, "flag");
+    assert.deepEqual(flag?.where, [{ field: "status", op: "in", value: ["done", "canceled"] }]);
+  });
+
+  it("accepts a numeric-compare flag (gte)", async () => {
+    writeSkill("test-flag-gte", withFlag({ where: [{ field: "score", op: "gte", value: "60" }] }));
+    assert.equal((await listCollections()).length, 1);
+  });
+
+  it("accepts a same-record valueFrom (field-to-field compare)", async () => {
+    writeSkill("test-flag-value-from", withFlag({ where: [{ field: "score", op: "gt", valueFrom: { field: "budget" } }] }));
+    assert.equal((await listCollections()).length, 1);
+  });
+
+  it("rejects an empty where", async () => {
+    writeSkill("test-flag-empty", withFlag({ where: [] }));
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("rejects a condition naming a missing field", async () => {
+    writeSkill("test-flag-missing-field", withFlag({ where: [{ field: "nope", op: "eq", value: "x" }] }));
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("rejects a cross-record valueFrom.record", async () => {
+    writeSkill("test-flag-cross-record", withFlag({ where: [{ field: "score", op: "gt", valueFrom: { record: "_config", field: "budget" } }] }));
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("rejects a valueFrom.field naming a missing field", async () => {
+    writeSkill("test-flag-value-from-missing", withFlag({ where: [{ field: "score", op: "gt", valueFrom: { field: "nope" } }] }));
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("accepts completionField naming a flag (completionDoneValues omitted)", async () => {
+    writeSkill("test-flag-completion", flagSchema({ completionField: "isDone" }));
+    assert.equal((await listCollections()).length, 1);
+  });
+
+  it("rejects completionField naming a flag WITH completionDoneValues", async () => {
+    writeSkill("test-flag-completion-values", flagSchema({ completionField: "isDone", completionDoneValues: ["true"] }));
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("accepts a general flag over a derived field", async () => {
+    writeSkill("test-flag-over-derived", withFlag({ where: [{ field: "total", op: "gt", value: "100" }] }));
+    assert.equal((await listCollections()).length, 1);
+  });
+
+  it("rejects a COMPLETION flag whose where references a derived field", async () => {
+    writeSkill("test-flag-completion-derived", withFlag({ where: [{ field: "total", op: "gt", value: "100" }] }, { completionField: "isDone" }));
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("rejects a COMPLETION flag whose valueFrom.field is computed", async () => {
+    writeSkill(
+      "test-flag-completion-value-from-computed",
+      withFlag({ where: [{ field: "score", op: "gt", valueFrom: { field: "total" } }] }, { completionField: "isDone" }),
+    );
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("rejects a mutate action writing a flag (computed, never stored)", async () => {
+    writeSkill("test-flag-mutate", flagSchema({ actions: [{ kind: "mutate", id: "finish", label: "Finish", set: { isDone: "true" } }] }));
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("rejects spawn under flag completion without an explicit spawn.when", async () => {
+    writeSkill(
+      "test-flag-spawn-implicit",
+      flagSchema({
+        completionField: "isDone",
+        triggerField: "dueOn",
+        spawn: { every: { unit: "month", interval: 1, dayOfMonth: 10 }, set: { status: "todo" } },
+      }),
+    );
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("rejects a top-level field named __proto__ (raw JSON — a JS literal would set the prototype)", async () => {
+    writeSkill(
+      "test-proto-field",
+      `{"title":"P","icon":"person","dataPath":"data/p/items","primaryKey":"id","fields":{"id":{"type":"string","label":"ID","primary":true,"required":true},"__proto__":{"type":"string","label":"Bad"}}}`,
+    );
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("rejects a top-level field named constructor", async () => {
+    writeSkill(
+      "test-constructor-field",
+      flagSchema({ fields: { ...(flagSchema().fields as Record<string, unknown>), constructor: { type: "string", label: "Bad" } } }),
+    );
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("rejects a table sub-field named prototype", async () => {
+    writeSkill(
+      "test-prototype-subfield",
+      flagSchema({
+        fields: {
+          ...(flagSchema().fields as Record<string, unknown>),
+          rows: { type: "table", label: "Rows", of: { prototype: { type: "string", label: "Bad" } } },
+        },
+      }),
+    );
+    assert.equal((await listCollections()).length, 0);
+  });
+
+  it("accepts spawn under flag completion with an explicit spawn.when", async () => {
+    writeSkill(
+      "test-flag-spawn-explicit",
+      flagSchema({
+        completionField: "isDone",
+        triggerField: "dueOn",
+        spawn: { when: { field: "status", in: ["done"] }, every: { unit: "month", interval: 1, dayOfMonth: 10 }, set: { status: "todo" } },
+      }),
+    );
+    assert.equal((await listCollections()).length, 1);
   });
 });
 

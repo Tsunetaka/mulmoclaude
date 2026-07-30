@@ -20,6 +20,10 @@ export const META = definePluginMeta({
     /** GET /api/mulmoScript/beat-audio — read a beat's pre-rendered
      *  audio. */
     beatAudio: { method: "GET", path: "/beat-audio" },
+    /** GET /api/mulmoScript/beat-movie — probe for a beat's generated
+     *  video clip (moviePrompt / animated beats). Returns the wire
+     *  path for `downloadMovie`, or null. */
+    beatMovie: { method: "GET", path: "/beat-movie" },
     /** POST /api/mulmoScript/generate-beat-audio — render audio
      *  for a beat (long-running). */
     generateBeatAudio: { method: "POST", path: "/generate-beat-audio" },

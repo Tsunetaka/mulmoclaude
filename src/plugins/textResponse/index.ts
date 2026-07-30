@@ -26,9 +26,6 @@ export { samples } from "./samples";
 
 export { View, Preview };
 
-const textResponsePlugin = { plugin };
-export default textResponsePlugin;
-
 export const REGISTRATION: PluginRegistration = {
   toolName: TOOL_NAME,
   entry: plugin,

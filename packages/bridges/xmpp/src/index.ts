@@ -27,6 +27,7 @@
 import "dotenv/config";
 import xmppPkg, { type XmlElement } from "@xmpp/client";
 import { createBridgeClient, chunkText, formatAckReply } from "@mulmobridge/client";
+import { parseCsvSet } from "@mulmoclaude/common";
 import { splitJid, parseStanzaFields } from "./parse.js";
 
 const { client, xml } = xmppPkg;
@@ -49,12 +50,7 @@ if (replyMode !== "bare" && replyMode !== "full") {
   process.exit(1);
 }
 const replyWithFullJid = replyMode === "full";
-const allowedJids = new Set(
-  (process.env.XMPP_ALLOWED_JIDS ?? "")
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean),
-);
+const allowedJids = parseCsvSet(process.env.XMPP_ALLOWED_JIDS, { lowercase: true });
 const allowAll = allowedJids.size === 0;
 
 const { username, domain } = splitJid(jid);
@@ -129,10 +125,12 @@ xmpp.on("offline", () => {
   console.warn("[xmpp] offline");
 });
 
-xmpp.on("online", async (address: { toString: () => string }) => {
+xmpp.on("online", (address: { toString: () => string }) => {
   console.log(`[xmpp] online as ${address.toString()}`);
-  // Presence broadcast so contacts can see the bot is available.
-  await xmpp.send(xml("presence"));
+  // Presence broadcast so contacts can see the bot is available. Same shape as
+  // the "stanza" handler below: the listener stays sync so the send's rejection
+  // has somewhere to go instead of escaping the emitter.
+  xmpp.send(xml("presence")).catch((err) => console.error(`[xmpp] presence broadcast failed: ${err}`));
 });
 
 xmpp.on("stanza", (stanza: XmlElement) => {

@@ -1,6 +1,6 @@
 {
   "name": "@mulmobridge/mock-server",
-  "version": "0.1.1",
+  "version": "1.0.1",
   "description": "Mock MulmoClaude server for testing MulmoBridge bridges — no Claude API key needed",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,13 +23,29 @@
   "license": "MIT",
   "author": "Receptron Team",
   "dependencies": {
-    "@mulmobridge/protocol": "^0.1.4",
+    "@mulmobridge/protocol": "^1.0.1",
     "express": "^5.1.0",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "typescript": "^6.0.3"
+  },
+  "homepage": "https://github.com/receptron/mulmoclaude/tree/main/packages/mock-server#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/receptron/mulmoclaude.git",
+    "directory": "packages/mock-server"
+  },
+  "keywords": [
+    "mulmobridge",
+    "mock-server",
+    "testing",
+    "socket.io",
+    "bridge"
+  ],
+  "bugs": {
+    "url": "https://github.com/receptron/mulmoclaude/issues"
   }
 }

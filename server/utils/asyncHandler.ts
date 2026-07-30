@@ -20,9 +20,14 @@
 //   - The inner handler stays in charge of 4xx mapping (validation,
 //     not-found, etc.) — those paths respond + `return` inside the
 //     handler before the wrapper's catch ever runs.
-//   - Skipped when the response has already been sent (`headersSent`)
-//     so a partial response that throws mid-stream doesn't try to
-//     write a second status.
+//   - When the response has already been sent (`headersSent`), a
+//     second status can't be written, so the error is forwarded to
+//     Express via `next(err)` instead. Measured against Express 5.2.1:
+//     returning without forwarding leaves the request hanging with no
+//     end to its body, while forwarding makes finalhandler destroy the
+//     socket in milliseconds. No route wrapped here streams today, so
+//     this branch is currently unreachable — it exists so the first
+//     streaming route added doesn't inherit a silent hang.
 //
 // Naming: `namespace` is the log tag (e.g. "accounting", "wiki") —
 // matches the existing `log.info("namespace", …)` convention across
@@ -31,45 +36,73 @@
 // load news items", "Failed to list tasks", …) so the client-facing
 // behaviour is unchanged.
 
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { log } from "../system/logger/index.js";
 import { errorMessage } from "./errors.js";
-import { serverError } from "./httpError.js";
+import { serverError, type ErrorSendable } from "./httpError.js";
 
-// The TReq / TRes generics intentionally have NO upper-bound constraint.
+// The TReq / TRes bounds name exactly what the catch path dereferences —
+// nothing more.
 //
-// Express's `Request<P, ResBody, ReqBody, Query>` interface uses these
-// type parameters in mixed variance positions (ResBody is
-// contravariant via `res.json(body: ResBody)`, P is constrained to
-// `ParamsDictionary` in the default form). Adding any `extends
-// Request<…>` upper bound here would reject perfectly valid call sites
-// like `Request<object, unknown, MyBody>` or `Request<SessionIdParams,
-// ResBody, ReqBody>` because of invariance — TS treats `object` /
-// concrete-ResBody as incompatible with the default's `ParamsDictionary`
-// / `any` slots.
+// They are NOT `extends Request` / `extends Response`. Express's
+// `Request<P, ResBody, ReqBody, Query>` uses its type parameters in mixed
+// variance positions, so a nominal `extends Request<…>` bound rejects
+// perfectly valid call sites like `Request<object, unknown, MyBody>` or
+// `Request<SessionIdParams, ResBody, ReqBody>`: TS treats `object` /
+// concrete-ResBody as incompatible with the default's `ParamsDictionary` /
+// `any` slots. Naming only the members we touch sidesteps that entirely —
+// every concrete `Request<…>` has `path`, so every call site still fits.
 //
-// The wrapper doesn't dereference req / res itself, so dropping the
-// upper bound costs nothing — call sites still get full Express types
-// via the explicit type arguments. Mirrors `wrapPluginExecute` in
-// `server/api/routes/plugins.ts`, which this module generalises.
-export function asyncHandler<TReq = Request, TRes = Response>(
+// Structural bounds rather than unconstrained generics + `as` casts, because
+// the cast was load-bearing in a way that hid a real contract: this wrapper
+// can send `{ error }` on the failure path, so a route declaring a `ResBody`
+// that cannot carry that body was lying. `ErrorSendable` now makes such a
+// route a compile error instead of a silent runtime mismatch — the fix at
+// those sites is to widen the `ResBody` union, which is the truth.
+//
+// Mirrors `wrapPluginExecute` in `server/api/routes/plugins.ts`, which this
+// module generalises.
+interface RoutePathBearing {
+  path: string;
+}
+
+/** `ErrorSendable` plus the already-sent probe the catch path checks before
+ *  writing a second status. */
+interface ErrorSendableResponse extends ErrorSendable {
+  headersSent: boolean;
+}
+
+export function asyncHandler<TReq extends RoutePathBearing = Request, TRes extends ErrorSendableResponse = Response>(
   namespace: string,
   fallbackMessage: string,
   handler: (req: TReq, res: TRes) => Promise<void>,
-): (req: TReq, res: TRes) => Promise<void> {
-  return async (req, res) => {
+): (req: TReq, res: TRes, next: NextFunction) => Promise<void> {
+  return async (req, res, next) => {
     try {
       await handler(req, res);
     } catch (err) {
-      // `req` / `res` are typed loosely here so the wrapper can stay
-      // open to any concrete Express Request / Response shape; we
-      // narrow back to the runtime contract just for the catch path.
-      const expressReq = req as Request;
-      const expressRes = res as Response;
-      log.error(namespace, "handler threw", { route: expressReq.path, error: errorMessage(err) });
-      if (!expressRes.headersSent) {
-        serverError(expressRes, fallbackMessage);
+      log.error(namespace, "handler threw", { route: req.path, error: errorMessage(err) });
+      if (res.headersSent) {
+        // A partially-sent response can't take a clean 500, and simply
+        // returning here leaves the request open — measured against this
+        // repo's Express (5.2.1), the client waits indefinitely for a body
+        // that never ends. Handing the error to Express lets finalhandler
+        // destroy the socket instead, so the caller fails in milliseconds
+        // rather than hanging until some timeout upstream.
+        //
+        // The forwarded value must be TRUTHY. Express reads `next(<falsy>)`
+        // as plain `next()` — "keep routing", not "fail" — so forwarding a
+        // thrown `undefined` (a bare `Promise.reject()` produces exactly
+        // that) skips the error flow entirely and hangs, reintroducing the
+        // bug this branch exists to prevent. Measured: the request hung past
+        // 2.5s. A falsy throw carries no diagnostic value anyway, so
+        // substituting a real Error loses nothing.
+        // `||`, deliberately not `??`: `??` only substitutes for null/undefined,
+        // leaving `0` / `""` / `false` to be forwarded verbatim and swallowed.
+        next(err || new Error(`${namespace}: handler threw a falsy value`));
+        return;
       }
+      serverError(res, fallbackMessage);
     }
   };
 }

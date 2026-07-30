@@ -1,6 +1,6 @@
 {
   "name": "@mulmobridge/xmpp",
-  "version": "0.1.1",
+  "version": "1.0.1",
   "description": "XMPP / Jabber bridge for MulmoBridge — connect any XMPP server (ejabberd, Prosody, etc.) to MulmoClaude",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,19 +16,39 @@
     "build": "tsc",
     "prepack": "yarn build",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/test_*.ts"
+    "test": "tsx --test test/test_*.ts",
+    "lint": "eslint src test"
   },
   "license": "MIT",
   "author": "Receptron Team",
   "dependencies": {
-    "@mulmobridge/client": "^0.1.4",
-    "@mulmobridge/protocol": "^0.1.4",
+    "@mulmobridge/client": "^1.0.1",
+    "@mulmobridge/protocol": "^1.0.1",
+    "@mulmoclaude/common": "^1.1.1",
     "@xmpp/client": "^0.14.0",
     "dotenv": "^17.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "tsx": "^4.23.1",
     "typescript": "^6.0.3"
+  },
+  "homepage": "https://github.com/receptron/mulmoclaude/tree/main/packages/bridges/xmpp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/receptron/mulmoclaude.git",
+    "directory": "packages/bridges/xmpp"
+  },
+  "keywords": [
+    "xmpp",
+    "jabber",
+    "mulmobridge",
+    "chatbot",
+    "bridge",
+    "ai-agent",
+    "mulmoclaude"
+  ],
+  "bugs": {
+    "url": "https://github.com/receptron/mulmoclaude/issues"
   }
 }

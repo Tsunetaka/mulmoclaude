@@ -30,8 +30,6 @@ const photoLocationsPlugin: ToolPlugin<PhotoLocationsActionData> = {
   viewComponent: wrapWithScope("photoLocations", View),
 };
 
-export default photoLocationsPlugin;
-
 export const REGISTRATION: PluginRegistration = {
   toolName: META.toolName,
   entry: photoLocationsPlugin,

@@ -43,9 +43,11 @@ unless the user already told you:
 
 - **Clone an existing Zenn repo** (they already write Zenn on GitHub). Get the
   repo URL, then:
+
   ```bash
   git clone <url> github/zenn
   ```
+
   `npx zenn` fetches zenn-cli on demand, so a missing local dependency is fine.
 
 - **Create a fresh project** (standard zenn-cli flow):
@@ -90,6 +92,7 @@ fill it in. **A published slug becomes the article URL and can't change** — pi
 it deliberately.
 
 **Step 3 — write the frontmatter** (Zenn house style):
+
 ```yaml
 ---
 title: "<a clear title, in the user's language>"
@@ -99,6 +102,7 @@ topics: ["MulmoClaude", "<related>"]
 published: true
 ---
 ```
+
 - **Always include `MulmoClaude` in `topics`.** At most 5 topics, no spaces
   inside a single topic.
 - `type` defaults to `tech`; `published` defaults to `true` (use `false` when
@@ -108,6 +112,33 @@ published: true
 implementation (fenced ` ```lang ` blocks, runnable commands) → result → a short
 wrap-up. Informative but casual; describe the work, not yourself. Put images in
 `github/zenn/images/` and reference them as `![alt](/images/<file>)`.
+
+Write it the way a person would, not the way a model defaults to. Each rule
+below comes from real reader feedback — ignore them and the draft reads as
+machine output:
+
+- **Sound human, not like a generated listicle.** Prefer flowing prose over
+  walls of bullets, use bold sparingly, and let paragraphs connect into an
+  argument. If every section is just a heading plus a list, vary the rhythm.
+- **No uncommon loanwords or jargon.** Use only terms a typical reader already
+  knows. Niche English acronyms, trendy katakana, and insider slang either get
+  dropped or replaced with plain words. A term the field itself hasn't settled
+  on ("code smell" and the like) is a red flag — say the plain thing instead
+  ("code that works now but bites you later").
+- **Define every term and acronym on first use**, in plain language, and put the
+  foundational ones up front — define "DRY" before the article leans on it. A
+  reader should never hit a word they can't parse.
+- **Carry a source's essence, don't just cite it.** When an idea comes from a
+  book or article, explain the idea itself in your own words; "see <book>"
+  teaches nothing. Search for the actual content when you're unsure what it says,
+  then write the substance.
+- **Make the article self-contained.** Anything project-specific — a repo's
+  internals, a config choice, a domain constraint — needs enough general
+  background that a reader with zero context can follow. Running longer is fine
+  when the extra length buys understanding.
+- **Match the stated audience.** "Explain to intermediate developers" means
+  patient explanations, concrete examples, real code from the work, and links —
+  not a terse summary.
 
 **Step 5 — save + preview.** Write `github/zenn/articles/<slug>.md`. Tell the
 user the path and how to preview: `cd github/zenn && npx zenn preview`

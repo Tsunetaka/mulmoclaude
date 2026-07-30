@@ -14,7 +14,9 @@ import { deriveAll } from "@mulmoclaude/core/collection";
 import type { CollectionDetail, CollectionSchema, CollectionFieldSpec as FieldSpec, CollectionFieldType as FieldType } from "@mulmoclaude/core/collection";
 import { useCollectionRendering } from "../../../packages/plugins/collection-plugin/src/vue/useCollectionRendering";
 
-const field = (type: FieldType, extra: Partial<FieldSpec> = {}): FieldSpec => ({ type, label: type, ...extra });
+// Fixture builder: assembles a spec dynamically (often deliberately partial),
+// so it casts rather than satisfying the discriminated union per-variant.
+const field = (type: FieldType, extra: Record<string, unknown> = {}): FieldSpec => ({ type, label: type, ...extra }) as FieldSpec;
 
 const makeSchema = (fields: Record<string, FieldSpec>, primaryKey = "id"): CollectionSchema => ({
   title: "Test",
@@ -44,6 +46,9 @@ const EXPECTED_MEMBERS = [
   "refOptions",
   "embedOptions",
   "embedViewsFor",
+  "backlinksViewsFor",
+  "rollupDisplay",
+  "deriveRecord",
   "resolveCurrency",
   "currencySymbol",
   "formatMoney",

@@ -118,6 +118,7 @@ test.describe("StackView — session-wide map grouping (#1227)", () => {
     await openStackSession(page);
     await expect(page.getByText(MAP_PLACEHOLDER)).toHaveCount(2); // g1 = A, g2 = B
 
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- waits for the deliberately delayed (startDelayMs) live result to stream in over pubsub; its delivery has no DOM signal and the downstream scroll-metric assertions are one-shot.
     await page.waitForTimeout(streamAfterLoadMs);
     await waitForScrollHeightStable(page, "stack-scroll");
 
@@ -150,6 +151,7 @@ test.describe("StackView — session-wide map grouping (#1227)", () => {
 
     // Let the load's auto-scroll + its suppression window clear, then
     // scroll to the bottom so the B card's top crosses the active line.
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- waits for the load auto-scroll suppression window (a timed debounce) to clear before scrolling; the window closing has no observable signal.
     await page.waitForTimeout(500);
     await page.getByTestId("stack-scroll").hover();
     await page.mouse.wheel(0, 6000);

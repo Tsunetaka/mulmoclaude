@@ -341,3 +341,105 @@ test.describe("Settings MCP tab — catalog config (Phase 2)", () => {
     await page.locator('[data-testid="settings-close-btn"]').click();
   });
 });
+
+test.describe("Google account tab", () => {
+  interface GoogleStatus {
+    linked: boolean;
+    pending: boolean;
+    clientSecret: "found" | "missing" | "ambiguous";
+    lastError: string | null;
+  }
+
+  async function mockGoogleStatus(page: Page, status: GoogleStatus): Promise<void> {
+    await page.route(
+      (url) => url.pathname === "/api/google/status",
+      (route) => route.fulfill({ json: status }),
+    );
+  }
+
+  async function openGoogleTab(page: Page): Promise<void> {
+    await page.goto("/chat");
+    await openSettingsModal(page);
+    await page.locator('[data-testid="settings-tab-google"]').click();
+  }
+
+  test("shows not-linked status and starts the authorize flow", async ({ page }) => {
+    await mockConfigApi(page);
+    await mockGoogleStatus(page, { linked: false, pending: false, clientSecret: "found", lastError: null });
+    let authorizeCalls = 0;
+    await page.route(
+      (url) => url.pathname === "/api/google/authorize",
+      (route) => {
+        authorizeCalls += 1;
+        return route.fulfill({ json: { authUrl: "https://accounts.google.com/o/oauth2/v2/auth?mock=1" } });
+      },
+    );
+
+    await openGoogleTab(page);
+    await expect(page.locator('[data-testid="settings-google-status"]')).toHaveText("Not linked");
+
+    // The consent URL must open in a new tab, never navigate the app.
+    await page.evaluate(() => {
+      window.open = () => null;
+    });
+    await page.locator('[data-testid="settings-google-connect-btn"]').click();
+    await expect.poll(() => authorizeCalls).toBe(1);
+  });
+
+  test("shows linked status with an unlink button", async ({ page }) => {
+    await mockConfigApi(page);
+    await mockGoogleStatus(page, { linked: true, pending: false, clientSecret: "found", lastError: null });
+
+    await openGoogleTab(page);
+    await expect(page.locator('[data-testid="settings-google-status"]')).toHaveText("Linked");
+    await expect(page.locator('[data-testid="settings-google-unlink-btn"]')).toBeVisible();
+    await expect(page.locator('[data-testid="settings-google-connect-btn"]')).not.toBeVisible();
+  });
+
+  // No client secret is the normal case: the broker supplies the OAuth client,
+  // so linking must stay one click away with nothing to warn about (#2131).
+  test("offers linking with no warning when the user has no client secret of their own", async ({ page }) => {
+    await mockConfigApi(page);
+    await mockGoogleStatus(page, { linked: false, pending: false, clientSecret: "missing", lastError: null });
+
+    await openGoogleTab(page);
+    await expect(page.locator('[data-testid="settings-google-secret-ambiguous"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="settings-google-connect-btn"]')).toBeEnabled();
+  });
+
+  test("guides the user to remove duplicates when multiple client secrets exist", async ({ page }) => {
+    await mockConfigApi(page);
+    await mockGoogleStatus(page, { linked: false, pending: false, clientSecret: "ambiguous", lastError: null });
+
+    await openGoogleTab(page);
+    await expect(page.locator('[data-testid="settings-google-secret-ambiguous"]')).toBeVisible();
+    await expect(page.locator('[data-testid="settings-google-connect-btn"]')).toBeDisabled();
+  });
+
+  // A user who abandoned the browser consent must be able to link again without
+  // waiting out the server-side timeout — the button stays clickable while
+  // pending, and the click restarts the flow (backend aborts the stale one).
+  test("keeps the connect button clickable while a link is pending so the user can retry", async ({ page }) => {
+    await mockConfigApi(page);
+    await mockGoogleStatus(page, { linked: false, pending: true, clientSecret: "found", lastError: null });
+    let authorizeCalls = 0;
+    await page.route(
+      (url) => url.pathname === "/api/google/authorize",
+      (route) => {
+        authorizeCalls += 1;
+        return route.fulfill({ json: { authUrl: "https://accounts.google.com/o/oauth2/v2/auth?mock=retry" } });
+      },
+    );
+
+    await openGoogleTab(page);
+    await expect(page.locator('[data-testid="settings-google-status"]')).toContainText("Waiting for the browser consent");
+    const connect = page.locator('[data-testid="settings-google-connect-btn"]');
+    await expect(connect).toBeEnabled();
+
+    await page.evaluate(() => {
+      window.open = () => null;
+    });
+    await connect.click();
+    await expect.poll(() => authorizeCalls).toBe(1);
+  });
+});

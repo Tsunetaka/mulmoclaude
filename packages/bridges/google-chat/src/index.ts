@@ -18,8 +18,9 @@
 import "dotenv/config";
 import crypto from "crypto";
 import express, { type Request, type Response } from "express";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { configureTrustProxy, createWebhookRateLimit } from "@mulmobridge/webhook-runtime";
 import { createBridgeClient } from "@mulmobridge/client";
+import { isRecord } from "@mulmoclaude/common";
 
 const TRANSPORT_ID = "google-chat";
 const PORT = Number(process.env.GOOGLE_CHAT_BRIDGE_PORT) || 3005;
@@ -37,10 +38,6 @@ mulmo.onPush((pushEvent) => {
   // available in synchronous webhook mode. Log for now.
   console.log(`[google-chat] push (not delivered): ${pushEvent.chatId} ${pushEvent.message}`);
 });
-
-function isObj(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 // ── JWT verification (Google Chat OIDC) ────────────────────────
 //
@@ -75,11 +72,11 @@ async function fetchJwks(): Promise<JwkKey[]> {
     if (!res.ok) {
       throw new Error(`JWKS fetch failed: ${res.status}`);
     }
-    const data: { keys?: unknown[] } = await res.json();
-    if (!Array.isArray(data.keys)) throw new Error("Invalid JWKS response");
+    const data: unknown = await res.json();
+    if (!isRecord(data) || !Array.isArray(data.keys)) throw new Error("Invalid JWKS response");
     cachedKeys = data.keys.filter(
       (keyCandidate): keyCandidate is JwkKey =>
-        isObj(keyCandidate) && typeof keyCandidate.kid === "string" && typeof keyCandidate.n === "string" && typeof keyCandidate.e === "string",
+        isRecord(keyCandidate) && typeof keyCandidate.kid === "string" && typeof keyCandidate.n === "string" && typeof keyCandidate.e === "string",
     );
     cacheExpiresAt = Date.now() + JWKS_CACHE_TTL_MS;
     return cachedKeys;
@@ -107,7 +104,7 @@ function parseJwtParts(token: string): JwtParts | null {
   try {
     const header: unknown = JSON.parse(base64UrlDecode(parts[0]).toString());
     const payload: unknown = JSON.parse(base64UrlDecode(parts[1]).toString());
-    if (!isObj(header) || !isObj(payload)) return null;
+    if (!isRecord(header) || !isRecord(payload)) return null;
     return {
       header,
       payload,
@@ -183,25 +180,7 @@ async function verifyGoogleChatToken(authHeader: string | undefined): Promise<bo
 
 const BODY_LIMIT = "1mb";
 
-// `express-rate-limit` is the well-tested per-IP throttle that
-// CodeQL's `js/missing-rate-limiting` rule recognises. Defaults
-// match the conservative 120 req/min/IP cap the bridge has shipped
-// since the original custom Map-based limiter was added — Google's
-// platform sends well under this rate during normal use, so the
-// cap exists to bound a flood / accidentally-stuck retry loop.
-const webhookRateLimit = rateLimit({
-  windowMs: 60_000,
-  limit: 120,
-  standardHeaders: "draft-7",
-  legacyHeaders: false,
-  // Explicit keyGenerator routed through `ipKeyGenerator(...)` so
-  // IPv6 clients get folded to their /56 subnet (a raw `req.ip` key
-  // would let IPv6 rotation within a prefix evade the per-client
-  // limit). `req.ip` itself is trust-proxy-aware via the
-  // `app.set("trust proxy", ...)` block elsewhere in this file.
-  // (Codex reviews iter-1 + iter-2 on #1326.)
-  keyGenerator: (req) => ipKeyGenerator(req.ip ?? "", 56),
-});
+const webhookRateLimit = createWebhookRateLimit();
 
 function redactId(resourceId: string): string {
   return resourceId.length > 6 ? `${resourceId.slice(0, 3)}***${resourceId.slice(-3)}` : "***";
@@ -209,33 +188,14 @@ function redactId(resourceId: string): string {
 
 const app = express();
 app.disable("x-powered-by");
-
-// Honour an explicit `trust proxy` setting so `req.ip` (the
-// rate-limit key below) reflects the real client IP rather than
-// the load balancer's. Default `false` for safety; operators
-// behind a known LB choose from:
-//   - hop count:  BRIDGE_TRUST_PROXY=1
-//   - boolean:    BRIDGE_TRUST_PROXY=true / false
-//   - preset:     BRIDGE_TRUST_PROXY=loopback
-//   - CIDR list:  BRIDGE_TRUST_PROXY=10.0.0.0/8,192.168.0.0/16
-// Without this every webhook looks like it comes from one IP and
-// the limiter degrades into a global throttle. The boolean branch
-// is required because Express does NOT auto-convert string
-// "true"/"false" — without this, `BRIDGE_TRUST_PROXY=true` is read
-// as a (never-matching) CIDR rule (Codex reviews on #1326).
-const trustProxyEnv = process.env.BRIDGE_TRUST_PROXY;
-if (trustProxyEnv) {
-  const lower = trustProxyEnv.toLowerCase();
-  const numeric = Number(trustProxyEnv);
-  const value: boolean | number | string =
-    lower === "true" ? true : lower === "false" ? false : Number.isInteger(numeric) && numeric >= 0 ? numeric : trustProxyEnv;
-  app.set("trust proxy", value);
-}
-
+configureTrustProxy(app);
+// express.json (not the shared createWebhookApp's text parser): Google
+// Chat's request is a signed JWT in the Authorization header, verified
+// separately, so the JSON body is parsed directly.
 app.use(express.json({ limit: BODY_LIMIT }));
 
 function extractEventType(body: unknown): string {
-  if (!isObj(body) || typeof body.type !== "string") return "";
+  if (!isRecord(body) || typeof body.type !== "string") return "";
   return body.type;
 }
 
@@ -246,14 +206,14 @@ interface ParsedMessage {
 }
 
 function extractMessage(body: unknown): ParsedMessage | null {
-  if (!isObj(body)) return null;
+  if (!isRecord(body)) return null;
   const msg = body.message;
-  if (!isObj(msg)) return null;
+  if (!isRecord(msg)) return null;
   if (typeof msg.text !== "string") return null;
   const { space } = msg;
-  if (!isObj(space) || typeof space.name !== "string") return null;
+  if (!isRecord(space) || typeof space.name !== "string") return null;
   const { sender } = msg;
-  const senderName = isObj(sender) && typeof sender.displayName === "string" ? sender.displayName : "unknown";
+  const senderName = isRecord(sender) && typeof sender.displayName === "string" ? sender.displayName : "unknown";
   return { spaceName: space.name, senderName, text: msg.text };
 }
 

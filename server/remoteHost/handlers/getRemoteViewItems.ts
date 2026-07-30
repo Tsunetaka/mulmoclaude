@@ -1,5 +1,5 @@
 // getRemoteViewItems command handler (remote-host phase 5 —
-// plans/feat-remote-view-images.md).
+// plans/done/feat-remote-view-images.md).
 //
 // One page of a mobile view's records, view-aware so the host can inline the
 // view's declared `imageFields` as `data:` URL thumbnails (a phone can't reach
@@ -10,7 +10,7 @@
 //
 // Factory (createGetRemoteViewItems) keeps the mapping unit-testable with the
 // engine stubbed; the default export wires the real functions.
-import { clampLimit, clampOffset, normalizeFields } from "@mulmoclaude/core/remote-view";
+import { clampLimit, clampOffset, normalizeFields, readIdParam } from "@mulmoclaude/core/remote-view";
 import { loadCollection } from "../../workspace/collections/index.js";
 import { remoteViewItems, remoteViewItemsFailureMessage } from "../../workspace/collections/remoteView.js";
 import type { CommandHandler, JsonObject } from "../commandChannel.js";
@@ -23,15 +23,17 @@ export interface GetRemoteViewItemsDeps {
 export const createGetRemoteViewItems =
   (deps: GetRemoteViewItemsDeps): CommandHandler =>
   async (params: JsonObject) => {
-    const slug = String(params.slug ?? "");
-    const viewId = String(params.viewId ?? "");
+    const slug = readIdParam(params.slug);
+    const viewId = readIdParam(params.viewId);
     const request = { offset: clampOffset(params.offset), limit: clampLimit(params.limit), fields: normalizeFields(params.fields) };
     const collection = await deps.loadCollection(slug);
     if (!collection) throw new Error(`collection '${slug}' not found`);
     const result = await deps.remoteViewItems(collection, viewId, request);
     if (result.kind !== "ok") throw new Error(remoteViewItemsFailureMessage(result, slug));
-    // Plain JSON, but the interface lacks an index signature — cast like the
-    // phase-2/3 handlers.
+    // Not `toJsonObject`: `RemoteViewPage.items` is `RemoteViewItem[]`, whose
+    // values are `unknown`, so the payload cannot be PROVEN JSON — same
+    // irreducible gap as `pageResult` in collectionPage.ts, and for the same
+    // reason (record values are JSON by loader invariant, not by type).
     return { page: result.page, inlined: result.inlined, omitted: result.omitted } as unknown as JsonObject;
   };
 

@@ -63,8 +63,6 @@ const wikiPlugin: PluginEntry = {
   previewComponent: wrapWithScope("wiki", Preview),
 };
 
-export default wikiPlugin;
-
 export const REGISTRATION: PluginRegistration = {
   toolName: TOOL_NAME,
   entry: wikiPlugin,

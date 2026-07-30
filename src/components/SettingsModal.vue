@@ -164,6 +164,8 @@
 
             <SettingsPhotosTab v-else-if="activeTab === 'photos'" :reload-token="photosReloadToken" />
 
+            <SettingsGoogleTab v-else-if="activeTab === 'google'" :reload-token="googleReloadToken" />
+
             <SettingsModelTab v-else-if="activeTab === 'model'" :reload-token="modelReloadToken" @saved="emit('saved')" />
 
             <SettingsVoiceTab v-else-if="activeTab === 'voice'" :reload-token="voiceReloadToken" />
@@ -173,6 +175,11 @@
             <SettingsJournalTab v-else-if="activeTab === 'journal'" :reload-token="journalReloadToken" @saved="emit('saved')" />
 
             <SettingsNotificationsTab v-else-if="activeTab === 'notifications'" :reload-token="notificationsReloadToken" @saved="emit('saved')" />
+            <!-- Its own `v-if`, not part of the chain above: the chain is
+                 long and every entry added to it has to stay adjacent to
+                 survive the compiler. This tab is mutually exclusive with
+                 the rest by construction, so it does not need to be in it. -->
+            <SettingsQuitTab v-if="activeTab === 'quit'" @stopped="emit('stopped')" />
           </template>
         </div>
       </div>
@@ -201,11 +208,13 @@ import SettingsWorkspaceDirsTab from "./SettingsWorkspaceDirsTab.vue";
 import SettingsReferenceDirsTab from "./SettingsReferenceDirsTab.vue";
 import SettingsMapTab from "./SettingsMapTab.vue";
 import SettingsPhotosTab from "./SettingsPhotosTab.vue";
+import SettingsGoogleTab from "./SettingsGoogleTab.vue";
 import SettingsModelTab from "./SettingsModelTab.vue";
 import SettingsVoiceTab from "./SettingsVoiceTab.vue";
 import SettingsChatIndexTab from "./SettingsChatIndexTab.vue";
 import SettingsJournalTab from "./SettingsJournalTab.vue";
 import SettingsNotificationsTab from "./SettingsNotificationsTab.vue";
+import SettingsQuitTab from "./SettingsQuitTab.vue";
 import SkillsView from "../plugins/manageSkills/View.vue";
 import RolesView from "./RolesView.vue";
 import PluginScopedRoot from "./PluginScopedRoot.vue";
@@ -246,6 +255,7 @@ const emit = defineEmits<{
   "update:open": [value: boolean];
   saved: [];
   "ask-gemini": [];
+  stopped: [];
 }>();
 
 // Typed ref to the SettingsMcpTab. Needed so close() can check
@@ -255,7 +265,22 @@ const emit = defineEmits<{
 const mcpTabRef = ref<{ flushDraft: () => boolean; hasPendingDraft: () => boolean } | null>(null);
 
 type TabId =
-  "gemini" | "tools" | "mcp" | "dirs" | "refs" | "map" | "photos" | "model" | "voice" | "chatIndex" | "journal" | "notifications" | "skills" | "roles";
+  | "gemini"
+  | "tools"
+  | "mcp"
+  | "dirs"
+  | "refs"
+  | "map"
+  | "photos"
+  | "google"
+  | "model"
+  | "voice"
+  | "chatIndex"
+  | "journal"
+  | "notifications"
+  | "skills"
+  | "roles"
+  | "quit";
 
 const activeTab = ref<TabId>("tools");
 
@@ -275,10 +300,13 @@ const GROUPS: readonly { key: string; items: readonly TabId[] }[] = [
   { key: "servers", items: ["mcp"] },
   { key: "workspace", items: ["dirs", "refs"] },
   { key: "notifications", items: ["notifications"] },
-  { key: "plugins", items: ["map", "photos"] },
+  { key: "plugins", items: ["map", "photos", "google"] },
   // Management surfaces relocated from the top-bar launcher (#skills /
   // #roles). Both are static configuration, not dynamic workspace data.
   { key: "management", items: ["skills", "roles"] },
+  // Last on purpose: stopping the server is a deliberate act, not
+  // something to sit a mis-click away from the controls above (#2616).
+  { key: "server", items: ["quit"] },
 ];
 
 const visibleGroups = computed(() =>
@@ -303,6 +331,7 @@ function onMapSaved(): void {
 // the Photos tab refetches the autoCapture flag (could have been
 // hand-edited in settings.json since the last visit).
 const photosReloadToken = ref(0);
+const googleReloadToken = ref(0);
 const modelReloadToken = ref(0);
 const voiceReloadToken = ref(0);
 const chatIndexReloadToken = ref(0);
@@ -513,6 +542,7 @@ watch(
       loadConnectors();
       mapReloadToken.value += 1;
       photosReloadToken.value += 1;
+      googleReloadToken.value += 1;
       modelReloadToken.value += 1;
       voiceReloadToken.value += 1;
       chatIndexReloadToken.value += 1;

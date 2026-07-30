@@ -1,4 +1,4 @@
-// The remote custom-view contract (phase 3 — plans/feat-remote-custom-view.md).
+// The remote custom-view contract (phase 3 — plans/done/feat-remote-custom-view.md).
 //
 // Browser-safe single source of truth shared by the host server (which wraps
 // the view HTML into a sandboxed srcdoc), the desktop phone-frame preview, and
@@ -7,6 +7,20 @@
 // desktop custom view (token + fetch to the view-data route) — its records
 // arrive over an async postMessage bridge owned by the parent page, and its
 // CSP locks `connect-src` to 'none' entirely.
+//
+// BACKWARD COMPATIBILITY — this bridge is a frozen public contract. Remote
+// views are LLM-authored HTML files persisted in users' workspaces
+// (`data/skills/*/views/*.html`), written against
+// `packages/core/assets/helps/custom-view-remote.md`; they cannot be
+// migrated centrally and must keep working across host upgrades and any
+// storage-virtualization work underneath. Evolve only by backward-compatible
+// supersets, the way protocol v2 added the mutate pair: bump
+// `REMOTE_VIEW_PROTOCOL`, add new message types / optional fields — never
+// repurpose an existing message type, change the `getItems` page shape
+// (`{ items, total, offset, limit }`), or tighten limits a shipped view may
+// already rely on.
+
+import { projectRecordFields } from "../collection/core/project";
 
 /** Bump when the bootstrap/message contract changes shape; the bootstrap
  *  exposes it as `__MC_VIEW.protocol` so a parent can refuse a stale view.
@@ -40,7 +54,7 @@ export const MAX_PAGE_LIMIT = 200;
  *  command document (1 MiB total), so leave envelope headroom. */
 export const REMOTE_VIEW_MAX_BYTES = 900_000;
 
-/** Hard cap on ONE `getItems` page (phase 5 — plans/feat-remote-view-images.md).
+/** Hard cap on ONE `getItems` page (phase 5 — plans/done/feat-remote-view-images.md).
  *  Same 1 MiB command-document envelope as the srcdoc: when a view inlines image
  *  fields as `data:` URLs, the host stops inlining once the serialized page would
  *  exceed this, leaving the remaining image fields as their original path (which
@@ -78,6 +92,14 @@ const toInt = (value: unknown): number | null => {
 
 /** Coerce a channel/postMessage offset (arrives as untyped JSON) to a non-negative int. */
 export const clampOffset = (value: unknown): number => Math.max(0, toInt(value) ?? 0);
+
+/** Read a channel/postMessage identifier (a slug, a view id) as a string.
+ *  Params arrive as untyped JSON, so a caller can send anything; `String(...)`
+ *  turned an object into the literal "[object Object]", which then travelled on
+ *  as if the caller had asked for a collection by that name — surfacing as
+ *  `collection '[object Object]' not found` rather than a bad-request. A value
+ *  with no string form is simply absent. */
+export const readIdParam = (value: unknown): string => (typeof value === "string" ? value : "");
 
 /** Coerce a channel/postMessage limit to [1, MAX_PAGE_LIMIT] (default 50). */
 export const clampLimit = (value: unknown): number => {
@@ -128,11 +150,12 @@ export interface RemoteViewPageRequest {
 /** Keep only `fields` (+ always the primary key) on each record. Parents apply
  *  this uniformly — the desktop preview via `pageFromItems`, the phone parent
  *  over the page it fetched through the channel — so a view sees the same
- *  projection everywhere. No-op without `fields`. */
+ *  projection everywhere. No-op without `fields`; an EMPTY `fields` array is
+ *  also a no-op here (frozen bridge behavior — the shared helper would
+ *  project down to the primary key alone). */
 export function projectItems(items: RemoteViewItem[], fields: string[] | undefined, primaryKey: string): RemoteViewItem[] {
   if (!fields || fields.length === 0) return items;
-  const keep = new Set([primaryKey, ...fields]);
-  return items.map((item) => Object.fromEntries(Object.entries(item).filter(([key]) => keep.has(key))));
+  return projectRecordFields(items, fields, primaryKey);
 }
 
 /** Answer a page request from an already-loaded record array (the desktop

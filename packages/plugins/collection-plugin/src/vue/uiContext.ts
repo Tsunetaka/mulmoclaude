@@ -10,11 +10,16 @@
 import type { Component } from "vue";
 import type { TranslateTransport } from "@mulmoclaude/core/translation/client";
 import type { RemoteViewMutateRequest, RemoteViewPage, RemoteViewPageRequest } from "@mulmoclaude/core/remote-view";
+// Registry Discover-catalog contract — single-sourced in core (browser-safe
+// subpath) so a server-side shape change is a compile error here, not silent
+// drift (#2407). Re-exported below for this plugin's own consumers.
+import type { RegistryEntry, RegistrySummary, RegistryListResponse, RegistryImportResponse } from "@mulmoclaude/core/collection/registry";
 import type {
   CollectionDetailResponse,
   ItemMutationResponse,
   CollectionNotifySeverity,
   CollectionsListResponse,
+  CollectionOntologyResponse,
   FeedsListResponse,
   CollectionShortcutInfo,
   CollectionItem,
@@ -36,11 +41,16 @@ export type CollectionMutationResult = { ok: true } | { ok: false; error: string
  *  generic failure. */
 export type CollectionApiResult<T> = { ok: true; data: T } | { ok: false; error: string; status: number };
 
-/** A collection / item action's result — a seed prompt + role for a new chat. */
-export interface CollectionActionResult {
-  prompt: string;
-  role: string;
-}
+/** A collection / item action's result, one variant per action kind:
+ *  `kind: "chat"` returns the seed prompt + role for the client to start
+ *  a new chat; `kind: "agent"` returns `dispatched: true` (the server
+ *  launched the hidden worker itself — the client just shows the running
+ *  state); `kind: "mutate"` returns `written: true` + the written record
+ *  so the client can update the open panel in place. */
+export type CollectionActionResult =
+  | { prompt: string; role: string; dispatched?: undefined; written?: undefined }
+  | { dispatched: true; prompt?: undefined; role?: undefined; written?: undefined }
+  | { written: true; itemId: string; item: CollectionItem; prompt?: undefined; role?: undefined; dispatched?: undefined };
 
 /** A collection refresh's result — counts + per-source errors. `dispatched` is
  *  true for agent ingest (a worker was launched; records update async).
@@ -50,8 +60,25 @@ export interface CollectionRefreshResult {
   refreshed: boolean;
   written: number;
   errors: string[];
+  /** Records a `googleCalendar` sync deleted (the event was cancelled in
+   *  Google). Absent for a feed refresh, which never removes records. */
+  removed?: number;
   dispatched?: boolean;
   chatId?: string;
+}
+
+/** A Collection → Google Calendar push (#2598). `conflicts` and `localDeletes`
+ *  are reported, never acted on: a both-sides edit would destroy one version,
+ *  and a Google delete removes the event for every attendee. */
+export interface CollectionPushResult {
+  pushed: boolean;
+  created: number;
+  updated: number;
+  conflicts: number;
+  localDeletes: number;
+  /** Records that could not be pushed as they stand, each with its reason. */
+  skipped: string[];
+  errors: string[];
 }
 
 /** Scoped capability token for a sandboxed custom view (mirrors the host's mint
@@ -102,7 +129,7 @@ export interface CollectionRemoteViewResult {
  *  the merged record for an update, the removed id for a delete. Mirrors the
  *  command channel's `mutateRemoteViewItem` result so the phone-frame preview
  *  and the phone client see the identical shape
- *  (plans/feat-remote-writable-view.md). */
+ *  (plans/done/feat-remote-writable-view.md). */
 export type CollectionRemoteViewMutateResult = { op: "update"; item: CollectionItem } | { op: "delete"; id: string };
 
 /** Server response for `fetchRemoteViewItems` — one page of a mobile view's
@@ -110,7 +137,7 @@ export type CollectionRemoteViewMutateResult = { op: "update"; item: CollectionI
  *  thumbnails host-side. `inlined` / `omitted` count how many images fit the
  *  per-page byte budget (surfaced while the user iterates on the view).
  *  Mirrors the command channel's `getRemoteViewItems` result so preview ===
- *  phone (plans/feat-remote-view-images.md). */
+ *  phone (plans/done/feat-remote-view-images.md). */
 export interface CollectionRemoteViewItemsResult {
   page: RemoteViewPage;
   inlined: number;
@@ -136,60 +163,10 @@ export interface CollectionConfirmOptions {
   variant?: "primary" | "success" | "danger";
 }
 
-/** One collection in a curated registry's published index (the host fetches
- *  each registry's index.json and proxies them all to the Discover tab). */
-export interface RegistryEntry {
-  id: string;
-  author: string;
-  slug: string;
-  title: string;
-  icon: string;
-  description: string;
-  version: string;
-  tags: string[];
-  license: string;
-  fieldCount: number;
-  views: string[];
-  hasSeed: boolean;
-  seedCount: number;
-  screenshot?: string;
-  path: string;
-  contentSha: string;
-  /** Label of the source registry — `"official"` for the canonical
-   *  receptron/mulmoclaude-collections, otherwise the `name` of an entry in
-   *  the user's `config/collections-registries.json`. The Discover card shows
-   *  this as a small badge so users can tell apart same-title collections from
-   *  different sources. */
-  registryName: string;
-}
-
-/** Per-registry summary in the merged Discover response. */
-export interface RegistrySummary {
-  name: string;
-  /** `ok` = fresh, `stale` = served from cache because the upstream failed,
-   *  `failed` = no cache to fall back to (the entries contribution is 0). */
-  status: "ok" | "stale" | "failed";
-  generatedAt: string | null;
-  error: string | null;
-  entryCount: number;
-}
-
-/** `GET …collectionsRegistry.list` — the Discover catalog merged across every
- *  configured registry. */
-export interface RegistryListResponse {
-  registries: RegistrySummary[];
-  /** Convenience flag: true iff any single registry's contribution was stale. */
-  stale: boolean;
-  collections: RegistryEntry[];
-}
-
-/** `POST …collectionsRegistry.import` — install result. */
-export interface RegistryImportResponse {
-  localSlug: string;
-  updated: boolean;
-  seedWritten: number;
-  seedSkipped: boolean;
-}
+// The Discover-catalog registry contract (entry / summary / list / import
+// response) is owned by `@mulmoclaude/core/collection/registry` and re-exported
+// here so this plugin's consumers keep importing it from one place.
+export type { RegistryEntry, RegistrySummary, RegistryListResponse, RegistryImportResponse };
 
 export interface CollectionUi {
   /** Fetch a collection's detail (schema + records) by slug — backs both the
@@ -262,12 +239,17 @@ export interface CollectionUi {
   deleteCollection: (slug: string) => Promise<CollectionMutationResult>;
   /** Delete a feed via the project-scope feed-delete route (`…feeds.detail`). */
   deleteFeed: (slug: string) => Promise<CollectionMutationResult>;
-  /** Run a per-record action (`apiPost` over `…collections.itemAction`). */
-  runItemAction: (slug: string, itemId: string, actionId: string) => Promise<CollectionApiResult<CollectionActionResult>>;
+  /** Run a per-record action (`apiPost` over `…collections.itemAction`).
+   *  `params` carries a mutate action's mini-form values (omitted for the
+   *  other kinds / param-less mutations). */
+  runItemAction: (slug: string, itemId: string, actionId: string, params?: Record<string, unknown>) => Promise<CollectionApiResult<CollectionActionResult>>;
   /** Run a collection-level action (`apiPost` over `…collections.collectionAction`). */
   runCollectionAction: (slug: string, actionId: string) => Promise<CollectionApiResult<CollectionActionResult>>;
   /** Refresh a feed-backed collection (`apiPost` over `…collections.refresh`). */
   refreshCollection: (slug: string) => Promise<CollectionApiResult<CollectionRefreshResult>>;
+  /** Push local records to the declared Google calendar
+   *  (`apiPost` over `…collections.calendarPush`). */
+  pushCalendarCollection: (slug: string) => Promise<CollectionApiResult<CollectionPushResult>>;
 
   // ── routing (host: the vue-router instance) ──
   /** Current route's `:slug` param (standalone page), or undefined. */
@@ -302,6 +284,11 @@ export interface CollectionUi {
   listCollections: () => Promise<CollectionApiResult<CollectionsListResponse>>;
   /** List feed-backed collections (`apiGet` over `…feeds.list`). */
   listFeeds: () => Promise<CollectionApiResult<FeedsListResponse>>;
+  /** Fetch the raw workspace-ontology entries for the Map tab (`apiGet` over
+   *  `…collections.ontology`); the tab builds the graph client-side via the
+   *  shared `buildOntologyGraph`. Optional: a host without the route omits it
+   *  and the Map tab is hidden (purely additive, like `subscribeChanges`). */
+  fetchOntology?: () => Promise<CollectionApiResult<CollectionOntologyResponse>>;
   /** List the curated registry's collections for the Discover tab (`apiGet` over
    *  `…collectionsRegistry.list`). */
   listRegistry: () => Promise<CollectionApiResult<RegistryListResponse>>;

@@ -29,6 +29,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { SimplePool, finalizeEvent, getPublicKey, nip04, nip19, type Event } from "nostr-tools";
 import { createBridgeClient, chunkText } from "@mulmobridge/client";
+import { parseCsvSet, parseCsvList } from "@mulmoclaude/common";
 
 const TRANSPORT_ID = "nostr";
 const MAX_DM_LEN = 50_000;
@@ -55,20 +56,12 @@ if (!rawKey || !relayCsv) {
   process.exit(1);
 }
 
-const relays = relayCsv
-  .split(",")
-  .map((url) => url.trim())
-  .filter(Boolean);
+const relays = parseCsvList(relayCsv);
 
 const privateKeyBytes = decodeKey(rawKey);
 const publicKey = getPublicKey(privateKeyBytes);
 
-const allowedPubkeys = new Set(
-  (process.env.NOSTR_ALLOWED_PUBKEYS ?? "")
-    .split(",")
-    .map((key) => key.trim().toLowerCase())
-    .filter(Boolean),
-);
+const allowedPubkeys = parseCsvSet(process.env.NOSTR_ALLOWED_PUBKEYS, { lowercase: true });
 const allowAll = allowedPubkeys.size === 0;
 
 const mulmo = createBridgeClient({ transportId: TRANSPORT_ID });
@@ -107,7 +100,7 @@ async function sendDm(recipientPubkey: string, text: string): Promise<void> {
   const chunks = chunkText(text, MAX_DM_LEN);
   for (const chunk of chunks) {
     try {
-      const ciphertext = await nip04.encrypt(privateKeyBytes, recipientPubkey, chunk);
+      const ciphertext = nip04.encrypt(privateKeyBytes, recipientPubkey, chunk);
       const signed = finalizeEvent(
         {
           kind: KIND_ENCRYPTED_DM,
@@ -163,7 +156,7 @@ async function handleEvent(evt: Event): Promise<void> {
 
   let plaintext: string;
   try {
-    plaintext = await nip04.decrypt(privateKeyBytes, evt.pubkey, evt.content);
+    plaintext = nip04.decrypt(privateKeyBytes, evt.pubkey, evt.content);
   } catch (err) {
     console.warn(`[nostr] decrypt failed from=${senderPubkey.slice(0, 12)}…: ${err}`);
     return;

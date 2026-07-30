@@ -2,41 +2,49 @@
 // `DynamicIconSource.where` / `DynamicIconRule.where` in `./schema`).
 // An AND of typed conditions — richer than the single-field `CollectionWhen`
 // used elsewhere (fields/actions via `./actionVisible`), which stays as-is
-// for its existing callers. No fs, no host state.
+// for its existing callers. No fs, no host state. The condition SHAPES are
+// derived from the zod source of truth in `./schemaZ` (type-only imports —
+// this evaluator stays zod-free at runtime).
 
-/** Comparison operators one `WhereCond` may apply to `record[field]`. */
-export type WhereOp = "eq" | "ne" | "in" | "gt" | "gte" | "lt" | "lte" | "contains";
+import type { z } from "zod";
+import type { ValueRefZ, WhereCondZ, WhereZ } from "./schemaZ";
 
 /** Reads the comparison value from a field instead of a schema literal:
  *  - `record` set → another record: `recordsById[record][field]` (e.g. a
  *    `_config` singleton's `defaultCity`, following a per-user setting);
  *  - `record` omitted → the SAME record being matched (field-to-field, e.g.
  *    `spent > budget`). */
-export interface ValueRef {
-  record?: string;
-  field: string;
-}
+export type ValueRef = z.infer<typeof ValueRefZ>;
 
 /** One typed condition: `record[field] <op> value`. The comparison value is
  *  either a literal `value` (a plain string for every op except `in`, which
  *  takes the allowed set) or a `valueFrom` reference resolved against the
  *  `recordsById` map passed to `matchesWhere`. Exactly one of the two is
- *  expected — enforced by zod at the schema boundary (`server/discovery.ts`),
- *  not here. */
-export interface WhereCond {
-  field: string;
-  op: WhereOp;
-  value?: string | string[];
-  valueFrom?: ValueRef;
-}
+ *  expected — enforced by zod at the schema boundary (`./schemaZ`), not
+ *  here. */
+export type WhereCond = z.infer<typeof WhereCondZ>;
+
+/** Comparison operators one `WhereCond` may apply to `record[field]`. */
+export type WhereOp = WhereCond["op"];
 
 /** A `where` clause is the AND of its conditions — every one must match. */
-export type Where = WhereCond[];
+export type Where = z.infer<typeof WhereZ>;
 
 /** True when `record[field]` is absent (`undefined`/`null`) — the only case
  *  where `ne` and every other op disagree on the result. */
 function isMissing(raw: unknown): boolean {
   return raw === undefined || raw === null;
+}
+
+/** Own-property read for a user/LLM-controlled key (`cond.field`,
+ *  `valueFrom.record`, `valueFrom.field`). A bare `obj[key]` reaches inherited
+ *  Object.prototype members, so `field: "toString"` would read a function
+ *  instead of an absent value (spurious match), and `record: "constructor"`
+ *  would read the `Object` function whose `.name`/`.length` are plausible
+ *  bogus comparands — breaking the "unresolved ⇒ never matches" contract
+ *  (#2323). A prototype key resolves to `undefined` (absent). */
+function ownProp<T>(obj: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(obj, key) ? obj[key] : undefined;
 }
 
 /** The effective comparison value for `cond`: its literal `value`, or — for
@@ -47,8 +55,8 @@ function isMissing(raw: unknown): boolean {
 function resolveValue(cond: WhereCond, record: Record<string, unknown>, recordsById: Record<string, Record<string, unknown>>): string | string[] | undefined {
   if (!cond.valueFrom) return cond.value;
   const { record: refRecord, field } = cond.valueFrom;
-  const target = refRecord === undefined ? record : recordsById[refRecord];
-  const raw = target?.[field];
+  const target = refRecord === undefined ? record : ownProp(recordsById, refRecord);
+  const raw = target === undefined ? undefined : ownProp(target, field);
   return isMissing(raw) ? undefined : String(raw);
 }
 
@@ -109,7 +117,7 @@ function matchesPresent(operator: WhereOp, raw: string, value: string | string[]
  *    target record/field doesn't exist) → false for EVERY op, including
  *    `ne` — a broken reference must never spuriously match. */
 function matchesCond(cond: WhereCond, record: Record<string, unknown>, recordsById: Record<string, Record<string, unknown>>): boolean {
-  const raw = record[cond.field];
+  const raw = ownProp(record, cond.field);
   if (isMissing(raw)) return cond.op === "ne";
   const value = resolveValue(cond, record, recordsById);
   if (value === undefined) return false;

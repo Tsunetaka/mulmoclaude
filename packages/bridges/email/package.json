@@ -1,6 +1,6 @@
 {
   "name": "@mulmobridge/email",
-  "version": "0.1.1",
+  "version": "1.0.1",
   "description": "Email bridge for MulmoBridge — checks an IMAP mailbox and replies via SMTP",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,22 +16,43 @@
     "build": "tsc",
     "prepack": "yarn build",
     "typecheck": "tsc --noEmit",
-    "test": "echo no tests yet"
+    "test": "echo no tests yet",
+    "lint": "eslint src"
   },
   "license": "MIT",
   "author": "Receptron Team",
   "dependencies": {
-    "@mulmobridge/client": "^0.1.4",
-    "@mulmobridge/protocol": "^0.1.4",
+    "@mulmobridge/client": "^1.0.1",
+    "@mulmobridge/protocol": "^1.0.1",
+    "@mulmoclaude/common": "^1.1.1",
     "dotenv": "^17.0.0",
-    "imapflow": "^1.4.7",
+    "imapflow": "^1.6.4",
     "mailparser": "^3.9.14",
     "nodemailer": "^9.0.3"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.5",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "@types/nodemailer": "^8",
     "typescript": "^6.0.3"
+  },
+  "homepage": "https://github.com/receptron/mulmoclaude/tree/main/packages/bridges/email#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/receptron/mulmoclaude.git",
+    "directory": "packages/bridges/email"
+  },
+  "keywords": [
+    "email",
+    "imap",
+    "smtp",
+    "mulmobridge",
+    "chatbot",
+    "bridge",
+    "ai-agent",
+    "mulmoclaude"
+  ],
+  "bugs": {
+    "url": "https://github.com/receptron/mulmoclaude/issues"
   }
 }

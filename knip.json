@@ -1,0 +1,36 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "server/index.ts",
+    "server/services/google/authCli.ts",
+    "src/main.ts",
+    "src/plugins/index.ts",
+    "src/plugins/metas.ts",
+    "src/plugins/server.ts",
+    "src/plugins/_generated/*.ts",
+    "scripts/**/*.{mjs,ts}",
+    "batch/**/*.ts",
+    "test/**/*.ts",
+    "e2e/**/*.ts",
+    "e2e-live/**/*.ts"
+  ],
+  "project": ["server/**/*.ts", "src/**/*.{ts,vue}"],
+  "ignore": ["**/dist/**", "**/*.d.ts", "src/plugins/_generated/**", "**/logs/**"],
+  "ignoreDependencies": [".*"],
+  "ignoreExportsUsedInFile": true,
+  "includeEntryExports": false,
+  "rules": {
+    "files": "off",
+    "dependencies": "off",
+    "devDependencies": "off",
+    "unlisted": "off",
+    "unresolved": "off",
+    "binaries": "off",
+    "exports": "warn",
+    "types": "warn",
+    "nsExports": "off",
+    "nsTypes": "off",
+    "enumMembers": "off",
+    "duplicates": "off"
+  }
+}

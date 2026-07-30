@@ -86,6 +86,7 @@ const HOST_TOOL_NAMES = {
   manageDebug: "manageDebug",
   edgar: "edgar",
   manageEmail: "manageEmail",
+  google: "google",
 } as const;
 
 // Plugin-owned tool names auto-merged from each plugin's META.

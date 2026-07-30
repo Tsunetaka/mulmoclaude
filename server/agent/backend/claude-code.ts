@@ -11,7 +11,8 @@
 
 import { spawn, type ChildProcessByStdio } from "child_process";
 import type { Readable, Writable } from "stream";
-import { buildCliArgs, buildDockerSpawnArgs, buildUserMessageLine, type CliArgsParams } from "../config.js";
+import { buildCliArgs, buildDockerSpawnArgs, buildUserMessageLine, resolveSystemPromptPaths, type CliArgsParams } from "../config.js";
+import { writeFileAtomic } from "../../utils/files/atomic.js";
 import { resolveSandboxAuth } from "../sandboxMounts.js";
 import { getCachedReferenceDirs, referenceDirMountArgs } from "../../workspace/reference-dirs.js";
 import { createStreamParser, type AgentEvent, type RawStreamEvent } from "../stream.js";
@@ -127,6 +128,25 @@ export function brokerNotReadyErrorEvent(stderrOutput: string): { type: typeof E
   return isMcpBrokerNotReadyError(stderrOutput) ? { type: EVENT_TYPES.error, message: stderrOutput } : null;
 }
 
+// Not every claude CLI stderr line is an error. The sandbox workspace-trust
+// notice (#2055) is the common benign case: the container's workspace path
+// (`/home/node/mulmoclaude`) isn't among the host `~/.claude.json`'s trusted
+// projects, so claude ignores the workspace `permissions.allow` entries. That's
+// harmless here — tool permissions come from `--allowedTools` + the mulmoclaude
+// MCP permission handler, not the workspace `.claude/settings.json` — but
+// logging it at ERROR on every spawn made it look like a failure and buried
+// real errors. Recognise it so the stderr router can log it at debug instead.
+export function isBenignClaudeStderr(line: string): boolean {
+  return line.includes("has not been trusted");
+}
+
+// Route a claude CLI stderr line to the right log level: benign notices at
+// debug, genuine errors at error (so they stop burying each other).
+function logAgentStderr(line: string): void {
+  if (isBenignClaudeStderr(line)) log.debug("agent-stderr", line);
+  else log.error("agent-stderr", line);
+}
+
 async function* readAgentEvents(proc: ClaudeProc, abortSignal?: AbortSignal): AsyncGenerator<AgentEvent> {
   let stderrOutput = "";
   let stderrBuffer = "";
@@ -137,7 +157,7 @@ async function* readAgentEvents(proc: ClaudeProc, abortSignal?: AbortSignal): As
     const lines = stderrBuffer.split("\n");
     stderrBuffer = lines.pop() ?? "";
     for (const line of lines) {
-      if (line.trim()) log.error("agent-stderr", line);
+      if (line.trim()) logAgentStderr(line);
     }
   });
 
@@ -182,7 +202,7 @@ async function* readAgentEvents(proc: ClaudeProc, abortSignal?: AbortSignal): As
 
   const { code: exitCode, signal } = await closed;
 
-  if (stderrBuffer.trim()) log.error("agent-stderr", stderrBuffer);
+  if (stderrBuffer.trim()) logAgentStderr(stderrBuffer);
   log.info("agent", "claude exited", { exitCode, signal });
   mcpTracker.logIfSuspicious();
 
@@ -190,11 +210,13 @@ async function* readAgentEvents(proc: ClaudeProc, abortSignal?: AbortSignal): As
   if (errorEvent) yield errorEvent;
 }
 
-// The one non-pass-through mapping is `sessionToken` -> `claudeSessionId`
-// (the CLI's `--resume` id); the rest forward verbatim.
-export function cliArgsForInput(input: AgentInput): CliArgsParams {
+// The non-pass-through mappings are `sessionToken` -> `claudeSessionId`
+// (the CLI's `--resume` id) and the system prompt, which travels as a
+// file path (`systemPromptPath`) rather than inline text — see the
+// CliArgsParams field comment for the Windows ENAMETOOLONG rationale.
+export function cliArgsForInput(input: AgentInput, systemPromptPath: string): CliArgsParams {
   return {
-    systemPrompt: input.systemPrompt,
+    systemPromptPath,
     activePlugins: input.activePlugins,
     claudeSessionId: input.sessionToken,
     mcpConfigPath: input.mcpConfigPath,
@@ -203,8 +225,26 @@ export function cliArgsForInput(input: AgentInput): CliArgsParams {
   };
 }
 
+// Write the per-session system-prompt file the CLI reads via
+// `--system-prompt-file`, returning the path to put on the command line
+// (container path under Docker). Atomic so a concurrent spawn on the
+// same session never reads a half-written prompt; one file per session,
+// overwritten each turn (mirroring the MCP config lifecycle). Mode 0600
+// because the prompt carries the role / memory / plugin instructions —
+// no reason for it to be world-readable in the OS tmpdir or workspace.
+export async function writeSystemPromptFile(input: AgentInput): Promise<string> {
+  const paths = resolveSystemPromptPaths({
+    workspacePath: input.workspacePath,
+    sessionId: input.sessionId,
+    useDocker: input.useDocker,
+  });
+  await writeFileAtomic(paths.hostPath, input.systemPrompt, { mode: 0o600 });
+  return paths.argPath;
+}
+
 async function* runClaudeAgent(input: AgentInput): AsyncGenerator<AgentEvent> {
-  const cliArgs = buildCliArgs(cliArgsForInput(input));
+  const systemPromptPath = await writeSystemPromptFile(input);
+  const cliArgs = buildCliArgs(cliArgsForInput(input, systemPromptPath));
 
   // spawnClaude can throw synchronously when `claudeBinPath()` fails
   // to locate `claude.exe` on Windows — surface that through the same

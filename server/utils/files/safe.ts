@@ -1,9 +1,14 @@
 // Wrappers that swallow ENOENT/EACCES so callers branch on `result === null` instead of try/catch.
-// resolveWithinRoot is the realpath-based traversal check used by every endpoint serving workspace files.
+// resolveWithinRoot — the realpath-based traversal check used by every endpoint serving workspace
+// files — lives in `@mulmoclaude/core/files` (#2461) and is re-exported here so the ~15 host
+// import sites keep their surface, mirroring atomic.ts.
 
-import { Dirent, Stats, promises, readFileSync, readdirSync, realpathSync, statSync } from "fs";
+import { Dirent, Stats, promises, readFileSync, readdirSync, statSync } from "fs";
 import path from "path";
+import { resolveWithinRoot } from "@mulmoclaude/core/files";
 import { isErrorWithCode } from "../types.js";
+
+export { resolveWithinRoot };
 
 export function isEnoent(err: unknown): boolean {
   return isErrorWithCode(err) && err.code === "ENOENT";
@@ -99,20 +104,43 @@ export function hasTraversalSegment(value: string): boolean {
   return value.split(/[/\\]/).some((segment) => segment === ".." || segment === ".");
 }
 
-// `rootReal` MUST already be a realpath. Returns null on traversal or if either path doesn't exist on disk.
-export function resolveWithinRoot(rootReal: string, relPath: string): string | null {
-  const normalized = path.normalize(relPath || "");
-  const resolved = path.resolve(rootReal, normalized);
-  let resolvedReal: string;
+// Lazily realpath a directory once and cache the result. Returns null
+// until the directory exists on disk (a fresh workspace hasn't created
+// it yet) and retries on the next call. The /artifacts/* static mounts
+// each need their storage root as a realpath for the traversal check,
+// but the root may not be materialised at boot.
+export function makeCachedRealpath(dir: string): () => Promise<string | null> {
+  let cached: string | null = null;
+  return async () => {
+    if (cached) return cached;
+    try {
+      cached = await promises.realpath(dir);
+      return cached;
+    } catch {
+      return null;
+    }
+  };
+}
+
+// Decode and traversal-guard an `/artifacts/*` request path against an
+// already-realpath'd storage root. Returns the in-root relative path to
+// serve, or null when the URL is malformed, escapes the root, or (when
+// `denyDotfiles`) touches a dotfile segment. The images / html / svg
+// static mounts share this so the decode + traversal + dotfile policy is
+// defined once. `rootReal` MUST be a realpath (see `resolveWithinRoot`).
+export function resolveArtifactRequestPath(rootReal: string, reqPath: string, denyDotfiles: boolean): string | null {
+  let relPath: string;
   try {
-    resolvedReal = realpathSync(resolved);
+    // decodeURIComponent throws URIError on malformed escapes (`%ZZ`,
+    // stray `%`). Fail closed so a junk URL 404s instead of bubbling a
+    // 500 out of the express error chain.
+    relPath = decodeURIComponent(reqPath.replace(/^\//, ""));
   } catch {
     return null;
   }
-  if (resolvedReal !== rootReal && !resolvedReal.startsWith(rootReal + path.sep)) {
-    return null;
-  }
-  return resolvedReal;
+  if (!resolveWithinRoot(rootReal, relPath)) return null;
+  if (denyDotfiles && containsDotfileSegment(relPath)) return null;
+  return relPath;
 }
 
 // `C:foo`, `c:relative\path` — Windows drive-qualified RELATIVE paths.

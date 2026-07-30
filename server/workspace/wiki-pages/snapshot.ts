@@ -20,7 +20,8 @@
 import path from "node:path";
 import { promises as fsp, constants as fsConstants, type Dirent } from "node:fs";
 import { writeFileAtomic } from "../../utils/files/atomic.js";
-import { mergeFrontmatter, parseFrontmatter, serializeWithFrontmatter } from "../../utils/markdown/frontmatter.js";
+import { ONE_DAY_MS } from "../../utils/time.js";
+import { mergeFrontmatter, parseFrontmatter, serializeWithFrontmatter } from "@mulmoclaude/markdown-utils/markdown/frontmatter";
 import { shortId } from "../../utils/id.js";
 import { workspacePath as defaultWorkspacePath } from "../workspace.js";
 import { WORKSPACE_DIRS } from "../paths.js";
@@ -28,7 +29,6 @@ import type { WikiPageEditor, WikiWriteMeta } from "./io.js";
 
 export const SNAPSHOT_RETAIN_COUNT = 100;
 export const SNAPSHOT_RETAIN_DAYS = 180;
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface SnapshotPathOptions {
   workspaceRoot?: string;
@@ -219,12 +219,7 @@ export async function gcSnapshots(slug: string, now: Date, opts: SnapshotPathOpt
   // lexicographically sortable because it's zero-padded ISO with
   // colons swapped. Same-millisecond writes resolve via the
   // shortId tail in `stamp` for tie-break consistency.
-  entries.sort((left, right) => {
-    if (left.filenameStamp !== right.filenameStamp) {
-      return left.filenameStamp < right.filenameStamp ? 1 : -1;
-    }
-    return left.stamp < right.stamp ? 1 : left.stamp > right.stamp ? -1 : 0;
-  });
+  entries.sort(compareSnapshotsNewestFirst);
 
   const cutoffMs = now.getTime() - SNAPSHOT_RETAIN_DAYS * ONE_DAY_MS;
 
@@ -250,6 +245,17 @@ interface SnapshotEntry {
    *  `_snapshot_ts` when the frontmatter doesn't carry one. */
   filenameStamp: string;
   fileName: string;
+}
+
+// Newest-first ordering: by `filenameStamp` (zero-padded ISO, so
+// lexicographically sortable), then by the shortId-tailed `stamp` to
+// break same-millisecond ties consistently. The one ordering rule shared
+// by every snapshot listing.
+function compareSnapshotsNewestFirst(left: SnapshotEntry, right: SnapshotEntry): number {
+  if (left.filenameStamp !== right.filenameStamp) {
+    return left.filenameStamp < right.filenameStamp ? 1 : -1;
+  }
+  return left.stamp < right.stamp ? 1 : left.stamp > right.stamp ? -1 : 0;
 }
 
 async function readSnapshotEntries(dir: string): Promise<SnapshotEntry[]> {
@@ -326,12 +332,7 @@ function entryEditor(meta: Record<string, unknown>): WikiPageEditor {
 export async function listSnapshots(slug: string, opts: SnapshotPathOptions = {}): Promise<SnapshotSummary[]> {
   const dir = historyDir(slug, opts);
   const entries = await readSnapshotEntries(dir);
-  entries.sort((left, right) => {
-    if (left.filenameStamp !== right.filenameStamp) {
-      return left.filenameStamp < right.filenameStamp ? 1 : -1;
-    }
-    return left.stamp < right.stamp ? 1 : left.stamp > right.stamp ? -1 : 0;
-  });
+  entries.sort(compareSnapshotsNewestFirst);
 
   const summaries: SnapshotSummary[] = [];
   for (const entry of entries) {

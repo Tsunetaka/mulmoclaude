@@ -58,6 +58,11 @@ const HOST_API_ROUTES = {
   health: "/api/health",
   sandbox: "/api/sandbox",
 
+  // Environment report for a bug report, as markdown. Secret values are
+  // withheld by an allow list in `server/utils/diagnostics/report.ts` — the
+  // agent pastes what it gets rather than deciding what to mask.
+  diagnosticsReport: "/api/diagnostics/report",
+
   // Manually-pinned launcher shortcuts (collections / feeds). GET reads
   // the list; PUT replaces it wholesale (client owns add / remove /
   // order). Single replace-endpoint — no add/remove route sprawl.
@@ -86,6 +91,8 @@ const HOST_API_ROUTES = {
   // Single source of truth: @mulmobridge/protocol. See plans/done/messaging_transports.md.
   chatService: CHAT_SERVICE_ROUTES,
 
+  shutdown: "/api/shutdown",
+
   config: {
     base: "/api/config",
     settings: "/api/config/settings",
@@ -113,6 +120,11 @@ const HOST_API_ROUTES = {
      *  client doesn't have to gate creation through PUT, which is
      *  update-only and 404s on non-existent paths (#1598). */
     create: "/api/files/create",
+    /** POST { dir, filename, dataUrl } — save dropped OS files into a
+     *  workspace folder. Unlike `create` this takes binary (a `data:`
+     *  URI) and never overwrites: a name collision is resolved by
+     *  auto-renaming to `name (n).ext` (#2270). */
+    upload: "/api/files/upload",
     raw: "/api/files/raw",
     refRoots: "/api/files/ref-roots",
     /** POST { path } — spawn the host OS's default handler for the
@@ -165,12 +177,22 @@ const HOST_API_ROUTES = {
   // Remote host over Firestore (phase 1). The server signs in to Firebase as
   // the user (connect, body carries a browser-minted Google idToken), runs the
   // command-loop + presence heartbeat, and exposes its running state. See
-  // plans/feat-remote-host-firestore-list-collections.md.
+  // plans/done/feat-remote-host-firestore-list-collections.md.
   remoteHost: {
     connect: "/api/remote-host/connect",
     reconnect: "/api/remote-host/reconnect",
     disconnect: "/api/remote-host/disconnect",
     status: "/api/remote-host/status",
+  },
+
+  // Local Google account link (settings UI). authorize starts the
+  // loopback + PKCE consent flow on this host and returns the consent URL;
+  // the refresh token never leaves the machine. See
+  // plans/done/feat-2111-google-settings-ui.md.
+  google: {
+    status: "/api/google/status",
+    authorize: "/api/google/authorize",
+    unlink: "/api/google/unlink",
   },
 
   mcpTools: {
@@ -290,6 +312,12 @@ const HOST_API_ROUTES = {
   // host renders its records via `<CollectionView>`.
   collections: {
     list: "/api/collections",
+    /** GET → { entries: CollectionOntologyEntry[] } — the raw workspace
+     *  ontology; the /collections Map tab builds its graph client-side
+     *  from these via the shared `buildOntologyGraph` (server/client
+     *  parity). Must be registered BEFORE `detail` so "ontology" is
+     *  never matched as a `:slug`. */
+    ontology: "/api/collections/ontology",
     /** GET → { collection, items } */
     detail: "/api/collections/:slug",
     /** POST → create one record (auto-id when primaryKey value omitted) */
@@ -301,9 +329,14 @@ const HOST_API_ROUTES = {
     /** POST → assemble a collection-level action's seed prompt (no record;
      *  injects a progress summary of all items) → { prompt, role } */
     collectionAction: "/api/collections/:slug/actions/:actionId",
-    /** POST → re-run a feed collection's retrieval now → { refreshed, written }.
-     *  400 when the collection has no `ingest` block (not a feed). */
+    /** POST → re-run a collection's retrieval now: a feed's `ingest`, or a
+     *  `googleCalendar` sync (#2427) → { refreshed, written, removed? }.
+     *  400 when the collection declares neither. */
     refresh: "/api/collections/:slug/refresh",
+    /** POST → push locally created / edited records to the Google calendar the
+     *  collection declares (#2598) → { pushed, created, updated, conflicts, … }.
+     *  400 when the collection declares no `googleCalendar`. Never deletes. */
+    calendarPush: "/api/collections/:slug/calendar-push",
     /** GET ?id=<viewId> → the custom view's HTML file (global-bearer auth),
      *  read from data/skills/:slug/views/. The parent renders it sandboxed. */
     viewFile: "/api/collections/:slug/view-file",
@@ -311,21 +344,21 @@ const HOST_API_ROUTES = {
      *  view wrapped into its sandboxed srcdoc (global-bearer auth) →
      *  { view, srcdoc, bytes }. Same builder as the command channel's
      *  `getRemoteView`, so the desktop phone-frame preview renders the exact
-     *  artifact the phone receives (plans/feat-remote-custom-view.md). */
+     *  artifact the phone receives (plans/done/feat-remote-custom-view.md). */
     remoteView: "/api/collections/:slug/remote-view",
     /** POST { op: "update"|"delete", id, patch? } → apply one mutate on behalf
      *  of a `target: "mobile"` view, authorized by that view's declared
      *  editableFields / allowDelete and enforced host-side (global-bearer auth).
      *  The desktop phone-frame preview's write channel — same builder the
      *  command channel's `mutateRemoteViewItem` uses, so preview === phone
-     *  (plans/feat-remote-writable-view.md). */
+     *  (plans/done/feat-remote-writable-view.md). */
     remoteViewMutate: "/api/collections/:slug/remote-view/:viewId/mutate",
     /** GET ?offset&limit&fields=<csv> → one page of a `target: "mobile"` view's
      *  records with its declared `imageFields` inlined as `data:` URL thumbnails
      *  (global-bearer auth) → { page, inlined, omitted }. Same builder as the
      *  command channel's `getRemoteViewItems`, so the desktop phone-frame preview
      *  pages the exact data (incl. real thumbnails) the phone will
-     *  (plans/feat-remote-view-images.md). */
+     *  (plans/done/feat-remote-view-images.md). */
     remoteViewItems: "/api/collections/:slug/remote-view/:viewId/items",
     /** GET ?id=<viewId>&locale=<tag> → translation dict for one custom view
      *  (global-bearer auth) → { locale, dict }. `dict` is the host-picked
@@ -342,6 +375,25 @@ const HOST_API_ROUTES = {
      *  Guarded by the scoped view token (NOT the global bearer); exempt from
      *  the global bearer + CSRF middleware. See server/api/auth/viewToken.ts. */
     viewData: "/api/collections/:slug/view-data",
+    /** POST → invoke a `kind: "mutate"` action from a custom view (body:
+     *  { itemId, params? }) → { written, itemId, item }. Requires the `write`
+     *  capability on the view token; mutate kind ONLY — a view token must
+     *  never be able to start LLM work (chat/agent stay bearer-guarded). */
+    viewDataAction: "/api/collections/:slug/view-data/actions/:actionId",
+    /** POST → run a structured aggregation query (body: { query }) over a
+     *  dataSource collection's WHOLE data file → { collection, count, rows }.
+     *  Requires only the `read` capability on the view token — the DSL is
+     *  read-only by construction (see core/queryZ.ts); 400 on a file-backed
+     *  collection (no query engine). Backs chart-drawing custom views. */
+    viewDataQuery: "/api/collections/:slug/view-data/query",
+    /** GET → resolve one record-referenced `image` field value (a workspace
+     *  path, `?path=…`) into a downscaled thumbnail → { path, dataUrl }.
+     *  Requires only the `read` capability; the path must be a CURRENT value
+     *  of one of the schema's image-type fields (no arbitrary file reads).
+     *  Optional `?maxEdge=` (clamped 64–1024, default 512). This is how a
+     *  desktop custom view displays workspace image files — sibling of the
+     *  remote view's `imageFields` inlining. */
+    viewDataImage: "/api/collections/:slug/view-data/image",
     /** DELETE → remove one custom view: drop it from schema.json `views[]` and
      *  unlink its `views/<file>.html` (global-bearer auth) → { deleted, viewId }.
      *  Source-aware; refuses user-scope + preset collections. */

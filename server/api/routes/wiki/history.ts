@@ -17,13 +17,14 @@ import { randomUUID } from "node:crypto";
 import { TOOL_NAMES } from "../../../../src/config/toolNames.js";
 import { hasMeaningfulChange, writeWikiPage } from "../../../workspace/wiki-pages/io.js";
 import { WORKSPACE_DIRS } from "../../../workspace/paths.js";
-import { isSafeStamp, listSnapshots, readSnapshot, stripSnapshotMeta } from "../../../workspace/wiki-pages/snapshot.js";
-import { mergeFrontmatter, serializeWithFrontmatter } from "../../../utils/markdown/frontmatter.js";
+import { isSafeStamp, listSnapshots, readSnapshot, stripSnapshotMeta, type SnapshotContent } from "../../../workspace/wiki-pages/snapshot.js";
+import { mergeFrontmatter, serializeWithFrontmatter } from "@mulmoclaude/markdown-utils/markdown/frontmatter";
 import { badRequest, notFound } from "../../../utils/httpError.js";
 import { readTextOrNull } from "../../../utils/files/safe.js";
 import { workspacePath } from "../../../workspace/workspace.js";
 import { pushToolResult } from "../../../events/session-store/index.js";
 import { log } from "../../../system/logger/index.js";
+import { singleLineForLog } from "../../../utils/logPreview.js";
 import { errorMessage } from "../../../utils/errors.js";
 import { isSafeSlug } from "@mulmoclaude/core/wiki";
 
@@ -66,39 +67,37 @@ router.get("/pages/:slug/history", async (req: Request<{ slug: string }>, res: R
   res.json({ slug, snapshots });
 });
 
-router.get("/pages/:slug/history/:stamp", async (req: Request<{ slug: string; stamp: string }>, res: Response) => {
+// Validate `:slug`/`:stamp` and load the snapshot, or respond (400 for
+// an unsafe param, 404 for a missing snapshot) and return null. Shared
+// by the read and restore routes so the guard lives in one place.
+async function resolveSnapshotOr4xx(req: Request<{ slug: string; stamp: string }>, res: Response): Promise<SnapshotContent | null> {
   const { slug, stamp } = req.params;
   if (!isSafeSlug(slug)) {
     badRequest(res, "Unsafe slug");
-    return;
+    return null;
   }
   if (!isSafeStamp(stamp)) {
     badRequest(res, "Unsafe stamp");
-    return;
+    return null;
   }
   const snapshot = await readSnapshot(slug, stamp);
   if (snapshot === null) {
     notFound(res, `snapshot not found: ${slug}/${stamp}`);
-    return;
+    return null;
   }
-  res.json({ slug, snapshot });
+  return snapshot;
+}
+
+router.get("/pages/:slug/history/:stamp", async (req: Request<{ slug: string; stamp: string }>, res: Response) => {
+  const snapshot = await resolveSnapshotOr4xx(req, res);
+  if (!snapshot) return;
+  res.json({ slug: req.params.slug, snapshot });
 });
 
 router.post("/pages/:slug/history/:stamp/restore", async (req: Request<{ slug: string; stamp: string }>, res: Response) => {
+  const snapshot = await resolveSnapshotOr4xx(req, res);
+  if (!snapshot) return;
   const { slug, stamp } = req.params;
-  if (!isSafeSlug(slug)) {
-    badRequest(res, "Unsafe slug");
-    return;
-  }
-  if (!isSafeStamp(stamp)) {
-    badRequest(res, "Unsafe stamp");
-    return;
-  }
-  const snapshot = await readSnapshot(slug, stamp);
-  if (snapshot === null) {
-    notFound(res, `snapshot not found: ${slug}/${stamp}`);
-    return;
-  }
 
   // Strip `_snapshot_*` keys before writing — they describe the
   // *original* save event and would be misleading on the restored
@@ -115,7 +114,7 @@ router.post("/pages/:slug/history/:stamp/restore", async (req: Request<{ slug: s
     reason: restoreReason(stamp),
     forceSnapshot: true,
   });
-  log.info("wiki", "history restore", { slug, stamp });
+  log.info("wiki", "history restore", { slug: singleLineForLog(slug), stamp: singleLineForLog(stamp) });
   res.json({ slug, restored: { fromStamp: stamp } });
 });
 
@@ -188,7 +187,7 @@ async function publishPageEditToolResult(sessionId: string, slug: string, stamp:
       },
     });
     if (outcome.kind === "skipped") {
-      log.warn("wiki", "page-edit toolResult publish skipped", { slug, reason: outcome.reason });
+      log.warn("wiki", "page-edit toolResult publish skipped", { slug: singleLineForLog(slug), reason: outcome.reason });
     }
   } catch (err) {
     log.warn("wiki", "page-edit toolResult publish failed", {
@@ -225,7 +224,7 @@ async function handleInternalSnapshot(req: Request<object, unknown, InternalSnap
   // `writeWikiPage` path; reusing it keeps both paths aligned.
   const previousContent = await loadPreviousSnapshotContent(slug);
   if (previousContent !== null && !hasMeaningfulChange(previousContent, content)) {
-    log.info("wiki", "internal snapshot skipped — no meaningful change since previous snapshot", { slug });
+    log.info("wiki", "internal snapshot skipped — no meaningful change since previous snapshot", { slug: singleLineForLog(slug) });
     res.json({ slug, ok: true, skipped: "no-meaningful-change" });
     return;
   }
@@ -244,7 +243,7 @@ async function handleInternalSnapshot(req: Request<object, unknown, InternalSnap
     },
     { workspaceRoot: workspacePath },
   );
-  log.info("wiki", "internal snapshot recorded", { slug });
+  log.info("wiki", "internal snapshot recorded", { slug: singleLineForLog(slug) });
 
   if (typeof sessionId === "string" && sessionId.length > 0) {
     await publishPageEditToolResult(sessionId, slug, stamp);

@@ -5,17 +5,26 @@
 // Centralizing those steps here keeps each test under the 20-line cognitive
 // budget and pins the testid contract in one place — when the plugin's DOM
 // shape changes, the helpers move, not every test.
+//
+// Since the View moved into @mulmoclaude/mulmoscript-plugin (phase 2), every
+// backend call goes through ONE dispatch URL with a kind-discriminated JSON
+// body, and responses are `{ ok: … }` envelopes — so the mocks here branch
+// on `postDataJSON().kind` and `route.fallback()` for kinds they don't own.
 
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page, type Route } from "@playwright/test";
 
 import { ONE_SECOND_MS } from "../../server/utils/time.ts";
 
-const RENDER_BEAT_PATH = "/api/mulmoScript/render-beat";
-const GENERATE_MOVIE_PATH = "/api/mulmoScript/generate-movie";
+export const MULMO_DISPATCH_PATH = "/api/plugins/runtime/mulmoScript/dispatch";
 const IMAGE_RENDER_TIMEOUT_MS = 5 * ONE_SECOND_MS;
 // Generic "MovieGen failed" headline rendered by the chip regardless of locale
-// is set in en.ts; tests pass the locale-agnostic English copy.
+// is set in the plugin's lang/en.ts; tests pass the locale-agnostic English copy.
 export const MOVIE_ERROR_HEADLINE = "Movie generation failed";
+
+function dispatchKind(route: Route): string | undefined {
+  const body: unknown = route.request().postDataJSON();
+  return typeof body === "object" && body !== null ? (body as { kind?: string }).kind : undefined;
+}
 
 /**
  * Navigate to a session URL, wait for the app shell to be ready, and click
@@ -53,27 +62,32 @@ export async function assertMovieErrorChip(page: Page, detail: string): Promise<
 }
 
 /**
- * Mock /api/mulmoScript/render-beat with a 200 { image } payload. Returns a
- * snapshot accessor over the post bodies the SPA actually sent — tests can
- * assert against shape/count.
+ * Mock the `renderBeat` dispatch kind with an `{ ok: true, image }` envelope.
+ * Returns a snapshot accessor over the post bodies the SPA actually sent —
+ * tests can assert against shape/count. Other kinds fall back to the
+ * suite-level dispatch stub.
  */
 export async function mockRenderBeatSuccess(page: Page, image: string): Promise<() => unknown[]> {
   const calls: unknown[] = [];
   await page.route(
-    (url) => url.pathname === RENDER_BEAT_PATH,
+    (url) => url.pathname === MULMO_DISPATCH_PATH,
     async (route) => {
+      if (dispatchKind(route) !== "renderBeat") return route.fallback();
       calls.push(route.request().postDataJSON());
-      return route.fulfill({ json: { image } });
+      return route.fulfill({ json: { ok: true, image } });
     },
   );
   return () => calls;
 }
 
-/** Mock /api/mulmoScript/render-beat with a 500 { error } payload. */
+/** Mock the `renderBeat` dispatch kind with an `{ ok: false, error }` envelope. */
 export async function mockRenderBeatError(page: Page, error: string): Promise<void> {
   await page.route(
-    (url) => url.pathname === RENDER_BEAT_PATH,
-    (route) => route.fulfill({ status: 500, json: { error } }),
+    (url) => url.pathname === MULMO_DISPATCH_PATH,
+    (route) => {
+      if (dispatchKind(route) !== "renderBeat") return route.fallback();
+      return route.fulfill({ json: { ok: false, code: "server_error", error } });
+    },
   );
 }
 
@@ -89,21 +103,19 @@ export async function waitForRenderedBeatImage(page: Page, dataUriPrefix: string
 }
 
 /**
- * Mock /api/mulmoScript/generate-movie to return an SSE stream that
- * immediately emits a single `error` event. Returns a counter accessor so
- * tests can assert how many times the route was hit (e.g. initial + retry).
+ * Mock the long-held `generateMovie` dispatch kind to resolve with an
+ * `{ ok: false, error }` envelope (the SSE stream's successor). Returns a
+ * counter accessor so tests can assert how many times the kind was hit
+ * (e.g. initial + retry).
  */
-export async function mockGenerateMovieSseError(page: Page, message: string): Promise<() => number> {
+export async function mockGenerateMovieError(page: Page, message: string): Promise<() => number> {
   let calls = 0;
   await page.route(
-    (url) => url.pathname === GENERATE_MOVIE_PATH,
+    (url) => url.pathname === MULMO_DISPATCH_PATH,
     (route) => {
+      if (dispatchKind(route) !== "generateMovie") return route.fallback();
       calls++;
-      return route.fulfill({
-        status: 200,
-        headers: { "Content-Type": "text/event-stream" },
-        body: `data: {"type":"error","message":"${message}"}\n\n`,
-      });
+      return route.fulfill({ json: { ok: false, code: "server_error", error: message } });
     },
   );
   return () => calls;

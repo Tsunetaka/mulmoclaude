@@ -29,9 +29,11 @@ Your browser opens to `http://localhost:3001`. That's it.
 | "Schedule a daily news digest"  | Recurring task that runs automatically                |
 | "Generate an image of a sunset" | AI-generated image (Gemini)                           |
 | "Make slides on …"              | Marp-rendered slide deck with PDF export              |
+| "Add this to my calendar"       | Event in your Google Calendar (sign in, no setup)     |
+| "Put that on my task list"      | Task in Google Tasks, with notes and a due date       |
 | "Subscribe to this RSS feed"    | Data feed on `/feeds`, fetched on a schedule          |
 
-**Pages you can visit directly**: `/wiki` (browse + lint), `/feeds` (data feeds), `/collections` (data apps — Discover tab to import community collections, Contribute to share your own), `/automations` (recurring tasks), `/files`, `/skills`, `/roles`. Each page has its own chat composer that spawns a fresh chat already aware of the page context.
+**Pages you can visit directly**: `/wiki` (browse + lint), `/feeds` (data feeds), `/collections` (data apps — Discover tab to import community collections, Contribute to share your own), `/automations` (recurring tasks), `/files` (drop files onto a folder row to save them straight into it), `/skills`, `/roles`. Each page has its own chat composer that spawns a fresh chat already aware of the page context.
 
 ## Options
 
@@ -44,7 +46,30 @@ npx mulmoclaude --dev-plugin ./my-plugin     # Load a runtime plugin from a loca
                                              # project dir (repeatable; relative or
                                              # absolute path)
 npx mulmoclaude --version                    # Show version
+npx mulmoclaude --help                       # Full flag list
 ```
+
+Each boolean flag mirrors an environment variable, so `--disable-sandbox` and `DISABLE_SANDBOX=1` do the same thing. `--help` lists the rest: `--disable-macos-reminders` (skip the macOS Reminder notification sink) plus the `--journal-force-run`, `--chat-index-force-run`, and `--persist-tool-calls` debugging toggles.
+
+## Start from an icon (macOS / Windows)
+
+```
+npx mulmoclaude create-shortcut              # macOS: MulmoClaude.app / Windows: MulmoClaude.lnk
+npx mulmoclaude create-shortcut --dir ~/Desktop
+npx mulmoclaude create-shortcut --yes        # Skip the confirmation prompt
+```
+
+Creates a real app bundle on macOS (no Electron — an `Info.plist` and a shell stub) in `/Applications`, or `~/Applications` when that is not writable. On Windows it creates a Start Menu shortcut pointing at a `.vbs` stub run through `wscript.exe`, so no console window appears; the launcher's files live under `%LOCALAPPDATA%\MulmoClaude`. Double-clicking it:
+
+1. reuses an already-running MulmoClaude by just opening the browser,
+2. checks Node.js, `npx`, and Claude Code, and explains in your system language what to do when one is missing,
+3. shows a progress page while `npx mulmoclaude@latest` starts, then switches to the app.
+
+A GUI launch gets none of your shell's `PATH`, so the bundle asks your login shell for it before looking for anything — this is why a version manager (nodebrew / nvm / asdf / Volta) still works from the icon.
+
+It also starts the server from your home directory rather than the `/` macOS hands a GUI app, so the `.env` it loads is `~/.env`.
+
+The launcher writes `~/Library/Logs/MulmoClaude/launcher.log`. The bundle carries its own copy of the launcher code, so re-run the command after upgrading. Windows is not supported yet.
 
 ## How it works
 
@@ -86,7 +111,7 @@ npx @mulmobridge/discord@latest      # Discord
 npx @mulmobridge/line@latest         # LINE
 npx @mulmobridge/whatsapp@latest     # WhatsApp
 npx @mulmobridge/email@latest        # Email (IMAP + SMTP)
-# …matrix, mastodon, bluesky, signal, teams, zulip, irc, rocketchat,
+# …matrix, mattermost, mastodon, bluesky, signal, teams, zulip, irc, rocketchat,
 #   chatwork, xmpp, viber, messenger, google-chat, twilio-sms, webhook, nostr, line-works
 ```
 
@@ -114,15 +139,17 @@ Recommended: ≥ 32 characters of random data (shorter values trigger a startup 
 
 - **Roles** (sidebar selector): General, Office, Guide & Planner, Artist, Tutor, Storyteller, Settings. Each one biases Claude toward a workflow and surfaces its sample prompts.
 - **Skills** (`~/.claude/skills/<name>/SKILL.md`): personal skills shared across every project, plus project skills under `<workspace>/.claude/skills/`. Bundled "preset" skills (`mc-*`) re-seed on each boot.
-- **Collections**: schema-driven data apps. Author your own (`data/skills/<slug>/schema.json` declares the model + UI), or use the Discover tab on `/collections` to import community collections from the official registry — or your own org / community registry by dropping `config/collections-registries.json` in the workspace.
+- **Collections**: schema-driven data apps. Author your own (`data/skills/<slug>/schema.json` declares the model + UI), or use the Discover tab on `/collections` to import community collections from the official registry — or your own org / community registry by dropping `config/collections-registries.json` in the workspace. The Map tab draws the ontology graph across your collections, so you can see how their records reference each other, and the view header has a pulldown to jump straight to a related collection.
 
 ## Optional features
 
-- **Gemini API key** (`GEMINI_API_KEY` in environment or `.env`) — enables AI image generation (`generateImage`), audio / video. Free tier suffices for everyday use; get one from [Google AI Studio](https://aistudio.google.com/).
+- **Gemini API key** (`GEMINI_API_KEY` in environment or `.env`) — enables AI image generation (`generateImage`), audio / video. Free tier suffices for everyday use; get one from [Google AI Studio](https://aistudio.google.com/). Set it in both places and the exported shell value wins, `.env` is ignored — the app now says so in the notification bell instead of leaving you editing a file that has no effect.
 - **Local voice input** (macOS only, opt-in) — `whisper.cpp` for dictating chat messages without sending audio to a cloud API.
 - **Marp slides** — `marp: true` frontmatter on any markdown file renders a slide deck in the canvas with PDF export. Custom themes via `config/marp-themes/<name>.css`.
 - **Auto memory** — the agent maintains a typed memory layout (`conversations/memory/<type>/<topic>.md`) and reads it ambient-style.
 - **Web Push on task finish** — enable in Settings → Notifications to get a push on your phone when the answer to a question you asked is ready, even with the browser closed. Requires the RemoteHost connection + a registered device (see [`docs/remote-host.md`](https://github.com/receptron/mulmoclaude/blob/main/docs/remote-host.md#web-push-on-task-finish-2086)).
+- **Google (Calendar / Tasks / Drive)** — link your Google account in Settings → Plugins → Google and consent in the browser; no Google Cloud setup needed. The agent then gets a `google` tool covering the full round trip — list, create, edit and delete calendar events and tasks (including putting a completed task back on the list), plus the Drive files it creates — and the phone remote can trigger the same commands.
+- **Google Calendar ↔ collection sync** — a collection can mirror one of your calendars and keep itself current: the first sync starts as soon as you ask for the collection, an hourly pass follows, and a Sync button forces one. It calls the Calendar API directly rather than routing the events through the agent, so keeping it fresh costs no tokens. A **Push to Google** button beside it sends the other way, creating events for records you added and updating ones you edited — it never deletes, and it skips anything edited on both sides rather than picking a winner. Push before you sync: a pull overwrites a locally edited record as soon as Google reports a change to that event. **The refresh token stays on your machine** (`~/.config/mulmo/`) — the sign-in service applies the OAuth client secret Google requires and keeps nothing. Prefer your own OAuth client? Drop a *desktop-app* client JSON in `~/.secrets/` and the whole flow stays local (see [`docs/remote-host.md`](https://github.com/receptron/mulmoclaude/blob/main/docs/remote-host.md)).
 
 ## Plugin authoring (`--dev-plugin`)
 
@@ -135,6 +162,14 @@ Server-side `definePlugin` factory edits still require a launcher restart (Node 
 - Repo: <https://github.com/receptron/mulmoclaude>
 - Architecture, scripts, and the publish flow live in `docs/developer.md` of the repo.
 - Publish flow for this package: see `bin/prepare-dist.js` header comment plus `.claude/skills/publish-mulmoclaude/SKILL.md`.
+
+## Related projects
+
+This launcher is published by [Receptron](https://github.com/receptron), who also build MulmoTerminal below.
+
+- **[MulmoClaude on GitHub](https://github.com/receptron/mulmoclaude)** — source, issues, and the full documentation for the app this package launches.
+- **[MulmoTerminal](https://github.com/receptron/mulmoterminal)** — a terminal-first cockpit for running many AI coding agents in parallel. One roster showing every session's summary and PR status, tmux-backed session persistence, git-worktree isolation, one-click PRs, and mobile push with remote reply.
+- **[MulmoTerminal manual](https://receptron.github.io/mulmoterminal/)** — setup, workflows, feature reference, configuration, mobile notifications, and alternative / local model providers. Available in English and Japanese.
 
 ## License
 

@@ -3,14 +3,13 @@ import { mockAllApis } from "../fixtures/api";
 import {
   assertMovieErrorChip,
   assertScriptHeader,
-  mockGenerateMovieSseError,
+  mockGenerateMovieError,
   mockRenderBeatError,
   mockRenderBeatSuccess,
+  MULMO_DISPATCH_PATH,
   openMulmoSessionAndSelectScript,
   waitForRenderedBeatImage,
 } from "../fixtures/present-mulmo-script";
-
-import { ONE_SECOND_MS } from "../../server/utils/time.ts";
 
 const SCRIPT_TITLE = "Test Mulmo Script";
 const SCRIPT_DESCRIPTION = "A short test script used by the smoke test.";
@@ -87,12 +86,15 @@ async function setupScriptSession(page: Page) {
       }),
   );
 
-  // Stub every mulmo-script endpoint the View touches on mount. All
-  // of them are allowed to fail silently in View.vue's code (try/catch
-  // with `// silently ignore`), so a 200 with an empty payload is
-  // enough to keep the UI stable.
+  // Stub the mulmoScript dispatch URL the View drives on mount
+  // (save-refresh, beat probes, statuses, pendingGenerations). Every
+  // probe tolerates a non-ok envelope silently, so an empty JSON body
+  // (which the transport treats as a failure envelope) is enough to
+  // keep the UI stable. Per-test kind mocks register later and take
+  // precedence (Playwright routes are LIFO), falling back here for
+  // kinds they don't own.
   await page.route(
-    (url) => url.pathname.startsWith("/api/mulmoScript/"),
+    (url) => url.pathname === MULMO_DISPATCH_PATH,
     (route) => route.fulfill({ json: {} }),
   );
 }
@@ -150,23 +152,22 @@ test.describe("presentMulmoScript plugin", () => {
     page.on("pageerror", (err) => errors.push(err.message));
 
     await openMulmoSessionAndSelectScript(page, SESSION_PATH);
-    // Give the View a beat to mount and kick off its fetches.
-    await page.waitForTimeout(ONE_SECOND_MS / 2);
+    // assertScriptHeader waits for the View to mount and render its header,
+    // by which point any mount-time page error would have been captured.
     await assertScriptHeader(page, SCRIPT_TITLE);
     expect(errors).toEqual([]);
   });
 
-  // The refactored server handlers all go through withStoryContext →
-  // `{ error: <string> }` on failure, `{ image: "data:..." }` on
-  // success. The View reads exactly those shapes, so the frontend
-  // wiring is the regression net for the refactor.
+  // Every op resolves through the dispatch envelope — `{ ok: false,
+  // error }` on failure, `{ ok: true, image: "data:..." }` on success.
+  // The View reads exactly those shapes, so the frontend wiring is the
+  // regression net for the extraction.
 
   test("render-beat success: mocked image surfaces in the View", async ({ page }) => {
-    // Beat 0 is a textSlide → auto-rendered on mount via renderBeat,
-    // which hits /api/mulmoScript/render-beat. Waiting for the mocked
-    // image to surface proves the server→frontend contract
-    // (`{ image: <data-uri> }` on 200) still holds through the
-    // withStoryContext refactor.
+    // Beat 0 is a textSlide → auto-rendered on mount via the
+    // `renderBeat` dispatch kind. Waiting for the mocked image to
+    // surface proves the server→frontend contract (`{ ok: true,
+    // image: <data-uri> }`) still holds through the extraction.
     const getRenderBeatCalls = await mockRenderBeatSuccess(page, PNG_1X1);
     await openMulmoSessionAndSelectScript(page, SESSION_PATH);
     await assertScriptHeader(page, SCRIPT_TITLE);
@@ -180,9 +181,9 @@ test.describe("presentMulmoScript plugin", () => {
   });
 
   test("render-beat error: mocked { error } surfaces to the UI", async ({ page }) => {
-    // Auto-render on mount hits render-beat for textSlide beats,
-    // which now returns 500 { error }. The View renders the error
-    // string in the placeholder slot.
+    // Auto-render on mount hits the renderBeat kind for textSlide
+    // beats, which now resolves to { ok: false, error }. The View
+    // renders the error string in the placeholder slot.
     await mockRenderBeatError(page, "Image was not generated");
     await openMulmoSessionAndSelectScript(page, SESSION_PATH);
     await assertScriptHeader(page, SCRIPT_TITLE);
@@ -195,23 +196,23 @@ test.describe("presentMulmoScript plugin", () => {
   // per-test mock even though it passed in isolation), so the check
   // lives in manual testing rather than gating CI.
 
-  // Regression for #1197. Movie generation used to surface SSE
-  // errors via `alert()` — blocking, no retry, and once dismissed the
-  // canvas looked identical to a healthy idle state. The fix swaps to
-  // an inline error chip + Retry button between the chrome row and
-  // the Characters section. This test pins both the chip surface and
-  // the retry round-trip.
-  test("generateMovie error: SSE error event surfaces inline chip + retry button re-fires the request", async ({ page }) => {
+  // Regression for #1197. Movie generation used to surface errors via
+  // `alert()` — blocking, no retry, and once dismissed the canvas
+  // looked identical to a healthy idle state. The fix swaps to an
+  // inline error chip + Retry button between the chrome row and the
+  // Characters section. This test pins both the chip surface and the
+  // retry round-trip.
+  test("generateMovie error: failure envelope surfaces inline chip + retry button re-fires the request", async ({ page }) => {
     const SSE_ERROR_MESSAGE = "Page.captureScreenshot timed out.";
-    const getGenerateMovieCalls = await mockGenerateMovieSseError(page, SSE_ERROR_MESSAGE);
+    const getGenerateMovieCalls = await mockGenerateMovieError(page, SSE_ERROR_MESSAGE);
 
     await openMulmoSessionAndSelectScript(page, SESSION_PATH);
     await assertScriptHeader(page, SCRIPT_TITLE);
 
-    // First attempt: chip should appear with the SSE-supplied message.
-    // expect.poll instead of plain equality tolerates the microtask
-    // gap between the route handler firing and the SPA's catch arm
-    // landing.
+    // First attempt: chip should appear with the server-supplied
+    // message. expect.poll instead of plain equality tolerates the
+    // microtask gap between the route handler firing and the SPA's
+    // failure arm landing.
     await page.getByTestId("mulmo-script-generate-movie-button").click();
     const errorChip = await assertMovieErrorChip(page, SSE_ERROR_MESSAGE);
     // The linter's assertion detector doesn't pick up `expect.poll`

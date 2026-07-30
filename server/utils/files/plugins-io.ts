@@ -15,10 +15,9 @@
 // written ledger never bricks server boot. Writes go through the
 // atomic helper, so a crashed install can't leave a corrupt file.
 
-import { existsSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { loadJsonFile, writeJsonAtomic } from "./json.js";
+import { loadJsonFile } from "./json.js";
 import { WORKSPACE_PATHS } from "../../workspace/paths.js";
 
 export interface LedgerEntry {
@@ -47,14 +46,6 @@ const sanitiseLedger = (raw: unknown): LedgerEntry[] => {
 export function readLedger(): LedgerEntry[] {
   const raw = loadJsonFile<unknown>(WORKSPACE_PATHS.pluginsLedger, []);
   return sanitiseLedger(raw);
-}
-
-export async function writeLedger(entries: readonly LedgerEntry[]): Promise<void> {
-  const dir = path.dirname(WORKSPACE_PATHS.pluginsLedger);
-  if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true });
-  }
-  await writeJsonAtomic(WORKSPACE_PATHS.pluginsLedger, [...entries]);
 }
 
 /** Read a runtime-plugin asset (extracted under

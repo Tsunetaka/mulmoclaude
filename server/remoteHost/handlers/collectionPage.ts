@@ -6,11 +6,11 @@
 // that budget. The clamps live in @mulmoclaude/core/remote-view (params arrive
 // as untyped JSON there too) so the record handlers and the remote-view bridge
 // serve identical page semantics — re-exported here for the handlers.
-import { clampLimit, clampOffset } from "@mulmoclaude/core/remote-view";
+import { clampLimit, clampOffset, readIdParam } from "@mulmoclaude/core/remote-view";
 import { deriveAll, type DerivableFieldSpec, type DerivableRecord } from "@mulmoclaude/core/collection";
 import type { JsonObject } from "../commandChannel.js";
 
-export { clampLimit, clampOffset };
+export { clampLimit, clampOffset, readIdParam };
 
 /** Resolve record-local computed fields (derived formulas) before paging, so
  *  channel consumers — the phase-2 card list and a remote view's `getItems` —
@@ -20,8 +20,21 @@ export { clampLimit, clampOffset };
 export const deriveItems = (schema: { fields?: Record<string, DerivableFieldSpec> }, items: unknown[]): DerivableRecord[] =>
   items.map((item) => deriveAll({ fields: schema.fields ?? {} }, item as DerivableRecord, {}));
 
-// Build the paginated result. `detail` (a CollectionDetail) and `items`
-// (CollectionItem[]) are plain JSON, but their interfaces lack an index
-// signature so they don't structurally match JsonValue — the cast is safe.
+/** Build the paginated result.
+ *
+ *  `toJsonObject` cannot serve this one. `CollectionDetail` reaches
+ *  `schema.spawn.set`, typed `Record<string, unknown>`, so the payload
+ *  genuinely CANNOT be proven JSON by the type system — it is JSON at runtime
+ *  because the schema loader only ever puts JSON there, a fact about the
+ *  loader that these types do not record.
+ *
+ *  Removing this assertion means giving `spawn.set` a JSON-valued type at the
+ *  schema layer, not adjusting anything here. */
 export const pageResult = (detail: unknown, items: unknown[], offset: number, limit: number): JsonObject =>
-  ({ collection: detail, items: items.slice(offset, offset + limit), total: items.length, offset, limit }) as unknown as JsonObject;
+  ({
+    collection: detail,
+    items: items.slice(offset, offset + limit),
+    total: items.length,
+    offset,
+    limit,
+  }) as JsonObject;

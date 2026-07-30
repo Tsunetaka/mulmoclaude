@@ -9,7 +9,8 @@ import path from "path";
 import { workspacePath, WORKSPACE_DIRS } from "./paths.js";
 import { log } from "../system/logger/index.js";
 import { writeJsonAtomicSync } from "../utils/files/json.js";
-import { isRecord } from "../utils/types.js";
+import { hasStringProp, isRecord } from "../utils/types.js";
+import { validateEntryList, type EntryListResult } from "../utils/validateEntryList.js";
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -82,16 +83,23 @@ function sanitizeDescription(raw: string): string {
 
 function validateEntry(raw: unknown): CustomDirEntry | null {
   if (!isRecord(raw)) return null;
-  const obj = raw as Record<string, unknown>;
 
-  const validPath = validatePath(String(obj.path ?? ""));
+  // Type-check the field rather than `String(...)`-ing it. This file is fed by a
+  // hand-edited config, so `path` can be an array or object; stringifying one
+  // handed `validatePath` the literal "[object Object]" to evaluate as a path.
+  // (`validatePath`'s own `typeof !== "string"` check could never fire behind a
+  // `String()` call.)
+  if (!hasStringProp(raw, "path")) return null;
+  const validPath = validatePath(raw.path);
   if (!validPath) return null;
 
-  const structure = isValidStructure(obj.structure) ? obj.structure : DIR_STRUCTURES.flat;
+  const structure = isValidStructure(raw.structure) ? raw.structure : DIR_STRUCTURES.flat;
 
   return {
     path: validPath,
-    description: sanitizeDescription(String(obj.description ?? "")),
+    // A non-string description is dropped rather than described as
+    // "[object Object]" — it is optional, so absent is the honest reading.
+    description: sanitizeDescription(hasStringProp(raw, "description") ? raw.description : ""),
     structure,
   };
 }
@@ -139,28 +147,13 @@ export function saveCustomDirs(entries: readonly CustomDirEntry[], root?: string
 
 // ── Validate input array (for API) ─────────────────────────────
 
-export function validateCustomDirs(raw: unknown): { entries: CustomDirEntry[] } | { error: string } {
-  if (!Array.isArray(raw)) {
-    return { error: "expected an array" };
-  }
-  if (raw.length > MAX_ENTRIES) {
-    return { error: `too many entries (max ${MAX_ENTRIES})` };
-  }
-  const entries: CustomDirEntry[] = [];
-  const errors: string[] = [];
-  raw.forEach((item, i) => {
-    const entry = validateEntry(item);
-    if (entry) {
-      entries.push(entry);
-    } else {
-      const itemPath = isRecord(item) ? String((item as Record<string, unknown>).path ?? "") : "";
-      errors.push(`entry ${i}: invalid path "${itemPath}"`);
-    }
+export function validateCustomDirs(raw: unknown): EntryListResult<CustomDirEntry> {
+  return validateEntryList(raw, {
+    maxEntries: MAX_ENTRIES,
+    validateEntry,
+    echoProp: "path",
+    describeInvalid: (itemPath) => `invalid path "${itemPath}"`,
   });
-  if (errors.length > 0) {
-    return { error: errors.join("; ") };
-  }
-  return { entries };
 }
 
 // ── Cached loader (for system prompt) ───────────────────────────

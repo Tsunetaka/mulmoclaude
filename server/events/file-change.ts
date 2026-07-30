@@ -11,7 +11,7 @@
 // publisher; we hand those to the package as the primary channel + normaliser.
 
 import type { IPubSub } from "./pub-sub/index.js";
-import { configureFileChangePublisher, publishFileChange, resetFileChangePublisher } from "@mulmoclaude/core/file-change";
+import { configureFileChangePublisher, publishFileChange } from "@mulmoclaude/core/file-change";
 import { fileChannel, toPosixWorkspacePath } from "../../src/config/pubsubChannels.js";
 import { isMarkdownPath } from "../utils/files/markdown-store.js";
 import { isHtmlPath } from "../utils/files/html-store.js";
@@ -47,9 +47,4 @@ export function initFileChangePublisher(instance: IPubSub): void {
     },
     warn: (message, data) => log.warn("file-change", message, data),
   });
-}
-
-/** Test-only — clear the module singleton so each test starts clean. */
-export function _resetFileChangePublisherForTesting(): void {
-  resetFileChangePublisher();
 }

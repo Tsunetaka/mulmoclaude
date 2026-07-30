@@ -1,6 +1,6 @@
 // Unit tests for the phase-5 remote view item pages: the shared
 // createRemoteViewItems builder (engine + thumbnail resolver stubbed) and the
-// getRemoteViewItems command handler over it. See plans/feat-remote-view-images.md.
+// getRemoteViewItems command handler over it. See plans/done/feat-remote-view-images.md.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
@@ -31,7 +31,7 @@ const RECORDS = [
 ];
 
 const deps = (overrides: Partial<RemoteViewItemsDeps> = {}): RemoteViewItemsDeps => ({
-  listItems: (async () => RECORDS) as unknown as RemoteViewItemsDeps["listItems"],
+  listRecords: (async () => RECORDS) as unknown as RemoteViewItemsDeps["listRecords"],
   // Identity stub: these fixtures have no computed fields, so the real resolver
   // (enrichItems) returns them unchanged — the builder just threads records through it.
   enrichItems: (async (_collection: unknown, items: unknown[]) => items) as unknown as RemoteViewItemsDeps["enrichItems"],

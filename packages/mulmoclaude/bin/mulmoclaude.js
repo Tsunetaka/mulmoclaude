@@ -100,6 +100,11 @@ const args = process.argv.slice(2);
 if (args.includes("--help") || args.includes("-h")) {
   console.log(`
 Usage: npx mulmoclaude [options]
+       npx mulmoclaude create-shortcut [--dir <path>] [--yes]
+
+Commands:
+  create-shortcut      Create a clickable MulmoClaude.app (macOS) so the
+                       app can be started without a terminal
 
 Options:
   --port <number>      Server port (default: ${DEFAULT_PORT})
@@ -119,6 +124,15 @@ if (args.includes("--version")) {
   const { version } = require(join(PKG_DIR, "package.json"));
   console.log(`mulmoclaude ${version}`);
   process.exit(0);
+}
+
+// Generates the clickable app bundle and exits — it never starts a
+// server. Imported lazily because the icon builder pulls in `sharp`,
+// which nothing else on the launch path needs.
+if (args[0] === "create-shortcut") {
+  const { runCreateShortcut } = await import("../server/utils/launcher/create-shortcut.mjs");
+  const { version } = require(join(PKG_DIR, "package.json"));
+  process.exit(await runCreateShortcut(args.slice(1), { version }));
 }
 
 const { requestedPort, portExplicit } = parsePortArg();
@@ -234,6 +248,18 @@ const serverEnv = {
 };
 if (devPluginPaths.length > 0) {
   serverEnv.MULMOCLAUDE_DEV_PLUGINS = devPluginPaths.join(PATH_DELIMITER);
+}
+// Hand the shell-shadowed `.env` keys to the server so it can raise an
+// in-app notification (#2604). The log line above is easy to scroll past,
+// and a user who edits `.env` while a stale shell export wins gets no
+// other hint that the file is being ignored. Key NAMES only, never values.
+// Deleted first, not just conditionally set: this var is ours to
+// compute, and a value inherited from the shell (or from the `.env` we
+// just merged) would otherwise reach the server and be reported as a
+// conflict that does not exist.
+delete serverEnv.MULMOCLAUDE_SHADOWED_ENV_KEYS;
+if (skippedKeys.length > 0) {
+  serverEnv.MULMOCLAUDE_SHADOWED_ENV_KEYS = skippedKeys.join(",");
 }
 // Boolean CLI flags that mirror an env var (#1089 + bundle): inject
 // the corresponding VAR=1 into the spawned server so the flag is

@@ -29,8 +29,15 @@
           <!-- Expanded body — markdown-rendered. -->
           <div class="border-t border-purple-200 p-4 bg-white rounded-b-lg">
             <div v-if="skillPath" class="text-[11px] font-mono text-gray-400 mb-3 break-all">{{ skillPath }}</div>
-            <!-- eslint-disable-next-line vue/no-v-html -- DOMPurify-sanitized markdown of the SKILL.md body Claude CLI synthesised. The body comes from the user's local skill file, surfaced verbatim here. -->
-            <div ref="markdownContainerRef" class="markdown-content prose prose-slate max-w-none" @click="handleExternalLinkClick" v-html="renderedHtml"></div>
+            <!-- eslint-disable vue/no-v-html -- DOMPurify-sanitized markdown of the SKILL.md body Claude CLI synthesised. The body comes from the user's local skill file, surfaced verbatim here. Multi-line element so disable/enable pair (CLAUDE.md UI rule). -->
+            <div
+              ref="markdownContainerRef"
+              class="markdown-content prose prose-slate max-w-none"
+              translate="yes"
+              @click="handleExternalLinkClick"
+              v-html="renderedHtml"
+            ></div>
+            <!-- eslint-enable vue/no-v-html -->
           </div>
         </details>
       </div>
@@ -44,7 +51,7 @@ import { useI18n } from "vue-i18n";
 import { marked } from "marked";
 import type { ToolResultComplete } from "gui-chat-protocol/vue";
 import type { SkillData } from "./types";
-import { handleExternalLinkClick } from "../../utils/dom/externalLink";
+import { handleExternalLinkClick } from "@mulmoclaude/markdown-utils/dom/externalLink";
 import { sanitizeMarkdownHtml } from "../../utils/markdown/sanitize";
 import { useMermaidRenderer } from "../../utils/markdown/useMermaid";
 

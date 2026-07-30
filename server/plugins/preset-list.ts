@@ -39,6 +39,10 @@ export const PRESET_PLUGINS: readonly PresetPlugin[] = [
   // via the workspace symlink at
   // `node_modules/@mulmoclaude/spotify-plugin/`.
   { packageName: "@mulmoclaude/spotify-plugin" },
+  // #2114 — Google integration (Calendar list/create via the locally
+  // linked account; Tasks / Drive ride the same grant later, #2115).
+  // Server-only tool backed by @mulmoclaude/core/google.
+  { packageName: "@mulmoclaude/google-plugin" },
   // #1175 / #1286 — `recipe-book-plugin` removed from the preset
   // list. The plugin source still ships at
   // `packages/plugins/recipe-book-plugin/` for re-enabling, but

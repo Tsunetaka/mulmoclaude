@@ -5,7 +5,21 @@
 // ported from ../mulmoserver). The only signature change vs. that copy: the
 // `firestore` instance is a parameter (each host supplies its own Firebase init),
 // and the heartbeat interval is an option (defaults to one minute).
-import { DocumentReference, Firestore, deleteDoc, onSnapshot, query, runTransaction, serverTimestamp, setDoc, updateDoc, where } from "firebase/firestore";
+import {
+  DocumentReference,
+  Firestore,
+  FirestoreError,
+  Query,
+  QuerySnapshot,
+  deleteDoc,
+  onSnapshot,
+  query,
+  runTransaction,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 
 import { errorMessage } from "../../collection/core/errorMessage.js";
 import {
@@ -20,8 +34,42 @@ import {
   hostDoc,
   isExpired,
 } from "../index.js";
+import { stripUndefined, undefinedPaths, unexpectedPaths } from "./firestoreSafeResult.js";
+import { PRESENCE_STALE_BEATS, createPresenceBeat, type PresenceBeat } from "./presenceBeat.js";
 
-const DEFAULT_HEARTBEAT_MS = 60_000;
+// Exported so a host that judges presence freshness from the outside (a probe that
+// reads the doc back) measures against the same beat the runner writes on.
+export const DEFAULT_HEARTBEAT_MS = 60_000;
+
+// Firestore listen errors worth re-subscribing for: network / backend blips, plus
+// `unauthenticated` — the SDK refreshes tokens on its own, so an expired one is
+// fixed by trying again, and stopping the host at the first expiry was far too
+// strong (#2633). Everything else — permission-denied and any unrecognized code —
+// is fatal: re-listening can't restore a revoked grant, and an open-ended retry on
+// an unknown code would loop forever. Retrying is bounded by LISTEN_RETRY_WINDOW_MS
+// either way, so even a doomed retry ends in an escalation rather than a spin.
+const TRANSIENT_LISTEN_ERROR_CODES = new Set(["aborted", "cancelled", "deadline-exceeded", "internal", "resource-exhausted", "unauthenticated", "unavailable"]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+const listenErrorCode = (error: unknown): string => (isRecord(error) && typeof error.code === "string" ? error.code : "");
+
+export const classifyListenerError = (error: unknown): "transient" | "fatal" =>
+  TRANSIENT_LISTEN_ERROR_CODES.has(listenErrorCode(error)) ? "transient" : "fatal";
+
+const BASE_LISTEN_RETRY_MS = 1_000;
+const MAX_LISTEN_RETRY_MS = 30_000;
+// How long a listener may keep failing before the runner stops retrying in place
+// and escalates to the lifecycle owner (which can re-auth). Bounding this by a
+// RETRY COUNT instead made it ~31s of wall clock — shorter than any laptop sleep
+// or network move, after which the host never re-subscribed (#2633).
+export const LISTEN_RETRY_WINDOW_MS = 5 * 60_000;
+
+// The outage is measured from its first failure, not from the last attempt: a
+// backoff ladder that keeps failing must not extend its own deadline.
+export const shouldGiveUpListening = (downSinceMs: number, now: number, windowMs: number = LISTEN_RETRY_WINDOW_MS): boolean => now - downSinceMs >= windowMs;
+
+// Exponential backoff, capped: attempt 0 → 1s, 1 → 2s, … saturating at 30s.
+export const backoffDelayMs = (attempt: number): number => Math.min(MAX_LISTEN_RETRY_MS, BASE_LISTEN_RETRY_MS * 2 ** attempt);
 
 export interface HostEvent {
   phase: "received" | "done" | "error";
@@ -46,6 +94,12 @@ export interface HostRunnerOptions {
   onExpire?: (command: Command, uid: string) => void | Promise<void>;
   // Presence heartbeat interval; defaults to one minute.
   heartbeatMs?: number;
+  // Paths in a handler's reply where `undefined` is expected rather than a bug,
+  // keyed by method name — `{ listSessions: ["sessions.*.work"] }`, `*` matching
+  // exactly one segment. Firestore refuses `undefined` either way, so these are
+  // still stripped; declaring them only silences the report, which is what keeps
+  // it worth reading (#2634).
+  expectedUndefined?: Record<string, readonly string[]>;
 }
 
 interface Claim {
@@ -71,10 +125,31 @@ const claimCommand = (firestore: Firestore, ref: DocumentReference): Promise<Cla
     return { method: data.method, params: data.params ?? {} };
   });
 
-const runHandler = async (ref: DocumentReference, claim: Claim, handler: CommandHandler): Promise<HostEvent> => {
+// Own-property lookup: a bare `handlers[method]` with a method name written by a
+// remote terminal resolves `constructor` / `toString` to an Object.prototype
+// function, which is truthy and slips past the unknown-method check (#2319).
+export const resolveCommandHandler = (handlers: CommandHandlers, method: string): CommandHandler | undefined =>
+  Object.hasOwn(handlers, method) ? handlers[method] : undefined;
+
+// Firestore refuses a write containing `undefined` at any depth, so one stray
+// value would cost the whole reply — `status: "done"` never lands and the remote
+// waits out its timeout. Strip instead, and name the paths: Firestore's own error
+// points at the document, never at the field, which is where the debugging time
+// goes. Paths the caller declared as legitimately-optional are stripped silently.
+const reportStripped = (dropped: string[], claim: Claim, options: HostRunnerOptions): void => {
+  if (dropped.length === 0) return;
+  const paths = dropped.map((path) => `result.${path}`).join(", ");
+  options.onEvent?.({ phase: "error", method: claim.method, message: `undefined dropped at ${paths} — Firestore would have refused the whole reply` });
+};
+
+const runHandler = async (ref: DocumentReference, claim: Claim, handler: CommandHandler, options: HostRunnerOptions): Promise<HostEvent> => {
   try {
-    const result = await handler(claim.params);
-    await updateDoc(ref, { status: "done", result: result ?? null, updatedAt: serverTimestamp() });
+    const returned = await handler(claim.params);
+    const dropped = undefinedPaths(returned);
+    reportStripped(unexpectedPaths(dropped, options.expectedUndefined?.[claim.method]), claim, options);
+    // The walk above already answered "is there anything to strip", so a clean
+    // reply — every reply, normally — is written without copying it first.
+    await updateDoc(ref, { status: "done", result: dropped.length === 0 ? returned : stripUndefined(returned), updatedAt: serverTimestamp() });
     return { phase: "done", method: claim.method };
   } catch (error) {
     const message = errorMessage(error);
@@ -125,13 +200,147 @@ const processCommand = async (ctx: RunnerContext, ref: DocumentReference, comman
     return;
   }
   options.onEvent?.({ phase: "received", method: claim.method });
-  const handler: CommandHandler | undefined = handlers[claim.method];
+  const handler = resolveCommandHandler(handlers, claim.method);
   if (!handler) {
     await writeError(ref, "unknown_method", `No handler for method: ${claim.method}`);
     options.onEvent?.({ phase: "error", method: claim.method, message: "unknown method" });
     return;
   }
-  options.onEvent?.(await runHandler(ref, claim, handler));
+  options.onEvent?.(await runHandler(ref, claim, handler, options));
+};
+
+// A resilient command listener: its mutable retry state plus the fixed collaborators.
+interface ListenerRun {
+  queuedCommands: Query;
+  ctx: RunnerContext;
+  goOffline: () => void;
+  stopped: boolean;
+  unsubscribe: () => void;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  attempt: number;
+  // Start of the current outage, or null while healthy. `attempt` still drives the
+  // backoff ladder; only the give-up decision reads the clock.
+  downSinceMs: number | null;
+}
+
+// Best-effort oldest-first DISPATCH only — commands run concurrently and may
+// finish out of order (chat is asynchronous). We sort in memory rather than
+// orderBy("createdAt") because a Firestore orderBy silently EXCLUDES docs missing
+// the field, dropping every pre-offline-queue command.
+const dispatchAddedCommands = (ctx: RunnerContext, snapshot: QuerySnapshot): void => {
+  const now = Date.now();
+  snapshot
+    .docChanges()
+    .filter((change) => change.type === "added")
+    .map((change) => ({ ref: change.doc.ref, command: change.doc.data() as Command }))
+    .sort((left, right) => byCreatedAt(left.command, right.command))
+    .forEach(({ ref, command }) => {
+      processCommand(ctx, ref, command, now).catch(noop);
+    });
+};
+
+// Re-subscribe after a transient error, backing off exponentially.
+function scheduleResubscribe(run: ListenerRun): void {
+  run.retryTimer = setTimeout(() => subscribeCommands(run), backoffDelayMs(run.attempt));
+  run.attempt += 1;
+}
+
+// A Firestore onSnapshot error terminates THIS listener and never recovers on its
+// own. Transient → re-subscribe with bounded backoff (presence stays online);
+// fatal, or failing for longer than the retry window → go offline.
+function handleListenError(run: ListenerRun, error: FirestoreError): void {
+  run.ctx.options.onEvent?.({ phase: "error", method: "listen", message: error.message });
+  if (run.stopped) return;
+  const now = Date.now();
+  run.downSinceMs ??= now;
+  if (classifyListenerError(error) === "fatal" || shouldGiveUpListening(run.downSinceMs, now)) {
+    run.goOffline();
+    return;
+  }
+  scheduleResubscribe(run);
+}
+
+function subscribeCommands(run: ListenerRun): void {
+  run.retryTimer = null;
+  if (run.stopped) return;
+  run.unsubscribe = onSnapshot(
+    run.queuedCommands,
+    (snapshot) => {
+      // A healthy snapshot proves the listener recovered: the ladder and the
+      // outage clock both start fresh for whatever comes next.
+      run.attempt = 0;
+      run.downSinceMs = null;
+      dispatchAddedCommands(run.ctx, snapshot);
+    },
+    (error) => handleListenError(run, error),
+  );
+}
+
+// Subscribe to the queued-command stream; re-subscribe on transient listener
+// errors with bounded backoff, go offline on a fatal one. Returns a stop that
+// cancels any pending retry and detaches the listener.
+const listenForCommands = (queuedCommands: Query, ctx: RunnerContext, goOffline: () => void): (() => void) => {
+  const run: ListenerRun = { queuedCommands, ctx, goOffline, stopped: false, unsubscribe: noop, retryTimer: null, attempt: 0, downSinceMs: null };
+  subscribeCommands(run);
+  return () => {
+    run.stopped = true;
+    if (run.retryTimer) clearTimeout(run.retryTimer);
+    run.unsubscribe();
+  };
+};
+
+// One running host, as far as shutting it down is concerned. `closed` guards the
+// teardown: a presence failure and a fatal listener error can arrive together, and
+// each of them ends the runner.
+interface HostRun {
+  beat: ReturnType<typeof setInterval> | null;
+  stopListening: () => void;
+  closed: boolean;
+}
+
+const heartbeatMs = (options: HostRunnerOptions): number => options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+
+// How old an acknowledged presence write may be before this runner stops claiming
+// to be online. Exported because a host that judges the same freshness from the
+// OUTSIDE (a probe reading the doc back) has to apply the runner's threshold, not
+// a second copy of it — pass that host's own runner options and the two cannot
+// drift when `heartbeatMs` is customised.
+export const presenceStaleAfterMs = (options: HostRunnerOptions = {}): number => heartbeatMs(options) * PRESENCE_STALE_BEATS;
+
+// Advertise online/offline + the capability set (method names + protocol version)
+// on the same doc the remote already listens to for presence, and watch whether
+// those writes are landing — see presenceBeat.ts for why the sensor is the age of
+// the last acknowledgement rather than a count of failures.
+const buildPresenceBeat = (
+  firestore: Firestore,
+  channel: Channel,
+  handlers: CommandHandlers,
+  options: HostRunnerOptions,
+  onStale: () => void,
+): PresenceBeat => {
+  const presence = hostDoc(firestore, channel);
+  const report = (message: string) => options.onEvent?.({ phase: "error", method: "presence", message });
+  return createPresenceBeat({
+    write: (online) => setDoc(presence, { ...buildHostPresence(channel, handlers, online), updatedAt: serverTimestamp() }),
+    onError: (message) => report(`presence write failed: ${message}`),
+    onStale: (silentMs) => {
+      report(`no presence write acknowledged for ${Math.round(silentMs / 1_000)}s — the remote cannot see this host`);
+      onStale();
+    },
+    staleAfterMs: presenceStaleAfterMs(options),
+  });
+};
+
+// Stop beating, say goodbye, detach the listener. Announcing offline is
+// best-effort — if the channel is the thing that broke, this write goes nowhere,
+// which is exactly why the remote judges presence by age rather than by the flag.
+const shutDown = (run: HostRun, presence: PresenceBeat): void => {
+  if (run.closed) return;
+  run.closed = true;
+  if (run.beat) clearInterval(run.beat);
+  run.beat = null;
+  presence.announce(false);
+  run.stopListening();
 };
 
 // startHostRunner subscribes to queued commands for the given channel and runs
@@ -139,53 +348,23 @@ const processCommand = async (ctx: RunnerContext, ref: DocumentReference, comman
 // heartbeat on users/{uid}/hosts/{hostId}) so the remote can tell it is online.
 // Returns a stop function that goes offline and detaches the listener.
 export const startHostRunner = (firestore: Firestore, channel: Channel, handlers: CommandHandlers, options: HostRunnerOptions = {}): (() => void) => {
-  const presence = hostDoc(firestore, channel);
-  // Advertise online/offline + the capability set (method names + protocol
-  // version) on the same doc the remote already listens to for presence.
-  const writePresence = (online: boolean) => setDoc(presence, { ...buildHostPresence(channel, handlers, online), updatedAt: serverTimestamp() }).catch(noop);
-  const announce = () => {
-    writePresence(true);
-  };
-  announce();
-  const beat = setInterval(announce, options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS);
+  const run: HostRun = { beat: null, stopListening: noop, closed: false };
+  const presence = buildPresenceBeat(firestore, channel, handlers, options, goOffline);
+
+  // The channel is gone and re-subscribing is not going to bring it back: hand
+  // over to the lifecycle owner, which can re-auth and start a fresh runner.
+  function goOffline(): void {
+    if (run.closed) return;
+    shutDown(run, presence);
+    options.onClosed?.();
+  }
+
+  presence.announce(true);
+  run.beat = setInterval(presence.beat, heartbeatMs(options));
 
   const queuedCommands = query(commandsCollection(firestore, channel), where("status", "==", "queued"));
   const ctx: RunnerContext = { firestore, handlers, options, uid: channel.uid };
-  const unsubscribe = onSnapshot(
-    queuedCommands,
-    (snapshot) => {
-      const now = Date.now();
-      // Best-effort oldest-first DISPATCH only. Commands are processed
-      // concurrently (not awaited in turn) and out-of-order completion is fine by
-      // design — chat is asynchronous — so this sort just biases which command
-      // starts first; it is not an ordering guarantee. We still sort in memory
-      // rather than orderBy("createdAt") on the query because a Firestore orderBy
-      // silently EXCLUDES docs missing the field — which would drop every
-      // pre-offline-queue command (no createdAt) from the queue entirely.
-      const added = snapshot
-        .docChanges()
-        .filter((change) => change.type === "added")
-        .map((change) => ({ ref: change.doc.ref, command: change.doc.data() as Command }))
-        .sort((left, right) => byCreatedAt(left.command, right.command));
-      added.forEach(({ ref, command }) => {
-        processCommand(ctx, ref, command, now).catch(noop);
-      });
-    },
-    (error) => {
-      options.onEvent?.({ phase: "error", method: "listen", message: error.message });
-      // A Firestore onSnapshot error terminates the listener and it does not
-      // recover on its own. Stop advertising presence (clear the heartbeat +
-      // write online:false) so remotes see the host as offline instead of a
-      // live host that silently consumes no commands.
-      clearInterval(beat);
-      writePresence(false);
-      options.onClosed?.();
-    },
-  );
+  run.stopListening = listenForCommands(queuedCommands, ctx, goOffline);
 
-  return () => {
-    clearInterval(beat);
-    writePresence(false);
-    unsubscribe();
-  };
+  return () => shutDown(run, presence);
 };

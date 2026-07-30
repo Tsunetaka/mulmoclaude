@@ -17,8 +17,6 @@ const presentCollectionPlugin: ToolPlugin<PresentCollectionData, PresentCollecti
   viewComponent: wrapWithScope("presentCollection", PresentCollectionView),
   previewComponent: wrapWithScope("presentCollection", PresentCollectionPreview),
 };
-
-export default presentCollectionPlugin;
 export { TOOL_NAME };
 
 export const REGISTRATION: PluginRegistration = {

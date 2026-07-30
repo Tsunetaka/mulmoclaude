@@ -4,7 +4,7 @@
 // (CSP + postMessage bootstrap — @mulmoclaude/core/remote-view), and enforce
 // the 1 MiB command-document budget. Shared by the `getRemoteView` channel
 // handler and the desktop preview's HTTP route so both serve the IDENTICAL
-// artifact (plans/feat-remote-custom-view.md, decision 2).
+// artifact (plans/done/feat-remote-custom-view.md, decision 2).
 //
 // Discriminated result (not throw) so the HTTP route can map each failure to
 // its status; the channel handler converts non-ok to a thrown error via
@@ -23,19 +23,34 @@ import {
 } from "@mulmoclaude/core/remote-view";
 import { enrichItems } from "@mulmoclaude/core/collection/server";
 import {
-  deleteItem,
-  listItems,
   readCustomViewHtml,
   readCustomViewI18n,
-  readItem,
   safeRecordId,
-  writeItem,
+  storeFor,
   type CollectionCustomView,
   type CollectionItem,
   type CollectionSchema,
+  type CollectionStore,
   type LoadedCollection,
 } from "./index.js";
 import { resolveThumbnail } from "../../utils/files/thumbnail-store.js";
+
+/** Shared head of every remote-view operation. Its non-ok members are shaped to
+ *  be assignable to all three public result types below, so a caller can return
+ *  a refusal straight through without re-mapping it. */
+export type ResolveMobileViewResult =
+  { kind: "ok"; view: CollectionCustomView } | { kind: "view-not-found"; viewId: string } | { kind: "not-mobile"; viewId: string };
+
+/** Look up a declared view and refuse it unless it targets mobile. EVERY remote
+ *  entry point resolves its view through here, so the guard cannot be forgotten
+ *  by a new one: a desktop view's HTML assumes the token/dataUrl contract and
+ *  would just break on the phone — refuse it instead of serving a broken page. */
+export function resolveMobileView(collection: LoadedCollection, viewId: string): ResolveMobileViewResult {
+  const view = (collection.schema.views ?? []).find((entry) => entry.id === viewId);
+  if (!view) return { kind: "view-not-found", viewId };
+  if (view.target !== "mobile") return { kind: "not-mobile", viewId };
+  return { kind: "ok", view };
+}
 
 export interface RemoteViewInfo {
   id: string;
@@ -59,11 +74,9 @@ export interface BuildRemoteViewDeps {
 export const createBuildRemoteView =
   (deps: BuildRemoteViewDeps) =>
   async (collection: LoadedCollection, viewId: string, locale: string): Promise<RemoteViewBuildResult> => {
-    const view = (collection.schema.views ?? []).find((entry) => entry.id === viewId);
-    if (!view) return { kind: "view-not-found", viewId };
-    // A desktop view's HTML assumes the token/dataUrl contract and would just
-    // break on the phone — refuse it instead of serving a broken page.
-    if (view.target !== "mobile") return { kind: "not-mobile", viewId };
+    const resolved = resolveMobileView(collection, viewId);
+    if (resolved.kind !== "ok") return resolved;
+    const { view } = resolved;
     const html = await deps.readCustomViewHtml(collection, view.file);
     if (html === null) return { kind: "file-missing", file: view.file };
     const i18n = view.i18n ? await deps.readCustomViewI18n(collection, view.i18n, locale) : { locale: "", dict: {} };
@@ -87,7 +100,7 @@ export function remoteViewFailureMessage(result: Exclude<RemoteViewBuildResult, 
   return `mobile view srcdoc is ${result.bytes} bytes — over the ${REMOTE_VIEW_MAX_BYTES}-byte command-channel budget; slim the HTML`;
 }
 
-// ── Mutate (phase 4 — plans/feat-remote-writable-view.md) ──
+// ── Mutate (phase 4 — plans/done/feat-remote-writable-view.md) ──
 // A `target: "mobile"` view's update/delete, authorized by its OWN declared
 // surface (editableFields / allowDelete) and enforced HOST-side — the client is
 // never trusted. Shared by the `mutateRemoteViewItem` channel handler (phone)
@@ -108,6 +121,7 @@ export type MutateRemoteViewResult =
   | { kind: "view-not-found"; viewId: string }
   | { kind: "not-mobile"; viewId: string }
   | { kind: "not-writable"; viewId: string }
+  | { kind: "read-only-collection" }
   | { kind: "field-not-editable"; field: string }
   | { kind: "delete-not-allowed" }
   | { kind: "invalid-patch" }
@@ -116,9 +130,7 @@ export type MutateRemoteViewResult =
   | { kind: "path-escape" };
 
 export interface MutateRemoteViewDeps {
-  readItem: typeof readItem;
-  writeItem: typeof writeItem;
-  deleteItem: typeof deleteItem;
+  storeFor: (collection: LoadedCollection) => CollectionStore;
   enrichItems: typeof enrichItems;
   resolveThumbnail: typeof resolveThumbnail;
 }
@@ -126,16 +138,21 @@ export interface MutateRemoteViewDeps {
 export const createMutateRemoteView =
   (deps: MutateRemoteViewDeps) =>
   async (collection: LoadedCollection, viewId: string, request: RemoteViewMutateRequest): Promise<MutateRemoteViewResult> => {
-    const view = (collection.schema.views ?? []).find((entry) => entry.id === viewId);
-    if (!view) return { kind: "view-not-found", viewId };
-    if (view.target !== "mobile") return { kind: "not-mobile", viewId };
+    const resolved = resolveMobileView(collection, viewId);
+    if (resolved.kind !== "ok") return resolved;
+    const { view } = resolved;
+    // A dataSource collection is read-only regardless of what write surface
+    // the view declares — the collection-level rule outranks the view's. The
+    // store encodes it as absent write/delete methods.
+    const store = deps.storeFor(collection);
+    if (!store.write || !store.delete) return { kind: "read-only-collection" };
     if (!isWritableView(view)) return { kind: "not-writable", viewId };
-    return request.op === "delete" ? deleteViaView(deps, collection, view.allowDelete === true, request.id) : updateViaView(deps, collection, view, request);
+    return request.op === "delete" ? deleteViaView(store.delete, view.allowDelete === true, request.id) : updateViaView(deps, store, collection, view, request);
   };
 
-async function deleteViaView(deps: MutateRemoteViewDeps, collection: LoadedCollection, allowDelete: boolean, itemId: string): Promise<MutateRemoteViewResult> {
+async function deleteViaView(remove: NonNullable<CollectionStore["delete"]>, allowDelete: boolean, itemId: string): Promise<MutateRemoteViewResult> {
   if (!allowDelete) return { kind: "delete-not-allowed" };
-  const result = await deps.deleteItem(collection.dataDir, itemId, { slug: collection.slug });
+  const result = await remove(itemId);
   if (result.kind === "invalid-id") return { kind: "invalid-id", id: result.itemId };
   if (result.kind === "path-escape") return { kind: "path-escape" };
   if (result.kind === "not-found") return { kind: "item-not-found", id: result.itemId };
@@ -144,10 +161,13 @@ async function deleteViaView(deps: MutateRemoteViewDeps, collection: LoadedColle
 
 async function updateViaView(
   deps: MutateRemoteViewDeps,
+  store: CollectionStore,
   collection: LoadedCollection,
   view: CollectionCustomView,
   request: Extract<RemoteViewMutateRequest, { op: "update" }>,
 ): Promise<MutateRemoteViewResult> {
+  const { write } = store;
+  if (!write) return { kind: "read-only-collection" }; // unreachable: caller guards presence
   const { primaryKey } = collection.schema;
   const patchKeys = Object.keys(request.patch);
   if (patchKeys.length === 0) return { kind: "invalid-patch" };
@@ -156,17 +176,17 @@ async function updateViaView(
   // desync the file name from the record) even if an author listed it.
   const offending = patchKeys.find((key) => key === primaryKey || !allowed.has(key));
   if (offending) return { kind: "field-not-editable", field: offending };
-  // Classify a bad id BEFORE readItem — which returns null for an unsafe id, a
-  // path-escape, AND a genuinely-missing record alike — so update reports the
-  // same explicit `invalid-id` the delete path does (via deleteItem) instead of
-  // masking it as a 404. (A valid id whose dataDir escapes the workspace can
-  // hold no record, so it still resolves to item-not-found; a real write is
-  // additionally refused by writeItem's own containment guard below.)
+  // Classify a bad id BEFORE the store read — which returns null for an unsafe
+  // id, a path-escape, AND a genuinely-missing record alike — so update reports
+  // the same explicit `invalid-id` the delete path does (via `store.delete`)
+  // instead of masking it as a 404. (A valid id whose data location escapes the
+  // workspace can hold no record, so it still resolves to item-not-found; a
+  // real write is additionally refused by the store's own containment guard.)
   if (safeRecordId(request.id) === null) return { kind: "invalid-id", id: request.id };
-  const existing = await deps.readItem(collection.dataDir, request.id, { slug: collection.slug });
+  const existing = await store.read(request.id);
   if (!existing) return { kind: "item-not-found", id: request.id };
   const merged: CollectionItem = { ...existing, ...request.patch, [primaryKey]: request.id };
-  const result = await deps.writeItem(collection.dataDir, request.id, merged, { slug: collection.slug });
+  const result = await write(request.id, merged);
   if (result.kind === "invalid-id") return { kind: "invalid-id", id: result.itemId };
   if (result.kind === "path-escape") return { kind: "path-escape" };
   if (result.kind === "conflict") return { kind: "item-not-found", id: result.itemId }; // unreachable: refuseOverwrite is false
@@ -196,9 +216,9 @@ async function updateViaView(
   return { kind: "ok", op: "update", item: item as CollectionItem };
 }
 
-export const mutateRemoteView = createMutateRemoteView({ readItem, writeItem, deleteItem, enrichItems, resolveThumbnail });
+export const mutateRemoteView = createMutateRemoteView({ storeFor, enrichItems, resolveThumbnail });
 
-// ── Item pages with inlined image thumbnails (phase 5 — plans/feat-remote-view-images.md) ──
+// ── Item pages with inlined image thumbnails (phase 5 — plans/done/feat-remote-view-images.md) ──
 // A mobile view's `getItems`, view-aware so it can inline the `imageFields` its
 // declaration whitelists: derive computed fields → slice/project (the phase-2
 // page semantics) → replace each declared image-type field's workspace path with
@@ -213,7 +233,9 @@ export type RemoteViewItemsResult =
   | { kind: "too-large"; bytes: number };
 
 export interface RemoteViewItemsDeps {
-  listItems: typeof listItems;
+  /** Load every record of the collection — store-aware (file records or a
+   *  `dataSource` CSV's rows), unlike a raw dataDir `listItems`. */
+  listRecords: (collection: LoadedCollection) => Promise<CollectionItem[]>;
   enrichItems: typeof enrichItems;
   resolveThumbnail: typeof resolveThumbnail;
 }
@@ -263,15 +285,15 @@ async function inlineImages(
 export const createRemoteViewItems =
   (deps: RemoteViewItemsDeps) =>
   async (collection: LoadedCollection, viewId: string, request: RemoteViewPageRequest): Promise<RemoteViewItemsResult> => {
-    const view = (collection.schema.views ?? []).find((entry) => entry.id === viewId);
-    if (!view) return { kind: "view-not-found", viewId };
-    if (view.target !== "mobile") return { kind: "not-mobile", viewId };
+    const resolved = resolveMobileView(collection, viewId);
+    if (resolved.kind !== "ok") return resolved;
+    const { view } = resolved;
     // Hydrate through the SAME server resolver the desktop `dataUrl` route uses
     // (manageCollection.getItems → enrichItems): ref targets loaded once, derived
     // formulas evaluated with a full ref cache (`ticker.price`, `shares * ticker.price`
     // resolve), toggles projected, embeds resolved. The phone gets plain resolved
     // scalars — no network, no dataUrl — so mobile numbers match desktop exactly.
-    const items = await deps.listItems(collection.dataDir);
+    const items = await deps.listRecords(collection);
     const derived = (await deps.enrichItems(collection, items)) as RemoteViewItem[];
     const page = pageFromItems(derived, request, collection.schema.primaryKey);
     // Resolving an `embed` column attaches a whole target record per row, so the
@@ -289,7 +311,7 @@ export const createRemoteViewItems =
     return { kind: "ok", page, inlined, omitted };
   };
 
-export const remoteViewItems = createRemoteViewItems({ listItems, enrichItems, resolveThumbnail });
+export const remoteViewItems = createRemoteViewItems({ listRecords: (collection) => storeFor(collection).list(), enrichItems, resolveThumbnail });
 
 /** Message per non-ok item-page kind — shared by the channel handler (throws)
  *  and the HTTP route (sends with the matching status). */
@@ -307,6 +329,8 @@ export function mutateRemoteViewFailureMessage(result: Exclude<MutateRemoteViewR
   if (result.kind === "not-mobile") return `custom view '${result.viewId}' is not a mobile view — declare target: "mobile" in its views[] entry`;
   if (result.kind === "not-writable")
     return `mobile view '${result.viewId}' is read-only — declare editableFields and/or allowDelete in its views[] entry to allow writes`;
+  if (result.kind === "read-only-collection")
+    return `collection '${slug}' is read-only (backed by an external dataSource) — update the data file itself instead`;
   if (result.kind === "field-not-editable")
     return `field '${result.field}' is not editable from this view — add it to the view's editableFields (the primary key is never editable)`;
   if (result.kind === "delete-not-allowed") return `this view may not delete records — set allowDelete: true in its views[] entry`;

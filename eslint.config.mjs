@@ -10,6 +10,29 @@ import vuePlugin from "eslint-plugin-vue";
 import vueParser from "vue-eslint-parser";
 import vueI18n from "@intlify/eslint-plugin-vue-i18n";
 
+// sonarjs ships type-aware rules of its own. They sit dormant without a
+// TypeScript program, so enabling `projectService` below wakes them — at the
+// `error` severity sonarjs's preset sets, on code they had never linted before.
+//
+// Derived from the plugin's own `requiresTypeChecking` metadata rather than a
+// hand-listed set, so a sonarjs upgrade that adds type-aware rules can't
+// silently start failing CI. Intersected with what `recommended` actually turns
+// on: 14 of the 70 type-aware rules are `off` there, and naming them here would
+// ENABLE them rather than downgrade them (`strings-comparison` alone adds 32
+// findings that way). This set is exactly what `projectService` wakes — every
+// rule in it is dormant today, so it weakens no gate that currently runs.
+const sonarRecommendedRules = sonarjs.configs.recommended?.rules ?? {};
+const isEnabled = (level) => {
+  const severity = Array.isArray(level) ? level[0] : level;
+  return severity !== undefined && severity !== "off" && severity !== 0;
+};
+
+const sonarTypeAwareRulesAsWarn = Object.fromEntries(
+  Object.entries(sonarjs.rules ?? {})
+    .filter(([name, rule]) => rule?.meta?.docs?.requiresTypeChecking && isEnabled(sonarRecommendedRules[`sonarjs/${name}`]))
+    .map(([name]) => [`sonarjs/${name}`, "warn"]),
+);
+
 export default [
   {
     files: ["{src,test}/**/*.{js,ts,yaml,yml,vue}", "assets/html/js/**/*.js"],
@@ -469,6 +492,125 @@ export default [
           ],
         },
       ],
+    },
+  },
+  // Storage-virtualization seam (plans/done/refactor-storage-virtualization.md):
+  // host + plugin code must read collection records through `storeFor(...)`
+  // (the CollectionStore seam), never through the raw io readers — a direct
+  // `listItems` / `readItem` import silently bypasses whatever storage
+  // backend the collection actually has. Core's own internals import io
+  // relatively, so restricting the package specifier leaves them free.
+  // `src/plugins/` is excluded: the plugin-boundary block above configures
+  // the SAME rule for those files, and flat-config rule configs replace
+  // (not merge) — those files can't reach server-only core anyway.
+  {
+    files: ["server/**/*.ts", "src/**/*.ts", "packages/plugins/**/*.ts"],
+    ignores: ["src/plugins/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@mulmoclaude/core/collection/server",
+              importNames: ["listItems", "readItem", "writeItem", "deleteItem"],
+              message:
+                "Access records through `storeFor(collection)` — `.list()`/`.page()`/`.read()`, and `.write()`/`.delete()` (present only on writable stores). The raw io functions bypass the storage seam (plans/done/refactor-storage-virtualization.md).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  // Type-aware pass. `projectService` builds the TypeScript program so rules can
+  // reason about real types; that program is the whole cost (measured: five
+  // rules cost the same as all 44), and it runs the full scope in ~26s over the
+  // untyped pass.
+  //
+  // Only rules that earn that cost are on. The rest of `strictTypeChecked` was
+  // measured across the repo and is dominated by style — `restrict-template-
+  // expressions` alone accounts for 439 of its 1213 findings — which would bury
+  // the two things type information is actually needed for here:
+  //
+  //   1. the `any` that `no-explicit-any` structurally cannot see (values from
+  //      untyped libraries, `JSON.parse()`, `as unknown as T` double casts)
+  //   2. mistakes no syntactic rule can catch at all (a dropped `await`, an
+  //      async callback handed to a sync-only API, an object stringified into
+  //      "[object Object]")
+  //
+  // Scoped to source: tests / e2e stay on the untyped pass to keep the program
+  // small. Everything is `warn` per docs/lint-policy.md — a backlog to drain,
+  // not a gate — so this can never fail CI on its own.
+  {
+    files: ["server/**/*.ts", "src/**/*.ts", "packages/**/src/**/*.ts"],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: {
+      // (1) `any` that survives no-explicit-any.
+      "@typescript-eslint/no-unsafe-assignment": "warn",
+      "@typescript-eslint/no-unsafe-member-access": "warn",
+      "@typescript-eslint/no-unsafe-argument": "warn",
+      "@typescript-eslint/no-unsafe-call": "warn",
+      "@typescript-eslint/no-unsafe-return": "warn",
+      // Zero findings today — on to keep it that way.
+      "@typescript-eslint/no-unsafe-enum-comparison": "warn",
+      "@typescript-eslint/no-unsafe-declaration-merging": "warn",
+      // (2) Bugs only the type checker can see.
+      // Drained to zero and ratcheted, same as the promise rules above. Every
+      // remaining `String(x)` on a possibly-object value is either a real read
+      // (now going through a typed helper) or a last-resort fallback carrying an
+      // audited eslint-disable with its reason. A new one is a regression, not a
+      // warning to file behind 168 others.
+      "@typescript-eslint/no-base-to-string": "error",
+      // Drained to zero and ratcheted to `error` per docs/lint-policy.md — a
+      // dropped `await` or an async callback handed to a sync-only API is a
+      // real bug, and the backlog for these three is empty, so there is nothing
+      // to grandfather. Re-introducing one now fails CI instead of joining a
+      // warning list nobody reads.
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-misused-promises": "error",
+      "@typescript-eslint/await-thenable": "error",
+      // Same backlog treatment for the sonarjs rules this block wakes.
+      ...sonarTypeAwareRulesAsWarn,
+
+      // Three of those woken rules are off entirely rather than warned. Each
+      // was checked against all of its findings in this repo, and none of them
+      // pointed at a bug — the first would have introduced one.
+      //
+      // `no-alphabetical-sort` wants `localeCompare` on every bare `.sort()`.
+      // Its real target is `[10, 9, 1].sort()` returning `[1, 10, 9]`; this
+      // repo has no numeric sort like that. What it flags instead is sorting
+      // that must stay locale-INDEPENDENT: the Twilio request signature
+      // (`Object.keys(params).sort()`, where the server recomputes the same
+      // order to verify), frontmatter keys, record ids, ISO-dated filenames.
+      // `localeCompare` varies with ICU data and locale, so following the rule
+      // makes those non-deterministic — a broken signature, not a fixed sort.
+      "sonarjs/no-alphabetical-sort": "off",
+      // `prefer-regexp-exec` prefers `re.exec(str)` over `str.match(re)` for a
+      // marginal speed win on non-global patterns. It inverts subject and
+      // pattern at every call site — `url.match(/status\/(\d+)/)` reads as "does
+      // this url match", `/status\/(\d+)/.exec(url)` reads pattern-first — for
+      // no correctness difference.
+      "sonarjs/prefer-regexp-exec": "off",
+      // `no-misleading-array-reverse` catches in-place `.sort()`/`.reverse()` on
+      // an array someone else still holds. Every finding here mutates an array
+      // the same function just built (`picked`, `removed`, `missing`) or a fresh
+      // `readdir` result — nothing is shared, so there is no one to surprise.
+      "sonarjs/no-misleading-array-reverse": "off",
+      // `different-types-comparison` calls a comparison redundant when the types
+      // say it cannot vary. All 17 of its findings here guard a value that IS
+      // `undefined`/`null` at runtime and only looks impossible to the checker:
+      //   - `record[key] !== undefined` — `noUncheckedIndexedAccess` is off (it
+      //     is not part of `strict`), so an index read is typed as the value
+      //     type while returning undefined for a missing key.
+      //   - `JSON.stringify(v) === undefined` — the lib types say `string`, but
+      //     it does return undefined for undefined/function/symbol input.
+      //   - `headers.get(name) !== SECRET` — `get()` returns null when absent.
+      // Deleting these would strip real guards; the Telegram one is a webhook
+      // secret check, and the JSON one is followed by `.length`. The rule's
+      // premise only holds once `noUncheckedIndexedAccess` is on — revisit then.
+      "sonarjs/different-types-comparison": "off",
     },
   },
   eslintConfigPrettier,

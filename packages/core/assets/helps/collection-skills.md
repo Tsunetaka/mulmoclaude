@@ -31,7 +31,7 @@ data/skills/<slug>/            ← YOU write here (Write / Edit)
   SKILL.md  ·  schema.json  ·  templates/*.md
 
 data/<name>/items/             ← the records (separate from the skill dir)
-  <id>.json         ← one record per file (you write; host reads + renders)
+  <id>.json         ← one record per file (write via manageCollection putItems)
 ```
 
 - **Author under `data/skills/<slug>/`, NEVER `.claude/skills/<slug>/`
@@ -43,7 +43,8 @@ data/<name>/items/             ← the records (separate from the skill dir)
   without a restart. (Other files you drop in `data/skills/<slug>/` — a README,
   scratch notes — stay put and are NOT mirrored.)
 - **To CHANGE an existing collection's schema, use `manageCollection` — not raw
-  file edits.** Call `schemaDocs` for this very reference, `getSchema` to read
+  file edits.** Call `schemaDocs` for this very reference (sectioned: pass a
+  heading as `topic`, e.g. `topic: "field types"`), `getSchema` to read
   the current `schema.json` (you don't need to know its path), then `putSchema`
   to write it back. `putSchema` validates the whole schema against the same rules
   discovery enforces and reports the exact problem, where a hand-edit can
@@ -126,13 +127,15 @@ skipped, never crashes the host):
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `title`                | Human name shown in the sidebar / header. Required.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `icon`                 | A **Material Symbols** name (`receipt_long`, `people`, `schedule`, `menu_book`). Required.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `dataPath`             | Workspace-relative records folder, e.g. `data/recipes/items`. Must stay under the workspace. Required.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `dataPath`             | Workspace-relative records folder, e.g. `data/recipes/items`. Must stay under the workspace. Required — unless `dataSource` is set (declare exactly ONE of the two).                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `dataSource`           | Optional. `{ "type": "csv", "path": "data/students.csv" }` — the records ARE the rows of an external data file (workspace-relative, containment-checked like `dataPath`). Makes the collection **read-only** in every UI/tool write path; see "External data (CSV) collections" below. Mutually exclusive with `dataPath`, `singleton`, `ingest`, `spawn`, and `mutate` actions.                                                                                                                                                                                                     |
+| `storage`              | Optional. `{ "type": "sqlite", "path": "data/<name>.db" }` — records live in a single SQLite database file instead of per-record JSON files; the collection stays **writable** and behaves identically everywhere else. Declare exactly ONE of `dataPath` / `dataSource` / `storage`. Cannot combine with `spawn`, `completionField`, or `triggerField` (v1). See "Alternative storage (sqlite)" below.                                                                                                                                                            |
 | `primaryKey`           | The field name whose value is the filename. That field MUST set `primary: true`. The value must be a valid record id (see the **Records** section's id-charset rule). Required.                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `singleton`            | Optional. When set, at most one record exists, pinned to this exact id (e.g. `me`). Host pre-fills + locks the create form and hides Add once it exists.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `fields`               | Ordered map of field-name → field spec. **Insertion order = column order** in the table. Required.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `actions`              | Optional array of per-record buttons (see below).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `completionField`      | Optional. Name of the field whose value marks an item as "done" — when set, item-create fires a bell notification that clears once the field reaches one of `completionDoneValues`. Must name a real field in `fields`. Paired with `completionDoneValues` (both set, or both omitted).                                                                                                                                                                                                                                                                                            |
-| `completionDoneValues` | Optional. Non-empty array of values that count as "done" for `completionField` (e.g. `["Done"]`, `["paid", "void"]`). Compared as strings.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `completionField`      | Optional. Name of the field whose value marks an item as "done" — when set, item-create fires a bell notification that clears once the item reads as done. Must name a real field in `fields`. Two forms: paired with `completionDoneValues` (done ⇔ the field's value is in that array), or naming a **`flag` field** (done ⇔ the flag's `where` matches — `completionDoneValues` must then be omitted).                                                                                                                                                                            |
+| `completionDoneValues` | Optional. Non-empty array of values that count as "done" for `completionField` (e.g. `["Done"]`, `["paid", "void"]`). Compared as strings. Omit when `completionField` names a `flag` field.                                                                                                                                                                                                                                                                                                                                                                                       |
 | `notifyWhen`           | Optional. A `when` predicate (`{ "field": "...", "in": [...] }`) that **gates** the completion bell: fire it only for records matching the predicate (e.g. `{ "field": "priority", "in": ["high", "urgent"] }`). Requires `completionField`; `field` must name a real field. Absent ⇒ notify for every open record.                                                                                                                                                                                                                                                                |
 | `displayField`         | Optional. Name of a field whose value is shown as the human-readable label in the completion notification's title (e.g. `Contacts: Jane Doe` instead of the opaque primaryKey). Must name a real field in `fields`. Falls back to the primaryKey value when unset or when the record's value is empty.                                                                                                                                                                                                                                                                             |
 | `triggerField`         | Optional. Name of a `date` field that **delays** the completion bell until that date arrives (instead of firing on create). Requires `completionField` / `completionDoneValues` (the bell still clears via the done value). Must name a real `date` field. See "Time-gated bells" below.                                                                                                                                                                                                                                                                                           |
@@ -143,12 +146,13 @@ skipped, never crashes the host):
 | `calendarTimeField`    | Optional. Name of a string field holding a free-form time or time-range (`"14:00-17:00"`, `"17:00-"`, `"16:30"`) used to place records on the calendar's **day (time-allocation) view**. Consulted only when the date fields are date-only — a `datetime` anchor/end pair carries its own clock and takes precedence. Requires `calendarField`. See "Calendar view" below.                                                                                                                                                                                                         |
 | `kanbanField`          | Optional. Name of an `enum` field that groups records into columns on the **Kanban board** (one column per declared value). When unset, the Kanban toggle still appears if the schema has any `enum` field — the first one is used, switchable in-view. Set this to pin a specific group field. Must name a real `enum` field. See "Kanban view" below.                                                                                                                                                                                                                            |
 | `views`                | Optional. Custom (LLM-authored) HTML views: `[{ id, label, icon?, file, capabilities?, target? }]`. Each renders an HTML file under `views/*.html` in a sandboxed iframe over the records, for layouts the built-ins don't cover (year/quarter overview, Gantt, report). `capabilities` is `["read"]` (default) or `["read","write"]`. `target: "mobile"` makes it a **remote view** for the phone app (different runtime contract — **`config/helps/custom-view-remote.md`**). See "Custom views" below and **`config/helps/custom-view.md`** for the desktop authoring contract. |
+| `googleCalendar`       | Optional. `{ "calendarId": "primary", "map": { "<field>": "summary" } }` — the host mirrors one of the user's **Google calendars** into this collection on a schedule, **LLM-free**: no tool call, no tokens per sync. Reach for it whenever the user asks for a collection that syncs with Google Calendar — never an `ingest.kind: "agent"` worker or the `google` MCP tools, which spend an LLM turn per refresh doing what the host does for free. Needs `dataPath`. See "Google Calendar sync" below and **`config/helps/google-calendar-collection.md`**.                    |
 
 ### Field types
 
 `string` · `text` (multi-line) · `email` · `number` · `date` (`YYYY-MM-DD`) ·
 `datetime` (`YYYY-MM-DDTHH:MM`) · `boolean` · `markdown` · `money` · `enum` ·
-`ref` · `embed` · `table` · `derived` · `image` · `file` · `toggle`
+`ref` · `embed` · `backlinks` · `rollup` · `table` · `derived` · `image` · `file` · `toggle` · `flag`
 
 Every field spec needs a `type` and a `label`. Extra keys by type:
 
@@ -179,9 +183,53 @@ Every field spec needs a `type` and a `label`. Extra keys by type:
   sibling as a dropdown picker in the editor and hides its own cell (the embed
   owns it). E.g. a multi-issuer invoice: a `ref` field `issuerId → profile`
   plus `{ "type": "embed", "to": "profile", "idField": "issuerId" }`.
+- **`backlinks`** — `from: "<source-slug>"`, `via: "<ref-field-in-source>"`,
+  `display: ["<source-col>", ...]`, optional `filter: { "field": ..., "in": [...] }`.
+  The **reverse** side of a `ref`: a read-only sub-table (detail view only) of
+  the records in `from` whose `via` ref points at this record — each row links
+  to that record. **Nothing is stored** on this record (like `derived`/`embed`);
+  you never write it, and the rows update whenever the source records change.
+  `display` names the source columns to show — a derived source column works
+  when its formula is self-contained (e.g. an invoice `total` summing its own
+  line items), but one that derefs yet another collection renders em-dash;
+  `filter` narrows rows by a source field's value, same shape as `when`. E.g. a
+  client's open invoices:
+  `{ "type": "backlinks", "label": "Invoices", "from": "invoice", "via": "clientId", "display": ["issueDate", "total", "status"], "filter": { "field": "status", "in": ["draft", "sent"] } }`.
+  `via` may name a top-level `ref` column, or a `ref` nested one level inside a
+  `table` field as `"<tableField>.<refColumn>"` (split on the first `.`) — the
+  source record matches when **any row** of that table points at this record,
+  and a record referencing it in several rows still appears once. E.g. a
+  chapter whose `characters` table has a `character` ref column backlinks to
+  each character via `"via": "characters.character"`. Only one level of nesting
+  is supported; `display`/`filter` still read the **source record**, not the row.
+  An exact top-level field name wins over the dotted interpretation, so a field
+  literally named `"a.b"` still resolves as a flat ref column.
+  Resolution is fail-soft: an unknown `from` / `via` / `display` column, or a
+  dotted `via` whose table field is absent, just renders an empty sub-table —
+  no error, so author the `ref` side first.
+- **`rollup`** — `from: "<source-slug>"`, `via: "<ref-field-in-source>"`,
+  `op: "sum" | "count"`, `column: "<source-col>"` (required for `sum`, omitted
+  for `count`), optional `filter` (same shape as `when`, against the source).
+  `via` accepts the same top-level or `"<tableField>.<refColumn>"` nested form
+  as `backlinks` (any matching row counts the source record once).
+  A **cross-collection aggregate**: a computed number — never stored — summed
+  (or counted) over the records in `from` whose `via` ref points at this
+  record. Backlinks show the rows; rollup collapses them to a scalar that
+  renders everywhere a number does (list column included). E.g. a client's
+  unbilled hours:
+  `{ "type": "rollup", "label": "Unbilled hours", "from": "worklog", "via": "clientId", "op": "sum", "column": "hours", "filter": { "field": "billed", "in": ["false"] } }`.
+  Fail-soft: an unresolvable `from` renders em-dash; an empty match set is a
+  real 0. Summing a source `derived` column works when its formula is
+  self-contained; non-numeric values are skipped. A `derived` formula ON THE
+  SAME schema may reference rollup fields as plain identifiers — rollups
+  resolve before the formula pass — e.g. two one-sided counts combined:
+  `"played": { "type": "derived", "formula": "homePlayed + awayPlayed" }`.
+  (Caveat: that works on the collection's own rows; a `<refField>.<col>`
+  deref FROM another collection reads the target without its rollups, so a
+  rollup-fed derived column is em-dash when viewed through a ref.)
 - **`table`** — `of: { <col>: <sub-field-spec>, ... }`. An array of rows. Each
-  sub-field is a flat spec; sub-fields **cannot** be `table` or `derived`
-  (no nested tables, no computed columns).
+  sub-field is a flat spec; sub-fields **cannot** be `table`, `derived`,
+  `backlinks`, or `rollup` (no nested tables, no computed columns).
 - **`derived`** — `formula: "<expr>"`, optional `display` (`number` default, or
   `money` / `string` / `date`) and `currency`. **Read-only, host-computed** —
   you NEVER write derived values into the JSON; the host recomputes them on
@@ -194,6 +242,9 @@ Every field spec needs a `type` and a `label`. Extra keys by type:
   collection). No extra keys. Great for photos like a business card: read the
   details off the attached image and write its path into the image field.
   Write the bare workspace-relative path — never an `/api/files/raw?...` URL.
+  A **custom view** renders these via `GET <dataUrl>/image` (see
+  `config/helps/custom-view.md` "Displaying images"; remote views declare
+  `imageFields` instead) — never by base64-embedding them into the view HTML.
 - **`file`** — stores a **workspace-relative file path** as a plain string (e.g.
   `artifacts/html/the-solar-system-1777158558023.html`). Rendered as a
   **clickable link** in both the list table and the detail view (unlike `image`,
@@ -216,6 +267,20 @@ Every field spec needs a `type` and a `label`. Extra keys by type:
   "done" checkbox. Without it, `status` only shows as a dropdown and a kanban
   column, with no checkbox to tick. `offValue` is the status to return to on
   uncheck (the default open column, e.g. `"Todo"`).
+- **`flag`** — `where: [<conditions>]`. A **computed boolean**: true when the
+  record matches every condition (AND). **Never stored** (like `derived`); the
+  host recomputes it on every read, so you NEVER write flag values into the
+  JSON. Each condition is `{ "field": "<field>", "op": "<op>", "value": "..." }`
+  with ops `eq` / `ne` / `in` (array value) / `contains` / `gt` / `gte` / `lt` /
+  `lte`, or `{ ..., "valueFrom": { "field": "<sibling>" } }` to compare two
+  fields of the same record (`spent > budget`). Condition fields must name
+  declared fields; cross-record `valueFrom.record` is not allowed. A flag may
+  read `derived` / `rollup` values, and other flags via their stringified
+  boolean (`{ "field": "isDone", "op": "eq", "value": "true" }`). Use it for
+  generic state summaries — done-ness, pass/fail, qualification:
+  `{ "type": "flag", "label": "Passed", "where": [{ "field": "score", "op": "gte", "value": "60" }] }`.
+  A flag can also drive completion tracking (stored-field conditions only) —
+  see `completionField` above and the "Completion tracking" section below.
 
 ### Conditional field visibility (`when`)
 
@@ -302,11 +367,50 @@ Rules and limits:
 
 ### Actions (per-record buttons)
 
-Each entry in `actions` renders a button in the read-only detail view. The only
-`kind` today is `"chat"`: clicking it starts a **new chat in a role**, seeded
-with a template + the record data — the role then does the work with its tools.
-This is how hard logic the schema can't express (PDF generation, bookkeeping
-journals, drafting an email) gets delegated to natural language.
+Each entry in `actions` renders a button in the read-only detail view. Three
+kinds:
+
+- **`"chat"`** — clicking it starts a **new visible chat in a role**, seeded
+  with a template + the record data — the role then does the work with its
+  tools. Pick it when the output IS the conversation or the user may need to
+  steer: PDF generation, bookkeeping journals, drafting an email.
+- **`"agent"`** — clicking it dispatches a **hidden background worker** with
+  the SAME seed; the worker edits the record via `manageCollection` and
+  finishes silently — no chat window, the record just updates. Pick it for
+  mechanical enrichment where a transcript would be noise: refresh a price,
+  fetch metadata, look something up and write it back. The button shows a
+  spinner while the worker runs; a failed run raises one bell notification
+  (cleared by the next success). **End an agent template with**: "edit the
+  record via manageCollection and stop — do not present anything."
+- **`"mutate"`** — **no LLM at all**: the host applies a declarative write the
+  moment the button is clicked (after an optional mini-form). Pick it when the
+  write needs zero judgment — "Mark paid", "Assign", any fixed state
+  transition. Instant and token-free. Shape (no `role`/`template`):
+
+  ```json
+  {
+    "id": "assign", "label": "Assign", "icon": "person_add",
+    "kind": "mutate",
+    "require": { "field": "status", "in": ["open"] },
+    "params": { "assignee": { "type": "string", "label": "Assignee", "required": true } },
+    "set": { "assignee": "$params.assignee", "status": "assigned" }
+  }
+  ```
+
+  `set` merges into the record (only the named fields change) — values are
+  literals or `$params.<name>` references. `require` replaces `when` (same
+  shape, same visibility-is-authorization rule, re-checked server-side).
+  `params` declares an optional mini-form using the table sub-field DSL; the
+  submitted values are validated like record fields, and the write itself runs
+  through the same gate as `putItems` (a rejected write shows the `problem`).
+  Constraints (schema-validated): `set` keys must name declared, non-computed
+  fields (never the primaryKey); every `$params` reference must name a
+  declared param; mutate is **record-level only** (not in `collectionActions`).
+  Group several fields in one `set` so "paid" can mean `status` + `paidDate`
+  written together. `toggle` stays the right tool for a single checkbox.
+
+This is how hard logic that the schema can't express gets delegated to natural
+language (and, for `"mutate"`, how the schema-expressible part stays free).
 
 ```json
 {
@@ -350,7 +454,11 @@ text / markdown / html / file fields are left out, so the prompt stays small).
 ```
 
 - Same `id` uniqueness rule (within `collectionActions`); same path-safe
-  `template`; same `role`-seeds-a-new-chat behavior.
+  `template`; same `role` + kind behavior (`"chat"` seeds a visible chat,
+  `"agent"` dispatches a silent worker over the whole collection — e.g. a
+  "Sync" button that pushes records to an external system via MCP; the
+  known-good sync recipe, including the snapshot-diff state file and the
+  `externalId` write-back, is **`config/helps/egress-sync.md`**).
 - `when` is **ignored** here — there is no record to gate on. Always shown.
 
 ### Completion tracking (bell notifications)
@@ -397,6 +505,16 @@ with any field type whose stringified value is comparable (`enum`, `string`,
 `boolean`, …) — e.g. `completionField: "status"` + `completionDoneValues:
 ["paid", "void"]` on an invoice, or `completionField: "shipped"` +
 `completionDoneValues: ["true"]` on an order.
+
+**Flag-form alternative**: `completionField` may instead name a **`flag`
+field** — then done ⇔ the flag's `where` matches, and `completionDoneValues`
+must be **omitted** (declaring it fails validation). Use it when done-ness is
+richer than one field's membership (e.g. `"isDone": { "type": "flag", "where":
+[{ "field": "score", "op": "gte", "value": "60" }] }` + `"completionField":
+"isDone"`). Two extra rules apply only to a completion flag: its `where` may
+reference **stored fields only** (no derived/rollup/toggle/flag/embed/backlinks
+— completion is checked against the raw record), and combining it with `spawn`
+requires an explicit `spawn.when`.
 
 Set `displayField` to make the bell title readable: with `displayField:
 "title"` the notification reads `Todos: Buy milk` instead of `Todos: t-0042`.
@@ -593,6 +711,33 @@ Reach for `ingest.kind: "agent"` (not a `manageAutomations` task) whenever the
 schedule belongs to one collection: it travels with the schema, dies with the
 collection, and needs no separate setup.
 
+### Google Calendar sync (`googleCalendar`)
+
+A collection opts into **Google Calendar sync** the same way a feed opts into
+retrieval — by declaring a block. Add `googleCalendar` and the host pulls the
+user's changed events on a schedule and writes them as records **without calling
+you**: no tool call, no tokens per sync.
+
+```json
+"googleCalendar": {
+  "calendarId": "primary",
+  "map": { "title": "summary", "on": "start", "until": "end" }
+}
+```
+
+This is the answer whenever the user asks for a collection that syncs with
+Google Calendar — **not** an `ingest.kind: "agent"` worker and **not** the
+`google` MCP calendar tools, both of which spend an LLM turn on every refresh to
+produce what the host produces for free. `map` reads _your_ field name → the
+Google event field (`summary`, `start`, `end`, `htmlLink`, `colorId`, `status`);
+at least one entry is required. Never map the `primaryKey` — it always holds the
+Google event id, which is what makes a re-sync update a record instead of
+duplicating it.
+
+The rest of the contract — finding a non-primary `calendarId`, how deletions
+propagate, and the first-run caveat — is
+**`config/helps/google-calendar-collection.md`**. Read it before authoring one.
+
 ### Calendar view
 
 Any collection that has at least one `date` (or `datetime`) field gains a
@@ -761,10 +906,41 @@ single source of truth and the "done" checkbox is a `toggle` field projecting it
 
 ## Records — one JSON object per file
 
-- Write each record to `<dataPath>/<id>.json` via the **Write** tool; the `id`
-  field's value is the filename (no extension).
+Each record is a plain file at `<dataPath>/<id>.json` (the `id` field's value is
+the filename, no extension) — that is the storage model. But you read and write
+records through **`manageCollection`**, not raw file I/O:
+
+- **Create / update — `putItems`.** Every row is validated against the schema
+  BEFORE the write (required fields, enum membership, primaryKey = record id)
+  and the result reports `{ written, rejected }` — fix each rejected row from
+  its `problem` text and retry just those rows. Use `mode: "create"` when
+  adding, so an id collision is rejected instead of silently overwritten, and
+  `mode: "merge"` with a partial row (`{ id, <changed fields> }`) when
+  updating — the default upsert replaces the WHOLE record and would erase
+  every optional field the row omits.
+- **Read / list — `getItems`.** The only way to see host-computed `derived` /
+  `toggle` / `embed` values (the stored JSON never contains them). Pass `ids`
+  / `fields` on large collections to keep the result small — e.g.
+  `fields: ["id"]` to check for an id collision before an add.
+- **Delete — `deleteItems`.** Pass `ids`; the result is `{ deleted, rejected }`.
+  An id that doesn't exist lands in `rejected` rather than being counted as
+  deleted, so a typo'd id can't be reported back to the user as done.
+- **Aggregate — `queryItems`.** Counts, sums, averages, group-bys on ANY
+  collection via a structured query (`groupBy` / `aggregates` / `where` /
+  `orderBy` / `limit` — full shape in the "External data (CSV) collections"
+  section below). On file-backed collections it aggregates the ENRICHED
+  records, so computed fields (`derived` / `rollup` / `toggle`) are
+  queryable columns — "sum of invoice totals" works even when `total` is a
+  formula. Prefer it over doing arithmetic on `getItems` output.
+- **Cross-collection questions — `getOntology`.** Returns every collection in
+  the workspace with its `primaryKey`, effective `displayField`, record count,
+  and its `ref` / `embed` / `backlinks` / `rollup` relations (field → related slug, including refs
+  inside `table` columns as `lines.clientId`). When a question spans
+  collections ("which clients have unpaid invoices AND unlogged hours?"),
+  call it first to see which collections exist and how they join, then
+  `getItems` only the ones involved — instead of reading every schema.json.
 - **Id charset** (enforced by `safeRecordId` in
-  `packages/plugins/collection-plugin/src/server/paths.ts` — the single source of
+  `packages/core/src/collection/server/paths.ts` — the single source of
   truth; `manageCollection` rejects ids that fail it): start and end with a
   letter or digit; inside, also `-`, `_`, and `.` are allowed (so natural keys
   like a Slack ts `1718900000.123456` or a SemVer `1.2.3` work). **No** path
@@ -774,6 +950,25 @@ single source of truth and the "done" checkbox is a `toggle` field projecting it
   enforces this on every targeted read/write, so an id that only _looks_ fine in
   a full `getItems` listing but violates the rule can't be updated or deleted by
   id — fix the id, don't work around it with raw file I/O.
+- **Never write `derived` fields**, and never write an `embed`, `backlinks`,
+  or `rollup` field — all are display-only / host-computed (`putItems`
+  rejects rows that carry them).
+- Leave optional fields out of the row entirely rather than writing empty
+  strings.
+- For a `ref` field, write the raw target slug, and make sure that record
+  actually exists in the target collection — an invalid slug renders as a broken
+  link. The host enforces structure and safety; **you own semantic correctness**
+  (valid refs, sane values).
+
+### Raw file I/O on records — the escape hatch
+
+Read / Write / Edit on the record files stays available (files are the source
+of truth), but it skips `putItems`' pre-write validation — a mistake lands on
+disk instead of coming back as a `rejected` row. Reach for it only when the
+tool can't do the job: bulk file surgery, or repairing a file so malformed
+that `manageCollection` can't address it. If you do write record files
+directly:
+
 - **The file MUST be valid JSON.** A malformed record is **silently skipped** at
   read time (logged server-side, but invisible in the UI) — so one bad file out
   of fifteen looks like "fourteen records vanished." The #1 cause is an
@@ -782,22 +977,160 @@ single source of truth and the "done" checkbox is a `toggle` field projecting it
   (`text`, `markdown`, a long `objective`), either escape every inner ASCII quote
   as `\"`, or — better — use the language's own quotation marks (`「」`/`『』` for
   Japanese, `‘ ’`/`“ ”` or `'…'` for English) so no escaping is needed.
-  `presentCollection` re-validates the records and reports any unreadable /
+- `presentCollection` re-validates the records and reports any unreadable /
   malformed / schema-violating files back to you (a `⚠️` in its result) — so
-  always follow a batch of writes with a `presentCollection` call and **act on
-  any ⚠️ it returns** (Read → fix → Write), rather than assuming every record
-  landed.
-- **List the directory first** and pick a fresh id rather than silently
-  overwriting. Update = Read, merge, Write back (preserve fields you weren't
-  asked to change). Delete = remove the file.
-- **Never write `derived` fields**, and never write an `embed` field — both are
-  display-only / host-computed.
-- Leave optional fields out of the JSON entirely rather than writing empty
-  strings.
-- For a `ref` field, write the raw target slug, and make sure that record
-  actually exists in the target collection — an invalid slug renders as a broken
-  link. The host enforces structure and safety; **you own semantic correctness**
-  (valid refs, sane values).
+  always follow a batch of direct writes with a `presentCollection` call and
+  **act on any ⚠️ it returns**, rather than assuming every record landed.
+  (This safety net applies after `putItems` batches too, but direct writes are
+  where it earns its keep.)
+
+## External data (CSV) collections — `dataSource`
+
+When the user has a data file they want to "manage" / "visualize" / "見たい"
+(a student roster, an HR export, a product list — the BI use case), do NOT
+import the rows into record files. Define a collection **on top of** the file
+with `dataSource` — the file stays the single source of truth and the whole
+collection UI (table, kanban, calendar, custom views, remote views) works over
+its rows via the host's DuckDB-backed CSV store.
+
+**The schema-inference recipe** (user: "この CSV を管理したい" / "make this CSV a
+collection"):
+
+1. **Inspect the file** — Read the first ~30 lines. Note the header row
+   (column names), each column's apparent type, and which column uniquely
+   identifies a row.
+2. **Pick the key column** — set `primaryKey` to that column's name and flag
+   its field `primary: true`. Prefer an ID-ish column (student number, SKU,
+   email) over a name. Check for duplicates if unsure — duplicated key values
+   don't error, but the LAST row silently wins.
+   **Declare the key field as `type: "string"` even when the column is
+   numeric** (a row number, an integer ID): record ids are strings, and the
+   store overwrites the key field's value with the id — a `number`-typed key
+   would just hold a string anyway. Consequence to keep in mind: sorting by
+   the key column is lexicographic ("10" before "2"); if numeric ordering
+   matters to the user, sort by another column.
+3. **Declare `fields` matching the column names** — field name = CSV column
+   name, verbatim (Japanese column names are fine). Only declared fields
+   render as table columns; extra CSV columns still ride along in the record
+   detail. Use `number` / `date` / `enum` (when a column has a small closed
+   value set) / `string` for the rest — DuckDB sniffs the raw types, the
+   field spec controls rendering.
+4. **Set `displayField`** to the most human-readable column (a name). This
+   matters extra here: a key value that isn't a safe record id (Japanese
+   text, spaces) is hex-encoded into the record's address, and
+   `displayField` is what keeps lists and notifications readable.
+5. **Write the schema** with `dataSource` instead of `dataPath`, plus a
+   normal `SKILL.md`, under `data/skills/<slug>/` — same create flow as any
+   collection. In the SKILL body, point aggregation questions at
+   `manageCollection` `queryItems` (see below) — NOT at python/pandas and
+   NOT at `getItems`; SKILL.md text outlives help updates, so a wrong
+   steer here misroutes every future session on this collection.
+
+Semantics to remember (and to tell the user):
+
+- **Read-only** — no Add/Edit/Delete in the UI, `putItems` refuses, HTTP
+  writes answer 405. To change the data, **edit or replace the file itself**
+  (you can do that with the normal file tools when asked); open views refresh
+  automatically via a file watcher.
+- **Encoding** — Shift_JIS / CP932 and UTF-16 files work as-is; the host
+  decodes to a cache copy and never rewrites the user's file. Don't convert
+  the file to UTF-8 "to be safe" — an Excel re-export would just undo it.
+- **Row cap** — `getItems` / the UI list stops at 5,000 rows (a warn is
+  logged). Fine for browsing — but NEVER compute an aggregate from
+  `getItems` output on a large file (a capped scan gives a silently wrong
+  number). Use `queryItems` instead.
+- **Aggregation — `manageCollection` `queryItems`**: a structured query over
+  the WHOLE file (uncapped scan, DuckDB underneath). Answer counts / sums /
+  averages / group-bys with it — don't shell out to python/pandas for
+  questions it covers. (It works on EVERY collection — see the Records
+  section; this bullet is about the dataSource specifics.) Shape:
+
+  ```json
+  {
+    "groupBy": ["Category"],
+    "aggregates": { "total": { "op": "sum", "column": "Price" }, "n": { "op": "count" } },
+    "where": [{ "field": "Availability", "op": "eq", "value": "in_stock" }],
+    "orderBy": [{ "field": "total", "dir": "desc" }],
+    "limit": 100
+  }
+  ```
+
+  Ops: `count` (column optional) / `sum` / `avg` / `min` / `max`; `where`
+  ops are the familiar `eq/ne/in/gt/gte/lt/lte/contains`; `orderBy` sorts
+  by a groupBy column or an aggregate alias; result rows are clamped
+  (default 1,000). At least one of `groupBy`/`aggregates` is required.
+  `sum`/`avg` skip non-numeric cells. A custom view can run the same
+  query shape via `POST <dataUrl>/query` with its read token — see
+  `config/helps/custom-view.md` — which is how dataSource dashboards
+  chart live data.
+- **Not registry material** — dataSource collections can't be imported from
+  or contributed to a registry (the data file is machine-local).
+
+Minimal example (Japanese roster, Shift_JIS file dropped at
+`data/students.csv`):
+
+```json
+{
+  "title": "生徒名簿",
+  "icon": "school",
+  "dataSource": { "type": "csv", "path": "data/students.csv" },
+  "primaryKey": "学籍番号",
+  "displayField": "氏名",
+  "fields": {
+    "学籍番号": { "type": "string", "label": "学籍番号", "primary": true },
+    "氏名": { "type": "string", "label": "氏名" },
+    "学年": { "type": "enum", "label": "学年", "values": ["1", "2", "3"] },
+    "入学日": { "type": "date", "label": "入学日" }
+  }
+}
+```
+
+## Alternative storage (sqlite) — `storage`
+
+A collection can keep its records in a single SQLite database file instead of
+per-record JSON files: declare `storage` instead of `dataPath`. Unlike
+`dataSource` (read-only, user-owned file), a `storage` collection is a normal
+WRITABLE collection — every UI, tool, custom view (desktop and remote), and
+API surface works identically; only where the rows live changes. The db file
+is collection-owned and managed by the host (`records` table, one JSON record
+per row keyed by `primaryKey`).
+
+When to use: only when the user explicitly asks for it, or a collection is
+expected to grow far beyond what a folder of JSON files handles comfortably
+(thousands of records). For everything else prefer `dataPath` — record files
+are transparent, diffable, and every feature supports them.
+
+Notes:
+
+- Requires **Node.js >= 22.5** (built-in `node:sqlite`); on an older runtime
+  only sqlite collections fail, with a clear error (see
+  `config/helps/error-recovery.md`).
+- The full write machinery works: `spawn`, `completionField` /
+  `triggerField` bells, `singleton`, `ingest`, and mutate actions all go
+  through the storage layer, and a watcher on the db file drives bell
+  reconciliation + live view refreshes — including after EXTERNAL edits to
+  the `.db`.
+- The Repair pass validates records through the storage backend (schema
+  violations are reported by record id); a row so corrupt the backend
+  can't parse it is skipped silently, unlike a malformed record FILE.
+- Deleting the collection archives the `.db` alongside the skill under
+  `archive/…` and removes the live file.
+
+Minimal example:
+
+```json
+{
+  "title": "Order History",
+  "icon": "receipt_long",
+  "storage": { "type": "sqlite", "path": "data/orders.db" },
+  "primaryKey": "id",
+  "fields": {
+    "id": { "type": "string", "label": "ID", "primary": true },
+    "item": { "type": "string", "label": "Item" },
+    "total": { "type": "number", "label": "Total" }
+  }
+}
+```
 
 ## End-to-end: creating a new collection skill
 
@@ -834,7 +1167,8 @@ To change the structure of a collection that already exists (add a field,
 rename a label, add a view or action), go through `manageCollection` rather than
 hand-editing the file:
 
-1. `manageCollection` `schemaDocs` — reload this reference for the field DSL.
+1. `manageCollection` `schemaDocs` — reload this reference for the field DSL
+   (pass the section you need as `topic`, e.g. `topic: "kanban"`).
 2. `manageCollection` `getSchema` (slug) — read the current `schema.json`
    verbatim. You don't need to know where the file lives.
 3. Apply your change to that object, then `manageCollection` `putSchema`

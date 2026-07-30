@@ -92,27 +92,89 @@ browser-safe boundary — mirroring `@mulmoclaude/core/remote-view`:
 
 | Import | Surface | Provides |
 |---|---|---|
-| `@mulmoclaude/core/remote-host` | **browser-safe** | Protocol wire types (`Command`, `CommandStatus`, `Channel`, `CommandHandlers`) + Firestore path helpers `commandsCollection(firestore, channel)` / `hostDoc(firestore, channel)` + the capability advertisement (`HostPresence`, `REMOTE_HOST_PROTOCOL_VERSION`, `buildHostPresence`). Shared by host **and** the mobile client. |
-| `@mulmoclaude/core/remote-host/server` | **server-only** | `startHostRunner(firestore, channel, handlers, opts)` — the command loop; `createRemoteHost(deps)` — the connect/disconnect/status lifecycle factory; `createRemoteHostAuth(auth)` + `createRemoteHostFirebase(config)` — the Firebase init/auth primitives. `firebase` is an optional peer dep of core. |
+| `@mulmoclaude/core/remote-host` | **browser-safe** | Protocol wire types (`Command`, `CommandStatus`, `Channel`, `CommandHandlers`) + Firestore path helpers `commandsCollection(firestore, channel)` / `hostDoc(firestore, channel)` + the capability advertisement (`HostPresence`, `REMOTE_HOST_PROTOCOL_VERSION`, `buildHostPresence`) + channel health (`RunnerHealth`, `RUNNER_HEALTH_STATES`, `isRunnerHealth`) for a host that renders it. Shared by host **and** the mobile client. |
+| `@mulmoclaude/core/remote-host/server` | **server-only** | `startHostRunner(firestore, channel, handlers, opts)` — the command loop; `startResilientHostRunner(deps)` — the outer recovery ring around it; `createPresenceProbe(deps)` — the liveness sensor it reads; `createRemoteHost(deps)` — the connect/disconnect/status lifecycle factory; `createRemoteHostAuth(auth)` + `createRemoteHostFirebase(config)` — the Firebase init/auth primitives. `firebase` is an optional peer dep of core. |
 
 Each host supplies only its own specifics under `server/remoteHost/`:
 
 | File | Responsibility |
 |---|---|
 | `index.ts` | Binds this host's `hostId="mulmoclaude"`, handler table, firestore-bound runner, and logger to core's `createRemoteHost`; exposes the default singleton the route uses. |
-| `firebase.ts` | `createRemoteHostFirebase(firebaseConfig)` → this host's `{ firestore, auth, storage }` (Firestore must be in Native mode). |
-| `auth.ts` | `createRemoteHostAuth(auth)` → `signInHost` / `signOutHost` / `currentUid` bound to this host's Firebase auth. |
+| `session.ts` | This host's Firebase handles + the signed-in session: `createRemoteHostFirebase(firebaseConfig)` → `{ firestore, auth, storage }` (Firestore must be in Native mode), `createRemoteHostAuth(auth)` → `signIn` / `signOut` / `currentUid`, plus `currentFirestore()` / `exportSession()`. |
 | `commandChannel.ts` | Re-exports the core protocol + pins `HOST_ID = "mulmoclaude"`. |
 | `handlers/index.ts` | The method table — the single place the runner learns which methods it serves. |
 
 ### The command loop, precisely (core `startHostRunner`)
 
 - **Presence + capabilities.** `writePresence(true)` on start, then a heartbeat
-  `setInterval` once a minute (`opts.heartbeatMs`, default 60 s). On `stop()` or fatal listener death it
-  writes `writePresence(false)` and clears the interval — so remotes see the host go
-  offline instead of a live-but-dead host that silently consumes no commands.
-  Every write carries the capability advertisement (next section), not just the
-  `online` flag.
+  `setInterval` once a minute (`opts.heartbeatMs`, default 60 s). Every write
+  carries the capability advertisement (next section), not just the `online` flag.
+- **Listener resilience (#2535, #2633).** A Firestore `onSnapshot` error no longer
+  downs the host permanently. `classifyListenerError` splits transient codes
+  (`unavailable`, `deadline-exceeded`, `internal`, `cancelled`, `aborted`,
+  `resource-exhausted`, `unauthenticated`) from fatal ones (`permission-denied`,
+  or any unrecognized code). Transient → re-subscribe with exponential backoff
+  (1 s, 2 s, 4 s, … capped at 30 s by `backoffDelayMs`) while presence stays
+  online, so a brief blip doesn't flap the host. Retrying stops when the outage
+  has lasted `LISTEN_RETRY_WINDOW_MS` (5 min) **measured from the first failure**
+  — a retry COUNT put that at ~31 s, which any laptop sleep outlasts (#2633).
+  Fatal, or window elapsed → announce offline, clear the interval, detach the
+  listener, `onClosed()`. A healthy snapshot clears both the ladder and the
+  outage clock; `stop()` cancels any pending retry. Re-subscribe is safe against
+  double execution — `claimCommand`'s queued→processing transaction still gates
+  each command exactly once.
+
+### Staying reachable — two rings, and why one wasn't enough (#2633)
+
+The phone judges "is the Mac reachable" from the **freshness of the presence
+doc**. The host used to judge "am I connected" from **listener errors only**.
+Those are separate paths, so presence writes could fail forever while
+`onSnapshot` stayed quiet: the host reported itself green, retried nothing, and
+an open browser tab didn't help because the tab only reconnects once the server
+admits it is disconnected.
+
+- **Inner ring — core (`presenceBeat.ts`).** Each heartbeat first asks how old the
+  last *acknowledged* presence write is. Older than `PRESENCE_STALE_BEATS` (3)
+  beats ⇒ the remote has nothing fresh to read, so the runner reports it through
+  `onEvent` and goes offline instead of claiming to be up. The sensor is
+  acknowledgement AGE, not a count of failures: Firestore does not reject a write
+  it cannot deliver, it queues it and leaves the promise pending, so a failure
+  counter reads zero throughout an outage.
+- **Outer ring — core (`resilientRunner.ts`, `startResilientHostRunner`).** When
+  the inner ring gives up, this starts a whole new runner (fresh listener, fresh
+  presence write) with its own backoff, and gives up by TIME (`GIVE_UP_MS`,
+  5 min). Only then does `onClosed` reach the lifecycle → `status()` reports
+  disconnected → the client's 15-second poll re-authenticates from its parked
+  blob, which is the only path that fixes a dead credential. It also runs
+  `presenceProbe` every 90 s: a **server** read of this host's own presence doc
+  (never the cache, which would happily return our own undelivered write). A stale
+  doc, or a read that throws, enters the same recovery a listener death does.
+  `null` — no document, an unresolved `serverTimestamp`, or the runner's own
+  `online: false` goodbye — is deliberately not actionable: a false positive spins
+  a reconnect loop. The read carries its own deadline (`withTimeout`): Firestore
+  takes no abort signal, and a read that never settles would leave the probe
+  un-rearmed — a sensor dying quietly, which is the failure this whole section
+  exists to catch.
+- Surviving the settle window (60 s) counts as recovery **only** if the probe
+  agrees. The inner ring takes minutes to report a broken channel, so "it hasn't
+  complained yet" proves nothing — and if that reset the outage clock, a host with
+  a dead credential would relaunch forever and never escalate.
+- **Both rings live in core (#2643).** They used to be one ring each: the inner in
+  core, the outer copied into MulmoClaude and MulmoTerminal. That split is unsound,
+  because the outer ring's correctness is a RELATION between constants — `SETTLE_MS`
+  must outlast how long the inner ring takes to report, and `PROBE_INTERVAL_MS`
+  must sit above `presenceStaleAfterMs()`. Raising `LISTEN_RETRY_WINDOW_MS` from
+  ~31 s to 5 min disabled `giveUp` outright in the copy that had not been told: the
+  60 s settle always fired first, reset the outage clock, and the host relaunched
+  forever while reporting itself online — so the client was never asked to
+  re-authenticate. Changing one ring's timing now shows up next to the rule that
+  depends on it.
+- **Health reporting is optional.** `onHealth` gets `{ state, lastError, changedAt }`
+  on each transition (`online` / `reconnecting` / `offline`) for a host with a
+  toolbar control; MulmoClaude passes none. An ongoing outage reports **once** — a
+  fresh `changedAt` per relaunch would reset a "down for N seconds" readout every
+  backoff step. The state names and their guard are browser-safe so the control
+  narrows what the server writes; the wording stays in each host's i18n.
 
 ### Capability advertisement — presence doc, auto-derived
 
@@ -147,6 +209,19 @@ presence doc** the remote already listens to:
   "Offline queueing").
 - The payload shape (`HostPresence`) is a **browser-safe** export both repos
   compile against, so host and mobile client can't drift on the contract.
+- **`undefined` never costs the whole reply (#2634).** Firestore rejects
+  `undefined` at ANY depth, so one stray value buried in a handler's return made
+  `updateDoc` throw — `status:"done"` never landed and the remote waited out its
+  timeout. The symptom was "nothing arrives", not "one field is missing". Before
+  writing, the runner strips every `undefined` (object keys dropped, array holes
+  → `null` so indexes still line up) and reports the paths it dropped through
+  `onEvent`: `result.sessions.11.work`, which Firestore's own error never tells
+  you. Stripping rather than throwing is the point — a throw reproduces exactly
+  the outcome this prevents. Paths where `undefined` is legitimate are declared
+  per method via `opts.expectedUndefined` (`{ listSessions: ["sessions.*.work"] }`,
+  `*` = one segment): still stripped, silently, so the report stays worth reading.
+  Deliberately NOT `ignoreUndefinedProperties` — that turns the bug into "the
+  value just doesn't arrive", with nothing to grep for.
 - **Claim exactly once.** `claimCommand` runs a `runTransaction` that reads the
   doc and only flips `queued → processing` if it is still `queued`; a second
   host (or a snapshot replay) that races gets `null` and skips it.
@@ -173,6 +248,40 @@ calling the collection engine directly. Added incrementally across phases:
 | `mutateRemoteViewItem` | Applies an update/delete from a mobile view; policy enforced **host-side** | 4 |
 | `startChat` | Starts a visible chat from the phone (message + optional role + attachments) | — |
 | `ingestAttachments` | Pulls staged files from Firebase Storage into the workspace | — |
+| `google.calendar.createEvent` | Creates a Google Calendar event (`{ event }`); params `summary`, `start`, `end` (ISO 8601), optional `description`, `calendarId`, `colorId` | — |
+| `google.calendar.updateEvent` | Edits an event in place (`{ event }`); requires `eventId` plus at least one of `summary`, `start`, `end`, `description`, `colorId`; optional `calendarId`. `description: ""` clears it, omitting it leaves it | — |
+| `google.calendar.deleteEvent` | Removes an event (`{ deleted, eventId }`); requires `eventId`, optional `calendarId` | — |
+| `google.calendar.listEvents` | Upcoming events (`{ events }`, each with `colorId`); optional `calendarId` (default primary), `timeMin`, `maxResults` (≤ 50) | — |
+| `google.calendar.listCalendars` | Calendars the user has added/subscribed to (`{ calendars }` — id, summary, primary, colours) | — |
+| `google.calendar.colors` | Event/calendar colour palettes mapping `colorId` → hex (`{ colors }`) | — |
+
+The `google.calendar.*` handlers run against the **host's own Google OAuth
+grant** (independent of Firebase Auth): the user links the account once — from
+the settings modal (Plugins → Google) or with `yarn google:auth` (both run the
+same loopback + PKCE consent in the browser; the settings flow requires the
+browser to be on the same machine as the host) — and the refresh token stays
+in `~/.config/mulmo/google-token.json` (mode 600).
+
+Google requires a client secret at its token endpoint even under PKCE, so a
+user with no Cloud project of their own cannot finish a link unaided. Two
+paths, chosen automatically:
+
+- **Default** — the **mulmoserver broker** (`/googleOAuthStart`, `/googleOAuthCallback`,
+  `/googleOAuthExchange`, `/googleOAuthRefresh`; receptron/mulmoserver#54) applies the secret.
+  It is **stateless**: it stores no token and no code, and the callback 302s the *authorization
+  code* — never a token — back to this host's loopback, which then exchanges it itself. The
+  tokens never leave the machine, so there is no central honeypot. The broker is contacted only
+  when linking and when an expired access token needs renewing.
+- **Own client** — if `~/.secrets/client_secret_*.json` is present it wins, and the whole flow
+  (consent, exchange, refresh) stays on this machine. Self-hosters keep full independence.
+
+The stored token records which path minted it (`issuedVia`), so renewals take
+the matching one; tokens written before the broker existed are treated as
+`local`. Until the account is linked, the handlers
+return a `handler_error` telling the remote to run the auth flow on the host.
+The remote can tell whether a host build supports Calendar by looking for the
+`google.calendar.*` method names in the presence `capabilities` (auto-derived,
+like every other method).
 
 ---
 
@@ -232,7 +341,7 @@ full-resolution bytes, images go through **Firebase Storage** as a staging area:
 Storage is staging only. Two orphan safeguards (for uploads whose host never
 ran): **remote-side rollback** — the remote best-effort deletes its own staged
 objects if `startChat` never gets a host ack — and a **Storage lifecycle TTL**
-backstop (follow-up, not v1). See `plans/feat-remote-chat-image-attachments.md`.
+backstop (follow-up, not v1). See `plans/done/feat-remote-chat-image-attachments.md`.
 
 ---
 
@@ -244,7 +353,7 @@ while the host is offline; the host **drains everything on reconnect** because t
 runner's `onSnapshot` reports every pre-existing `queued` doc as an `added` change
 the instant it re-attaches. No flush call, no separate channel — the same
 `commands` subcollection, treated slightly differently on both ends. See
-`plans/feat-remote-offline-queue.md`.
+`plans/done/feat-remote-offline-queue.md`.
 
 Three optional, backward-compatible fields on the command doc drive it (absent ⇒
 today's exact behaviour):
@@ -330,16 +439,31 @@ Bearer-guarded loopback routes (paths under `API_ROUTES.remoteHost` in
 
 ## Frontend
 
-- **`src/components/RemoteHostControl.vue`** — the only remote-host UI. A toolbar
-  `phonelink` button (green when connected) with a popover showing online/offline,
-  uid, and Connect/Disconnect. Connect runs the browser Google sign-in, extracts
-  the `idToken`, and `apiPost`s to `/connect`. Popover help text links the mobile
-  URL `https://mulmoserver.web.app` and hints at custom remote views.
+- **`src/composables/useRemoteHost.ts`** — shared module-scoped store for the
+  connection state (one singleton for both the toolbar control and the offline
+  banner). It **polls** `/status` every 15 s and, when a session blob is parked
+  (the user intended to be connected) but the host is disconnected, **silently
+  auto-reconnects** from the parked blob — so a server restart or a server-side
+  listener death recovers within one interval instead of only when the popover is
+  opened. Pure decision rules (`shouldAutoReconnect`, `shouldShowRemoteHostBanner`)
+  live in **`src/composables/remoteHostDecisions.ts`** (unit-tested without Firebase).
+- **`src/components/RemoteHostControl.vue`** — the toolbar `phonelink` button
+  (green when connected) with a popover showing online/offline, uid, and
+  Connect/Disconnect. Connect runs the browser Google sign-in, extracts the
+  `idToken`, and `apiPost`s to `/connect`. Consumes `useRemoteHost`; starts/stops
+  the poll loop on mount/unmount. Popover help text links the mobile URL
+  `https://mulmoserver.web.app` and hints at custom remote views.
+- **`src/components/RemoteHostOfflineBanner.vue`** (#2535) — a persistent banner
+  (mounted in `App.vue` next to `BackendOfflineBanner`) shown only when the host
+  was meant to be connected but dropped and a silent auto-reconnect couldn't
+  restore it (e.g. the parked blob expired → needs a Google popup). Its Reconnect
+  button re-runs sign-in. Gated on `shouldShowRemoteHostBanner` so it doesn't flap
+  during a normal quick restart.
 - **`src/components/SidebarHeader.vue`** — mounts `<RemoteHostControl />` in the
   toolbar chrome row.
 - **`src/config/firebaseConfig.ts`** (pure public web config, source of truth) +
   **`src/config/firebase.ts`** (browser SDK init) — project `mulmoserver`.
-- i18n keys `remoteHost.*` across all `src/lang/*` locales.
+- i18n keys `remoteHost.*` and `remoteHostOffline.*` across all `src/lang/*` locales.
 
 There is **no in-app remote-view renderer** in this repo — mobile views render on
 the external mulmoserver client. The desktop side only builds a *preview* of a
@@ -357,15 +481,15 @@ Design rationale lives in the plan files:
 
 | Plan | Phase / feature |
 |---|---|
-| `plans/feat-remote-host-firestore-list-collections.md` | Phase 1 — channel + auth + hostRunner + `listCollections` |
+| `plans/done/feat-remote-host-firestore-list-collections.md` | Phase 1 — channel + auth + hostRunner + `listCollections` |
 | `plans/feat-remote-collection-view.md` | Phase 2 — `getCollection` / paged records |
-| `plans/feat-remote-custom-view.md` | Phase 3 — `getRemoteView` sandboxed srcdoc + postMessage bridge |
-| `plans/feat-remote-writable-view.md` | Phase 4 — `mutateRemoteViewItem` (host-enforced policy) |
-| `plans/feat-remote-view-images.md` | Phase 5 — `getRemoteViewItems` image thumbnails |
-| `plans/feat-remote-chat-image-attachments.md` | `startChat` attachments + `ingestAttachments` |
-| `plans/feat-1955-remote-host-help.md` | Popover help text + mobile URL link |
-| `plans/feat-remote-host-capabilities.md` | Capability advertisement in the presence doc (`HostPresence`, `protocolVersion`) |
-| `plans/feat-remote-offline-queue.md` | _(planned)_ Queue `startChat` while the host is offline — drain on reconnect, `expiresAt` + host-side expiry delete (doc + attachments), user-managed pending list |
+| `plans/done/feat-remote-custom-view.md` | Phase 3 — `getRemoteView` sandboxed srcdoc + postMessage bridge |
+| `plans/done/feat-remote-writable-view.md` | Phase 4 — `mutateRemoteViewItem` (host-enforced policy) |
+| `plans/done/feat-remote-view-images.md` | Phase 5 — `getRemoteViewItems` image thumbnails |
+| `plans/done/feat-remote-chat-image-attachments.md` | `startChat` attachments + `ingestAttachments` |
+| `plans/done/feat-1955-remote-host-help.md` | Popover help text + mobile URL link |
+| `plans/done/feat-remote-host-capabilities.md` | Capability advertisement in the presence doc (`HostPresence`, `protocolVersion`) |
+| `plans/done/feat-remote-offline-queue.md` | _(planned)_ Queue `startChat` while the host is offline — drain on reconnect, `expiresAt` + host-side expiry delete (doc + attachments), user-managed pending list |
 
 > **Not to be confused with** MulmoBridge's "relay" (a Cloudflare Workers message
 > relay — see `docs/message_apps/relay/`). That is a separate messaging feature;

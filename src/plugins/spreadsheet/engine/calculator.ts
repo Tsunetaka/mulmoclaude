@@ -4,13 +4,22 @@
  * Core calculation engine with circular reference detection and cross-sheet support
  */
 
-import { formatNumber } from "./formatter";
+import { formatCellForDisplay } from "./cellFormatting";
 import { columnToIndex } from "./parser";
 import { evaluateFormula as evaluateFormulaFn } from "./evaluator";
+import { expandRangeOrCell } from "./formulaRefs";
 import { parseDate, getDefaultDateFormat } from "./date-parser";
-import type { SheetData, CellValue, CalculatedSheet, CalculationError, FormulaInfo, SpreadsheetCell } from "./types";
+import type { SheetData, CellValue, CalculatedSheet, CalculationError, FormulaInfo, SpreadsheetCell, CalculateOptions } from "./types";
 import { isObj } from "../../../utils/types";
+import { isEmptyCell } from "./cellEmpty";
 import { errorMessage } from "../../../utils/errors";
+import { classifyThrownError, invalidRefError } from "./formulaError";
+import { isSpreadsheetErrorValue, spreadsheetError } from "./spreadsheet-errors";
+
+// The grid a reference should read from, plus the sheet-name-stripped ref and
+// whether it points at the sheet currently being calculated (which decides
+// whether recursive formula evaluation is allowed for the cell it lands on).
+type ResolvedSheetRef = { sheetData: (SpreadsheetCell | CellValue)[][]; ref: string; isCurrentSheet: boolean };
 
 /**
  * Normalize malformed data structures
@@ -19,7 +28,7 @@ import { errorMessage } from "../../../utils/errors";
  * @param data - Potentially malformed sheet data
  * @returns Normalized 2D array
  */
-function normalizeData(data: any): SpreadsheetCell[][] {
+export function normalizeData(data: any): SpreadsheetCell[][] {
   // Handle null/undefined
   if (!data) {
     return [];
@@ -66,7 +75,7 @@ function normalizeData(data: any): SpreadsheetCell[][] {
  * @param data - Raw sheet data
  * @returns Processed data with dates converted to serial numbers
  */
-function preprocessDates(data: SpreadsheetCell[][]): SpreadsheetCell[][] {
+function preprocessDates(data: SpreadsheetCell[][], preferDDMMYYYY: boolean): SpreadsheetCell[][] {
   return data.map((row) =>
     row.map((cell) => {
       // Skip if not a cell object or if it has a formula
@@ -78,13 +87,13 @@ function preprocessDates(data: SpreadsheetCell[][]): SpreadsheetCell[][] {
 
       // Only parse strings that aren't formulas
       if (typeof value === "string" && !value.startsWith("=")) {
-        const dateSerial = parseDate(value);
+        const dateSerial = parseDate(value, preferDDMMYYYY);
 
         if (dateSerial !== null) {
           // It's a date! Convert to serial number
           return {
             v: dateSerial,
-            f: cell.f || getDefaultDateFormat(value), // Use existing format or detect from input
+            f: cell.f || getDefaultDateFormat(value, preferDDMMYYYY), // Use existing format or detect from input
           };
         }
       }
@@ -95,6 +104,12 @@ function preprocessDates(data: SpreadsheetCell[][]): SpreadsheetCell[][] {
   );
 }
 
+// `skipFormatting` is internal, not a public knob: a cross-sheet reference
+// computes its target sheet only to READ values, so the display-formatting pass
+// is skipped there — a date must stay a serial, not become "03/04/2025" that a
+// downstream parseFloat reads as 3 (issue #2332).
+type SheetCalculateOptions = CalculateOptions & { skipFormatting?: boolean };
+
 /**
  * Calculate formulas in a single sheet
  *
@@ -102,17 +117,19 @@ function preprocessDates(data: SpreadsheetCell[][]): SpreadsheetCell[][] {
  * @param allSheets - All sheets for cross-sheet references
  * @returns Calculated sheet with formulas evaluated
  */
-export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): CalculatedSheet {
+export function calculateSheet(sheet: SheetData, allSheets?: SheetData[], options: SheetCalculateOptions = {}): CalculatedSheet {
+  const preferDDMMYYYY = options.preferDDMMYYYY ?? false;
+  const skipFormatting = options.skipFormatting ?? false;
   // Normalize malformed data structures first
   const normalizedData = normalizeData(sheet.data);
 
   // Pre-process dates before calculation
-  const processedData = preprocessDates(normalizedData);
+  const processedData = preprocessDates(normalizedData, preferDDMMYYYY);
 
   // Also preprocess all sheets if provided
   const processedAllSheets = allSheets?.map((s) => ({
     ...s,
-    data: preprocessDates(normalizeData(s.data)),
+    data: preprocessDates(normalizeData(s.data), preferDDMMYYYY),
   }));
 
   const data = processedData;
@@ -130,11 +147,49 @@ export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): Calcu
 
   // Track cells being calculated to detect circular references
   const calculating = new Set<string>();
+  // Cells whose result is already stored in `calculated`, of ANY type. A number
+  // check alone missed string/error results, so a cell referenced before the
+  // top loop reached it was re-evaluated (and, once formulas can throw, would
+  // re-emit its error). Membership here means "read the cached value, do not
+  // re-run".
+  const evaluated = new Set<string>();
+
+  // Evaluate one formula cell, guarding circular references, caching the result,
+  // and turning a thrown failure into a typed errors[] entry plus the Excel
+  // error value in the cell — never a swallowed bare string/number (#2359).
+  const resolveFormulaCell = (formulaText: string, row: number, col: number): CellValue => {
+    const cellKey = `${row},${col}`;
+    if (calculating.has(cellKey)) {
+      errors.push({ cell: { row, col }, formula: formulaText, error: "Circular reference detected", type: "circular" });
+      return 0;
+    }
+    if (evaluated.has(cellKey)) return calculated[row][col];
+    calculating.add(cellKey);
+    try {
+      const result = evaluateFormula(formulaText.substring(1)); // drop leading "="
+      calculated[row][col] = result;
+      return result;
+    } catch (error) {
+      const { type, display } = classifyThrownError(error);
+      errors.push({ cell: { row, col }, formula: formulaText, error: errorMessage(error), type });
+      // The error VALUE, not its text: a cell that reads this one must see a
+      // real error, and the display pass renders it back to `#DIV/0!`.
+      const errorValue = spreadsheetError(display);
+      calculated[row][col] = errorValue;
+      return errorValue;
+    } finally {
+      calculating.delete(cellKey);
+      evaluated.add(cellKey);
+    }
+  };
 
   // Helper to extract raw value from cell with recursive formula evaluation
   const getRawValue = (cell: any, row?: number, col?: number): CellValue => {
     // Handle null/undefined cells - treat as 0
     if (cell === null || cell === undefined) return 0;
+
+    // An already-calculated cell can hold a formula error; it stays an error.
+    if (isSpreadsheetErrorValue(cell)) return cell;
 
     if (typeof cell === "number") return cell;
 
@@ -171,50 +226,10 @@ export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): Calcu
       const value = cell.v;
       // If value is a string starting with "=", it's a formula
       if (typeof value === "string" && value.startsWith("=")) {
-        // Check if we have row/col info to evaluate recursively
+        // Only evaluatable when we know the cell's position (for recursion +
+        // circular tracking); otherwise treat as 0.
         if (row !== undefined && col !== undefined) {
-          const cellKey = `${row},${col}`;
-
-          // Check for circular reference
-          if (calculating.has(cellKey)) {
-            console.warn(`Circular reference detected at row ${row}, col ${col}`);
-            errors.push({
-              cell: { row, col },
-              formula: value,
-              error: "Circular reference detected",
-              type: "circular",
-            });
-            return 0;
-          }
-
-          // Check if already calculated (result is cached as a number)
-          const calculatedCell = calculated[row][col];
-          if (typeof calculatedCell === "number") {
-            return calculatedCell;
-          }
-
-          // Recursively evaluate the formula
-          calculating.add(cellKey);
-          try {
-            const formula = value.substring(1); // Remove "=" prefix
-            const result = evaluateFormula(formula);
-            calculating.delete(cellKey);
-
-            // Cache the calculated result (preserve strings and numbers)
-            calculated[row][col] = result;
-
-            return result;
-          } catch (error) {
-            calculating.delete(cellKey);
-            console.error(`Error evaluating formula at row ${row}, col ${col}:`, error);
-            errors.push({
-              cell: { row, col },
-              formula: value,
-              error: errorMessage(error),
-              type: "unknown",
-            });
-            return 0;
-          }
+          return resolveFormulaCell(value, row, col);
         }
         return 0; // No position info, can't evaluate
       }
@@ -233,39 +248,42 @@ export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): Calcu
     return isNaN(num) ? cell : num;
   };
 
+  // Resolve a possibly cross-sheet reference to the grid it reads from, plus the
+  // sheet-name-stripped ref. A same-sheet ref returns the current `calculated`
+  // grid; a cross-sheet ref computes and caches its target sheet. null means the
+  // named sheet does not exist — the caller picks the terminal action (#REF! for
+  // a single cell, [] for a range). The two-stage cache seed (raw copy published
+  // BEFORE recursing, real result after) is the cross-sheet infinite-loop guard.
+  const resolveSheetData = (fullRef: string): ResolvedSheetRef | null => {
+    const sheetMatch = fullRef.match(/^(?:'([^']+)'|([^!]+))!(.+)$/);
+    if (!sheetMatch) return { sheetData: calculated, ref: fullRef, isCurrentSheet: true };
+
+    const targetSheetName = sheetMatch[1] || sheetMatch[2]; // Quoted or unquoted sheet name
+    const innerRef = sheetMatch[3]; // Reference part after the sheet name
+
+    // Check cache first to prevent infinite loops
+    const cached = sheetsCache.get(targetSheetName);
+    if (cached) return { sheetData: cached, ref: innerRef, isCurrentSheet: false };
+
+    const targetSheet = processedAllSheets?.find((s) => s.name === targetSheetName);
+    if (!targetSheet || !targetSheet.data) return null;
+
+    // Seed the cache with a raw copy BEFORE recursing so a cyclic back-reference
+    // finds this sheet mid-flight, then overwrite it with the calculated result.
+    // Resolve cross-sheet values RAW (skip display formatting) so a date cell
+    // reads as its serial, not the presentation string "03/04/2025".
+    const targetCalculated = targetSheet.data.map((row) => [...row]);
+    sheetsCache.set(targetSheetName, targetCalculated);
+    const targetResult = calculateSheet(targetSheet, processedAllSheets, { preferDDMMYYYY, skipFormatting: true });
+    sheetsCache.set(targetSheetName, targetResult.data);
+    return { sheetData: targetResult.data, ref: innerRef, isCurrentSheet: false };
+  };
+
   // Helper to get cell value by reference (e.g., "B2", "$B$2", or "'Sheet1'!B2")
   const getCellValue = (ref: string): CellValue => {
-    let sheetData: any[][] = calculated;
-    let cellRef = ref;
-    let isCurrentSheet = true;
-
-    // Check for cross-sheet reference (e.g., 'Sheet Name'!B2 or Sheet1!B2)
-    const sheetMatch = ref.match(/^(?:'([^']+)'|([^!]+))!(.+)$/);
-    if (sheetMatch) {
-      const targetSheetName = sheetMatch[1] || sheetMatch[2]; // Quoted or unquoted sheet name
-      cellRef = sheetMatch[3]; // Cell reference part
-      isCurrentSheet = false;
-
-      // Check cache first to prevent infinite loops
-      if (sheetsCache.has(targetSheetName)) {
-        sheetData = sheetsCache.get(targetSheetName)!;
-      } else {
-        // Find the sheet in all sheets
-        const targetSheet = processedAllSheets?.find((s) => s.name === targetSheetName);
-        if (targetSheet && targetSheet.data) {
-          // Calculate formulas for the target sheet with cache
-          const targetCalculated = targetSheet.data.map((row) => [...row]);
-          sheetsCache.set(targetSheetName, targetCalculated);
-
-          // Recursively calculate the target sheet
-          const targetResult = calculateSheet(targetSheet, processedAllSheets);
-          sheetsCache.set(targetSheetName, targetResult.data);
-          sheetData = targetResult.data as any[][];
-        } else {
-          return 0; // Sheet not found
-        }
-      }
-    }
+    const resolved = resolveSheetData(ref);
+    if (!resolved) throw invalidRefError(ref); // Sheet not found → #REF!
+    const { sheetData, ref: cellRef, isCurrentSheet } = resolved;
 
     // Remove $ symbols for absolute references
     const cleanRef = cellRef.replace(/\$/g, "");
@@ -285,60 +303,32 @@ export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): Calcu
   };
 
   const collectRangeValues = (range: string, options: { numericOnly: boolean }): CellValue[] => {
-    let sheetData: any[][] = calculated;
-    let rangeRef = range;
-    let isCurrentSheet = true;
+    const resolved = resolveSheetData(range);
+    if (!resolved) return []; // Sheet not found → empty range
+    const { sheetData, ref: rangeRef, isCurrentSheet } = resolved;
 
-    // Check for cross-sheet reference
-    const sheetMatch = range.match(/^(?:'([^']+)'|([^!]+))!(.+)$/);
-    if (sheetMatch) {
-      const targetSheetName = sheetMatch[1] || sheetMatch[2];
-      rangeRef = sheetMatch[3];
-      isCurrentSheet = false;
-
-      // Check cache first
-      if (sheetsCache.has(targetSheetName)) {
-        sheetData = sheetsCache.get(targetSheetName)!;
-      } else {
-        // Find and calculate the target sheet
-        const targetSheet = processedAllSheets?.find((s) => s.name === targetSheetName);
-        if (targetSheet && targetSheet.data) {
-          const targetCalculated = targetSheet.data.map((row) => [...row]);
-          sheetsCache.set(targetSheetName, targetCalculated);
-
-          // Recursively calculate the target sheet
-          const targetResult = calculateSheet(targetSheet, processedAllSheets);
-          sheetsCache.set(targetSheetName, targetResult.data);
-          sheetData = targetResult.data as any[][];
-        } else {
-          return [];
-        }
-      }
-    }
-
-    const match = rangeRef.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
-    if (!match) return [];
-
-    const startCol = columnToIndex(match[1]);
-    const startRow = parseInt(match[2]) - 1;
-    const endCol = columnToIndex(match[3]);
-    const endRow = parseInt(match[4]) - 1;
+    const coords = expandRangeOrCell(rangeRef);
+    if (!coords) return [];
 
     const values: CellValue[] = [];
-    for (let row = startRow; row <= endRow; row++) {
-      for (let col = startCol; col <= endCol; col++) {
-        if (row >= 0 && row < sheetData.length && col >= 0 && col < sheetData[row].length) {
-          const cell = sheetData[row][col];
-          // Pass row/col only if current sheet (for recursive evaluation)
-          const rawValue = getRawValue(cell, isCurrentSheet ? row : undefined, isCurrentSheet ? col : undefined);
+    for (const { row, col } of coords) {
+      if (row >= 0 && row < sheetData.length && col >= 0 && col < sheetData[row].length) {
+        const cell = sheetData[row][col];
+        // Pass row/col only if current sheet (for recursive evaluation)
+        const rawValue = getRawValue(cell, isCurrentSheet ? row : undefined, isCurrentSheet ? col : undefined);
 
-          if (options.numericOnly) {
-            if (!isNaN(rawValue as number)) {
-              values.push(rawValue);
-            }
-          } else {
+        if (options.numericOnly) {
+          // A blank cell is not a value. Dropping it from the NUMERIC list keeps
+          // SUM unchanged (a blank read as 0) while stopping it from inflating
+          // AVERAGE's denominator and COUNT's tally (#2358). The raw list keeps
+          // every cell so SUMIF/AVERAGEIF's criteria and value ranges stay
+          // row-aligned; dropping there would shift indexes and aggregate the
+          // wrong rows (Codex review).
+          if (!isEmptyCell(cell) && !isNaN(rawValue as number)) {
             values.push(rawValue);
           }
+        } else {
+          values.push(rawValue);
         }
       }
     }
@@ -358,6 +348,7 @@ export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): Calcu
       getRangeValues,
       getRangeValuesRaw,
       evaluateFormula,
+      preferDDMMYYYY,
     });
   };
 
@@ -380,9 +371,6 @@ export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): Calcu
 
         // Check if value is a formula (string starting with "=")
         if (typeof value === "string" && value.startsWith("=")) {
-          // Remove the "=" prefix and evaluate the formula
-          const formula = value.substring(1);
-
           // Track formula info
           formulas.push({
             cell: { row: rowIdx, col: colIdx },
@@ -391,7 +379,10 @@ export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): Calcu
             result: 0, // Will be updated below
           });
 
-          const result = evaluateFormula(formula);
+          // Route through the protected path so a thrown failure is classified
+          // into errors[] instead of escaping this loop, and a cell already
+          // resolved via another formula's recursion is read from cache (#2359).
+          const result = resolveFormulaCell(value, rowIdx, colIdx);
 
           // Update formula result
           formulas[formulas.length - 1].result = result;
@@ -408,35 +399,13 @@ export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): Calcu
     }
   }
 
-  // Final formatting pass: apply formatting to all cells with format codes
-  for (let rowIdx = 0; rowIdx < data.length; rowIdx++) {
-    for (let colIdx = 0; colIdx < data[rowIdx].length; colIdx++) {
-      const originalCell = data[rowIdx][colIdx];
-      const calculatedValue = calculated[rowIdx][colIdx];
-
-      if (isObj(originalCell) && "v" in originalCell) {
-        const isFormula = typeof originalCell.v === "string" && originalCell.v.startsWith("=");
-
-        // Apply formatting if cell has a format code and calculated value is a number
-        if ("f" in originalCell && originalCell.f && typeof calculatedValue === "number") {
-          calculated[rowIdx][colIdx] = formatNumber(calculatedValue, originalCell.f);
-        }
-        // Auto-format date serial numbers from formulas without explicit format
-        else if (
-          isFormula &&
-          typeof calculatedValue === "number" &&
-          calculatedValue >= 36000 &&
-          calculatedValue <= 63499 &&
-          Number.isInteger(calculatedValue) &&
-          (!("f" in originalCell) || !originalCell.f)
-        ) {
-          // Check if this looks like a date serial number
-          // 36000 = Jul 1998, 63499 = Dec 2073
-          // Must be integer (dates without time component)
-          // Avoids formatting calculated averages/sums as dates
-          // Apply default date format
-          calculated[rowIdx][colIdx] = formatNumber(calculatedValue, "MM/DD/YYYY");
-        }
+  // Final display-formatting pass: turn raw serials into presentation strings.
+  // Skipped when this sheet is computed only to resolve a cross-sheet reference,
+  // so the referencing cell reads the underlying value, not a display string.
+  if (!skipFormatting) {
+    for (let rowIdx = 0; rowIdx < data.length; rowIdx++) {
+      for (let colIdx = 0; colIdx < data[rowIdx].length; colIdx++) {
+        calculated[rowIdx][colIdx] = formatCellForDisplay(data[rowIdx][colIdx], calculated[rowIdx][colIdx], preferDDMMYYYY);
       }
     }
   }
@@ -455,6 +424,6 @@ export function calculateSheet(sheet: SheetData, allSheets?: SheetData[]): Calcu
  * @param sheets - Array of sheets to calculate
  * @returns Array of calculated sheets
  */
-export function calculateWorkbook(sheets: SheetData[]): CalculatedSheet[] {
-  return sheets.map((sheet) => calculateSheet(sheet, sheets));
+export function calculateWorkbook(sheets: SheetData[], options: CalculateOptions = {}): CalculatedSheet[] {
+  return sheets.map((sheet) => calculateSheet(sheet, sheets, options));
 }

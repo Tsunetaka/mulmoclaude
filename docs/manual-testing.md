@@ -244,6 +244,141 @@ PR's checklist.
 
 ---
 
+## 9. Browser page translation (`translate="no"` / `translate="yes"`)
+
+**Why manual**: Chrome's built-in translation is a browser feature, not page
+JavaScript — Playwright cannot switch it on, and there is no DOM signal to
+assert against. The attribute placement is unit-guarded
+(`test/components/test_translate_guard.ts`), but whether the *browser* honours
+it can only be seen by hand.
+
+Background: Material Icons draw glyphs from **ligatures**, so an icon element's
+text content is the icon name. Translation rewrites those text nodes and every
+icon-only control renders its name as a word (#2561 / #2558). `#app` carries
+`translate="no"`; agent/user content opts back in with `translate="yes"`.
+
+### What to check
+
+Open the app in Chrome, right-click → **Translate to <other language>** and pick
+a target language (changing Chrome's UI language does not translate the page on
+its own). Pick a language different from `VITE_LOCALE` so the effect is visible.
+
+| Surface | Expected |
+|---|---|
+| Header nav, sidebar rows, chat composer buttons | Icons stay as **glyphs**; no `send` / `lightbulb` / `送信` / `電球` text, no doubled labels |
+| Teleported UI (file-tree context menu, confirm dialog, collection record modal) | Same — these render outside `#app`, so they carry their own `translate="no"` |
+| Assistant reply body, wiki page body, skill body | **Do** get translated — these are `translate="yes"`, and losing that is the silent regression to watch for |
+
+Nested `translate="yes"` inside a `translate="no"` subtree is per spec, but
+Chrome's behaviour here is the reason this check exists: if content stops being
+translatable, the opt-in is not being honoured and the approach needs revisiting
+(per-icon `translate="no"` was the alternative — see #2561).
+
+---
+
+## 10. Google Tasks — reopening a completed task (`tasksUncomplete`, #2574)
+
+**Why manual**: the unit tests stub `fetch`, so they pin what we *send*
+(`{ status: "needsAction" }`) but say nothing about what Google *does* with it.
+Asserting the real round-trip needs a live OAuth token and a real task list.
+
+Background: `uncompleteTask` PATCHes `status` alone, mirroring `completeTask`.
+Google is expected to clear the `completed` timestamp on its own when status
+leaves `completed` — **this is unverified**. `TaskSummary` doesn't carry
+`completed`, so a stale one would never show in MulmoClaude; it would only be
+visible in Google's own UI.
+
+### What to check
+
+1. Ask the agent to create a task, then to complete it.
+2. In Google ToDo (or Calendar's task pane), confirm it shows as done.
+3. Ask the agent: "put that task back on my list" → `tasksUncomplete`.
+4. In Google's UI, confirm the task is back on the list **and does not show a
+   completion date**.
+
+If a completion date lingers, add `completed: null` to the patch body in
+`packages/core/src/google/tasks.ts` — the comment on `uncompleteTask` marks the
+spot.
+
+Also worth one pass: ask to reopen a task *without* listing first. The tool
+description tells the model to list with `showCompleted: true` (completed tasks
+are hidden by default), so the failure to watch for is the agent reporting "no
+such task" instead of finding it.
+
+---
+
+## 11. Icon launcher — the parts of a double-click no harness reaches (#2613)
+
+**Why manual**: `create-shortcut` and every decision the launcher makes are
+unit-tested, and `test/utils/launcher/test_resolvePath.ts` runs the PATH
+recovery under the stripped environment a GUI launch really gets. What no test
+can do is *be a person double-clicking an icon in the Finder* — LaunchServices,
+icon rendering, and a modal `osascript` alert are outside any runner.
+
+Note that `open MulmoClaude.app` **from a terminal is not a substitute**: it
+leaks the terminal's environment to the app (measured: 59 env vars and a full
+`PATH`), so it passes even when a real double-click would fail. The closest
+scriptable approximation is
+`env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin open -n MulmoClaude.app`.
+
+### What to check
+
+Build it first: `npx mulmoclaude create-shortcut`.
+
+1. **The icon looks right** in the Finder and in the Dock — a grey rounded
+   square with a white M, not the generic app icon. A generic icon means
+   `buildIcns` failed (it degrades instead of aborting).
+2. **Double-click with nothing running** → a progress page appears within a
+   second or two, and the app replaces it when the server is up.
+3. **Double-click while MulmoClaude is already running** → the browser opens
+   straight to the app. No second server: `lsof -ti:3001` still shows one PID.
+4. **Quit the terminal you installed from, then double-click again.** This is
+   the case that catches a PATH regression on a machine using a version manager.
+5. **Node.js missing** (test on a machine without it, or temporarily rename the
+   binary): a native alert appears with the "nodejs.org" button, and clicking it
+   opens the download page. This is the only screen that cannot be a web page,
+   so it is also the only one whose button cannot be tested.
+6. **System language** — switch macOS to another supported language, log out and
+   in, and confirm the progress page and any error page follow it. Simplified
+   Chinese is the one worth picking: it reports `AppleLocale = zh-Hans_US`, a
+   script-tagged form that no other supported language produces.
+
+The launcher's own log is `~/Library/Logs/MulmoClaude/launcher.log`.
+
+---
+
+## 12. Windows icon launch (`create-shortcut`)
+
+Most of this section used to be here. It is now in CI, because the *cause*
+of each failure turned out to be checkable even where the appearance is not
+— see `test/utils/launcher/test_windowsShortcutIntegration.ts`:
+
+| Was manual | Now asserted on `windows-latest` |
+|---|---|
+| The icon renders | Every size decodes out of the `.ico` and has opaque pixels — a blank icon fails |
+| SmartScreen stays quiet | None of the generated files carries a `Zone.Identifier` stream, which is the attribute SmartScreen keys on |
+| A version-manager node resolves | The real `launch.vbs` runs with node reachable only through an nvm-like PATH entry, and the handover names that node |
+| No console window | The stub is asserted never to call `WshShell.Exec` (which always allocates a console) and to run node with `Run(…, 0, False)` |
+
+**What is still human, and cannot stop being:**
+
+1. **What it looks like.** That the icon is the right artwork at each size,
+   that the progress page is legible, that the `MsgBox` is readable. CI can
+   prove pixels exist; it cannot prove they look right.
+2. **The gesture.** A real Explorer double-click, and the Start Menu entry
+   appearing under a search for "MulmoClaude".
+3. **A genuinely unsigned-app-hostile machine.** The Mark-of-the-Web check
+   covers the documented mechanism, but a machine under managed policy can
+   refuse unsigned apps on grounds CI has no way to reproduce.
+4. **The no-Node dialog end to end.** Rename node, double-click, confirm the
+   `MsgBox` appears in the system language and that **Yes** opens nodejs.org.
+   A modal on a headless runner would hang the job, so it is never fired
+   there.
+
+The launcher's own log is `%LOCALAPPDATA%\MulmoClaude\logs\launcher.log`.
+
+---
+
 ## Updating this document
 
 When you land a PR:

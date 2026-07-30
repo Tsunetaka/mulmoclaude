@@ -29,7 +29,7 @@ import { claudeSkillDir, dataSkillDir, mirrorSkillWrite } from "../../../skill-b
 
 import { log } from "../../server/host.js";
 import { errorMessage } from "../../server/util.js";
-import { writeFileAtomic } from "../../server/atomic.js";
+import { writeFileAtomic } from "../../../files/atomic.js";
 import { isRecord } from "../guards.js";
 import { fetchAllRegistries } from "./client.js";
 import { fetchBundle, fetchManifest, normalizedDataPath } from "./importCollection.js";
@@ -192,8 +192,14 @@ function validateAndNormalize(bundle: Map<string, string>, localSlug: string, wo
   }
   const parsed = CollectionSchemaZ.safeParse(parsedJson);
   if (!parsed.success) return { error: `schema.json failed validation: ${parsed.error.issues[0]?.message ?? "invalid"}` };
+  // A `dataSource` collection can't be imported: its records are the rows of
+  // a machine-local data file the bundle doesn't (and can't) carry — and the
+  // R3 dataPath stamp below would collide with the exactly-one-of rule.
+  if (parsed.data.dataSource !== undefined) {
+    return { error: "schema.json declares `dataSource` — external-data collections are machine-local and cannot be imported from a registry" };
+  }
   const schema: CollectionSchema = { ...parsed.data, dataPath: normalizedDataPath(localSlug) };
-  const acceptance = acceptParsedSchema(schema, { source: "project", workspaceRoot });
+  const acceptance = acceptParsedSchema(schema, { source: "project", workspaceRoot, slug: localSlug });
   if (!acceptance.ok) return { error: `schema.json rejected: ${acceptance.reason}` };
   return { schema };
 }

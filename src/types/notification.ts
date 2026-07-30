@@ -25,16 +25,6 @@ export const NOTIFICATION_KINDS = {
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[keyof typeof NOTIFICATION_KINDS];
 
-export const NOTIFICATION_ICONS: Record<NotificationKind, string> = {
-  todo: "check_circle",
-  scheduler: "event",
-  agent: "smart_toy",
-  journal: "auto_stories",
-  push: "notifications",
-  bridge: "chat",
-  system: "warning",
-};
-
 export const NOTIFICATION_ACTION_TYPES = {
   navigate: "navigate",
   none: "none",

@@ -198,19 +198,33 @@ async function resolveSource(repoIdRaw: string, skillFolderRaw: string, workspac
   return { repoId, skillFolder, sourceDir, url: meta.url };
 }
 
+// Resolve a catalog source, or classify why it failed: a bad-shape id
+// (rejected upstream) → `invalid-id`, otherwise missing-on-disk →
+// `not-found`. The detail-read and star routes share this preamble; the
+// error variants are a subset of both routes' result types.
+type SourceError = { kind: "invalid-id" } | { kind: "not-found"; repoId: string; skillFolder: string };
+
+async function resolveSourceOrError(
+  repoIdRaw: string,
+  skillFolderRaw: string,
+  workspaceRoot: string,
+): Promise<{ ok: true; resolved: ResolvedSource } | { ok: false; error: SourceError }> {
+  const resolved = await resolveSource(repoIdRaw, skillFolderRaw, workspaceRoot);
+  if (resolved) return { ok: true, resolved };
+  if (!isSafeRepoId(repoIdRaw)) return { ok: false, error: { kind: "invalid-id" } };
+  if (skillFolderRaw !== "." && safeFolderName(skillFolderRaw) === null) return { ok: false, error: { kind: "invalid-id" } };
+  return { ok: false, error: { kind: "not-found", repoId: repoIdRaw, skillFolder: skillFolderRaw } };
+}
+
 export async function readExternalCatalogDetail(
   repoIdRaw: string,
   skillFolderRaw: string,
   opts: ExternalCatalogOptions = {},
 ): Promise<ExternalCatalogDetailResult> {
   const workspaceRoot = opts.workspaceRoot ?? workspacePath;
-  const resolved = await resolveSource(repoIdRaw, skillFolderRaw, workspaceRoot);
-  if (!resolved) {
-    // Distinguish bad shape (rejected upstream) from missing-on-disk.
-    if (!isSafeRepoId(repoIdRaw)) return { kind: "invalid-id" };
-    if (skillFolderRaw !== "." && safeFolderName(skillFolderRaw) === null) return { kind: "invalid-id" };
-    return { kind: "not-found", repoId: repoIdRaw, skillFolder: skillFolderRaw };
-  }
+  const source = await resolveSourceOrError(repoIdRaw, skillFolderRaw, workspaceRoot);
+  if (!source.ok) return source.error;
+  const { resolved } = source;
   const skillMd = path.join(resolved.sourceDir, "SKILL.md");
   let raw: string;
   try {
@@ -265,12 +279,9 @@ export type ExternalStarResult =
 
 export async function starExternalCatalogEntry(repoIdRaw: string, skillFolderRaw: string, opts: ExternalCatalogOptions = {}): Promise<ExternalStarResult> {
   const workspaceRoot = opts.workspaceRoot ?? workspacePath;
-  const resolved = await resolveSource(repoIdRaw, skillFolderRaw, workspaceRoot);
-  if (!resolved) {
-    if (!isSafeRepoId(repoIdRaw)) return { kind: "invalid-id" };
-    if (skillFolderRaw !== "." && safeFolderName(skillFolderRaw) === null) return { kind: "invalid-id" };
-    return { kind: "not-found", repoId: repoIdRaw, skillFolder: skillFolderRaw };
-  }
+  const source = await resolveSourceOrError(repoIdRaw, skillFolderRaw, workspaceRoot);
+  if (!source.ok) return source.error;
+  const { resolved } = source;
   const activeId = deriveActiveId(resolved.url, resolved.skillFolder === "." ? null : resolved.skillFolder);
   if (!activeId) return { kind: "invalid-id" };
   const activeSlugDir = path.join(activeDir(workspaceRoot), activeId);

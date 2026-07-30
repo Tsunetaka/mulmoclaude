@@ -42,6 +42,7 @@ Guides for using MulmoClaude. No programming knowledge required.
 | [Image-path Routing — 設計議論](discussion-image-path-routing.md) | 日本語   | 画像パスのルーティング再設計の議論メモと段階的実装計画                                                             |
 | [Wiki / HTML 表示サーフェス](wiki-html-render-surfaces.md)        | 日本語   | Wiki / HTML / Markdown が表示される複数箇所の差異 (権限・画像パス解決) を整理                                      |
 | [Remote Host](remote-host.md)                                    | English  | Driving MulmoClaude from a phone over a Firestore command channel — auth model, command loop, handler table, mobile custom-view bridge |
+| [Collection Data Operations](collections-data-operations.md)     | English  | How collection records are stored and mutated — the `storeFor` read seam, the unabstracted write path, the agent's raw file I/O, and the change-event contract |
 
 ## Papers
 
@@ -96,6 +97,7 @@ Code structure, APIs, and build instructions for the host itself. Plugin authors
 | [Claude ↔ Docker boundary](claude-docker-boundary.md) | English  | What runs in the container vs. on the host when `claude -p` fires — Bash/Read/Write are in the sandbox, MCP tool implementations are on the host through a stdio proxy |
 | [Windows-host filesystem bugs in Linux containers on GHA](windows-docker-ci.md) | English  | How to reproduce Windows-FS-into-Linux-container bugs (dangling NTFS junctions, …) on GitHub Actions using WSL2 + native `dockerd` — the approach `docker_sandbox_windows.yaml` takes |
 | [Manual Testing](manual-testing.md)           | English  | Manual test items not covered by E2E                                                                                                |
+| [Troubleshooting](troubleshooting.md)         | English  | Setup problems between `git clone` and a working UI — broken-looking UI, `dist/*` 404s, Windows/OneDrive, `401` after restart, boot warnings |
 
 ## Project
 

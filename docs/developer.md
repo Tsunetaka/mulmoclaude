@@ -70,7 +70,9 @@ All env vars are **optional unless flagged "required"**. The server reads them a
 
 | Variable                               | Default                        | Effect                                                                                                                                                                                                                                                                                            |
 | -------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`                                 | `3001`                         | Express listen port (`server/index.ts:47`).                                                                                                                                                                                                                                                       |
+| `PORT`                                 | `3001`                         | Express listen port (`server/system/env.ts` — `env.port`). Left unset, a busy port walks forward so a stale `yarn dev` doesn't crash the launch; set **explicitly** and a busy port exits instead, matching `npx mulmoclaude --port`. Note the Vite dev client does **not** follow this — its proxy targets are literal `localhost:3001` (see [Running two instances](#running-two-instances)). |
+| `MULMOCLAUDE_WORKSPACE_PATH`           | `<homedir>/mulmoclaude`        | Absolute path to the workspace (`server/workspace/paths.ts` — `workspacePath`). **Evaluated once at module load**, so it is a start-time choice: there is no API, UI, or CLI flag that switches workspaces on a running server. A path that does not exist yet is created on boot, `git init` included. Under a test runner with an un-overridden `HOME` the default becomes `<tmpdir>/mulmoclaude-test` instead. Point it elsewhere to run a second, fully isolated instance — see [Running two instances](#running-two-instances). |
+| `MULMOCLAUDE_CLIENT_DIR`               | `<serverDir>/../client`        | Absolute path to the built client Express serves when `NODE_ENV=production` (`server/index.ts`, `server/utils/clientDir.ts`). The default is the layout `packages/mulmoclaude/bin/prepare-dist.js` produces when packaging the tarball; set it when the bundle lives elsewhere — e.g. running from a source clone, where it points at `<repo-root>/dist/client`. Empty string falls back to the default. |
 | `NODE_ENV`                             | unset / `production`           | When `production`, Express serves the built client from `dist/client` and falls back to `index.html` for SPA history-mode routing. Auto-set by tooling — you rarely set this manually.                                                                                                            |
 | `DISABLE_SANDBOX`                      | unset                          | Set to `1` to bypass the Docker sandbox even when Docker is available. The agent runs `claude` directly on the host. Useful for debugging without container rebuild overhead (`server/system/docker.ts:49`, `server/index.ts:147`).                                                               |
 | `SANDBOX_SSH_AGENT_FORWARD`            | unset                          | Set to `1` to forward the host's `$SSH_AUTH_SOCK` into the sandbox. Private keys stay on the host; the agent signs on the container's behalf. Full contract: [docs/sandbox-credentials.md](sandbox-credentials.md).                                                                               |
@@ -78,7 +80,9 @@ All env vars are **optional unless flagged "required"**. The server reads them a
 | `SESSIONS_LIST_WINDOW_DAYS`            | `90`                           | Caps how far back the sidebar looks when listing chat sessions (`server/api/routes/sessions.ts`). Set to `0` to disable the cutoff entirely. Introduced in PR #203 to keep `GET /api/sessions` cheap on long-lived workspaces; anything older is still on disk, just hidden from the list.        |
 | `MACOS_REMINDER_NOTIFICATIONS`         | `1` (Darwin) / unset elsewhere | Set to `0` to disable the macOS Reminders sink. The sink mirrors notifications into the system Reminders app via `osascript`. Title and body are passed via argv (not via `osascript` attribute) so notification text containing `osascript`-meta characters can't escape into the script (#789). |
 | `DISABLE_MACOS_REMINDER_NOTIFICATIONS` | unset                          | Alternate kill-switch for the same sink — set to `1` to silence it without changing the primary flag. Auto-enabled in `node:test` runs to keep test output clean.                                                                                                                                 |
-| `MULMOCLAUDE_TRUSTED_ORIGINS`          | unset                          | CSV of additional `Origin` values allowed by the CSRF guard (`server/api/csrfGuard.ts`) for cross-origin state-changing requests. Use to permit a LAN device (e.g. an iPad on `http://192.168.1.42:5173`) to reach the Vite dev server. Match is verbatim — include the scheme and port, no trailing slash. Localhost is always allowed regardless of this list. The literal string `null` (browsers send it for sandboxed iframes / `file://` / `data:` pages) is rejected even if listed — there is no opt-in escape hatch for opaque origins. |
+| `MULMOCLAUDE_DEV_LAN`                  | unset                          | Set to `1` to bind the Vite dev server to every interface instead of `127.0.0.1`, so another device on the network can load the page. The backend stays loopback-only either way: with LAN enabled, a non-loopback caller receives an **empty** auth token and the proxied backend paths (`/api`, `/artifacts`, `/ws`) are refused, so the page loads but cannot reach the API. Only enable it on a network you trust. Dev server only — `vite build` output is unaffected. |
+| `MULMOCLAUDE_DEV_WATCH_PACKAGES`       | unset                          | Windows-only escape hatch. `yarn dev` stops watching `packages/*/dist` on win32 because every sandboxed agent spawn bind-mounts the workspace packages into the container and Docker Desktop bumps their mtimes, which full-reloads the page mid-turn (#2632). Set to `1` while iterating on a workspace package to get its rebuild HMR back — at the cost of the reload storms. No effect on macOS/Linux, where those mounts never happen and the dists stay watched. |
+| `MULMOCLAUDE_TRUSTED_ORIGINS`          | unset                          | CSV of additional `Origin` values allowed by the CSRF guard (`server/api/csrfGuard.ts`) for cross-origin state-changing requests. Match is verbatim — include the scheme and port, no trailing slash. Localhost is always allowed regardless of this list. The literal string `null` (browsers send it for sandboxed iframes / `file://` / `data:` pages) is rejected even if listed — there is no opt-in escape hatch for opaque origins. Note this only widens the **Origin** check; it does not by itself make the dev server reachable off-host (see `MULMOCLAUDE_DEV_LAN`), and the backend refuses non-loopback callers regardless. |
 | `CLAUDE_CONFIG_DIR`                    | `<homedir>/.claude`            | Absolute path to the user's Claude Code CLI config directory. Resolved by `server/utils/claudeConfigPath.ts` and consumed by the sandbox pre-flight (`server/system/docker.ts`), the Docker bind mounts (`server/agent/config.ts`), the credentials probe (`server/index.ts`), and the user-scope skills lookup (`server/workspace/skills/paths.ts`). Override when your install writes elsewhere (corporate Windows redirect, sandboxed test fixture, future Anthropic location change). Issue #87 §2. |
 | `CLAUDE_CONFIG_JSON`                   | `<homedir>/.claude.json`       | Absolute path to the user's top-level Claude Code CLI JSON config. Same override surface as `CLAUDE_CONFIG_DIR` above; resolved by the same helper. |
 
@@ -120,6 +124,14 @@ Client-side env vars use the `VITE_` prefix so Vite exposes them to the bundled 
 | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `VITE_LOCALE` | `en`    | Locale passed to vue-i18n (`src/lib/vue-i18n.ts`). Supports `en` / `ja` / `zh` / `ko` / `es` / `pt-BR` / `fr` / `de` (see `SUPPORTED_LOCALES`). Missing keys fall back to English. See [i18n](#i18n-vue-i18n). |
 
+### Launcher → server handoff
+
+Set by `npx mulmoclaude` on the server it spawns. Auto-computed like the container vars below, but nothing to do with Docker — setting one by hand only misleads the server about its own launch.
+
+| Variable | Set by | Purpose |
+| -------- | ------ | ------- |
+| `MULMOCLAUDE_SHADOWED_ENV_KEYS` | launcher | CSV of launch-dir `.env` key NAMES the shell had already defined, so the file's values lost (#2604). Read once at boot by `server/system/shadowedEnv.ts`, which raises a bell notification — otherwise a user editing `.env` against a stale `export` gets no hint why nothing changes. Names only, never values; the server drops any token that isn't an env var name. Absent when there is no conflict. Outside `npx mulmoclaude` the same notification still fires, from the server's own `.env` load instead (`server/system/loadEnv.ts`, #2610) — that path is where `yarn dev` lands. |
+
 ### Container-only env (auto-set)
 
 You never set these by hand; the server constructs them when spawning Claude inside the Docker sandbox (`server/agent/config.ts` and `server/agent/mcp-server.ts`). They're listed here so log lines / failures involving them are decodable.
@@ -138,7 +150,7 @@ You never set these by hand; the server constructs them when spawning Claude ins
 | `HOME`                           | container only | `/home/node` so Claude CLI finds its credentials at `~/.claude`.                                                                                                                                                                                                              |
 | Sentinel `X_BEARER_TOKEN=1` etc. | container only | `isMcpToolEnabled()` re-evaluates inside the container; the actual API call still happens on the host, so we only signal "enabled" with `1`.                                                                                                                                  |
 
-> **There is no `WORKSPACE_PATH` env var.** The workspace path is hard-coded to `~/mulmoclaude` in `server/workspace/workspace.ts:11`. To experiment with multiple workspaces you currently need a code change or a symlink swap.
+> **Paths inside the sandbox are not host paths.** The container sees the workspace at `/home/node/mulmoclaude` (`server/agent/config.ts` — `CONTAINER_WORKSPACE_PATH`), and each configured reference directory at `/mnt/readonly/<basename>-<hash8>` (`server/workspace/reference-dirs.ts` — `containerPath`), never at its host location. Anything that hands the agent a **literal host path** — a custom role's `prompt`, a collection action template, a skill — therefore reads nothing in Docker mode, and does so silently. Refer to a reference directory by its **label**: the host injects a label→mount-path table into the system prompt (`buildReferenceDirsPrompt`), and the built-in roles keep every path workspace-relative for the same reason.
 
 ---
 
@@ -150,6 +162,7 @@ You never set these by hand; the server constructs them when spawning Claude ins
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `yarn dev`                        | Server (`:3001`) + Vite client (`:5173`) concurrently. The default.                                                                                                                                     |
 | `yarn dev:debug`                  | Same as `dev` but spawns the server with `--debug` (Node inspector ready).                                                                                                                              |
+| `yarn dev:full-build`             | Same as `dev` but rebuilds every workspace package unconditionally first. Use when a plugin's `dist/` is stale or half-written — `dev`'s mtime gate treats a partial `dist/` as fresh and skips it.      |
 | `yarn dev:client`                 | Vite client only — useful when you've already started the server elsewhere.                                                                                                                             |
 | `yarn dev:server` / `yarn server` | Express server only.                                                                                                                                                                                    |
 | `yarn server:debug`               | Server with `--debug` flag.                                                                                                                                                                             |
@@ -183,7 +196,7 @@ You never set these by hand; the server constructs them when spawning Claude ins
 
 | Script                | Notes                                                                                                                     |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `yarn sandbox:remove` | `docker rmi mulmoclaude-sandbox` — force a rebuild on next run.                                                           |
+| `yarn sandbox:remove` | `docker rmi mulmoclaude-sandbox` — rebuild on next run. Reuses the cached layers, so it does NOT refresh the bundled Claude CLI; add `docker builder prune -a -f` for that (#2202). |
 | `yarn sandbox:login`  | macOS only. Exports the Claude CLI keychain entry to `~/.claude/.credentials.json` so the sandbox container can reuse it. |
 | `yarn sandbox:logout` | Removes that file.                                                                                                        |
 
@@ -197,11 +210,28 @@ Three independent Node processes cooperate at runtime:
 2. **Vite dev client** — listens on `localhost:5173`, proxies `/api/*` to `:3001`. Production builds skip Vite and let Express serve the static `dist/client`.
 3. **MCP stdio bridge** (`server/agent/mcp-server.ts`) — spawned by the Claude CLI subprocess via `--mcp-config`. No HTTP listener: speaks JSON-RPC over stdin/stdout, forwards Claude's tool calls back to the Express server (`MCP_HOST:PORT/api/*`).
 
+### Running two instances
+
+`yarn dev` twice does **not** give you two independent stacks. The server half honours `PORT`, but Vite's proxy targets are literal `localhost:3001` / `ws://localhost:3001` in `vite.config.ts`, with no env override — so the second dev client talks to the *first* server whatever you set, and nothing errors to tell you.
+
+To get a genuinely isolated second instance today, bypass Vite and let Express serve a prebuilt client:
+
+```bash
+yarn build   # once, produces dist/client
+MULMOCLAUDE_WORKSPACE_PATH=~/mulmoclaude-scratch \
+PORT=3100 \
+NODE_ENV=production \
+MULMOCLAUDE_CLIENT_DIR="$PWD/dist/client" \
+  yarn server
+```
+
+Workspace, port, and served client are then all independent. `e2e-live/fixtures/isolated-dev-server.ts` uses this same combination (plus `HOME`) to give each live test its own stack — which is also why live tests exercise the production serving path rather than the Vite one.
+
 ---
 
 ## Workspace layout (`~/mulmoclaude/`)
 
-`initWorkspace()` creates / refreshes this on every server start (`server/workspace/workspace.ts`). Everything is plain files tracked in a private git repo, grouped into four top-level buckets by purpose (issue #284):
+`initWorkspace()` creates / refreshes this on every server start (`server/workspace/workspace.ts`). The location defaults to `~/mulmoclaude` and is overridden with [`MULMOCLAUDE_WORKSPACE_PATH`](#runtime), read once at module load. Everything is plain files tracked in a private git repo, grouped into four top-level buckets by purpose (issue #284):
 
 ```text
 ~/mulmoclaude/
@@ -464,6 +494,15 @@ Set `VITE_LOCALE` in `.env` and restart `yarn dev`. Supported values: `en`, `ja`
 ## Docker sandbox (`Dockerfile.sandbox`)
 
 Minimal image: `node:22-slim` + `@anthropic-ai/claude-code` + `tsx`. Built lazily on first Docker-mode run; rebuilt when `Dockerfile.sandbox` changes (image SHA pinned in code). `yarn sandbox:remove` forces a rebuild.
+
+The CLI is installed unpinned, so the image freezes whatever was latest at build time, and no upstream CLI release retriggers a rebuild (the Dockerfile SHA is unchanged). `yarn sandbox:remove` alone does not refresh it either — the rebuild reuses the cached `npm install -g` layer. To move the CLI, check what the image actually has and clear the build cache too:
+
+```bash
+docker run --rm --entrypoint claude mulmoclaude-sandbox --version
+yarn sandbox:remove && docker builder prune -a -f
+```
+
+A stale CLI here surfaces as `handlePermission not found` (versions before 2.1.206 crash on `--permission-prompt-tool` before the broker connects) — see #2202 and `packages/core/assets/helps/error-recovery.md`.
 
 **Bind mounts** (constructed by `buildDockerSpawnArgs` in `server/agent/config.ts`):
 
@@ -748,6 +787,8 @@ Aggregator collisions don't throw — they're filtered and reported. `server/plu
 ---
 
 ## Common gotchas
+
+> Setup-time symptoms (unstyled UI, `dist/*` 404s, Windows/OneDrive, `401` after a restart) live in [`troubleshooting.md`](troubleshooting.md).
 
 - **Playwright uses its own port `:45173`** (`dev:client:e2e` in `package.json` + `webServer` in `e2e/playwright.config.ts`), so it doesn't collide with a running `yarn dev` on `:5173`. `reuseExistingServer: true` is still on for that port — if a stale `vite` process from a different working tree is already serving `:45173`, Playwright will happily talk to _that_ one. Symptom: tests fail because UI changes "haven't landed". Kill the stray process: `lsof -i :45173 | grep LISTEN`.
 - **CSRF guard is strict.** `requireSameOrigin` (`server/api/csrfGuard.ts`) rejects state-changing requests from non-localhost origins. Requests with no `Origin` header (CLI tools, server-to-server) are allowed because the listener is bound to `127.0.0.1`. If you ever expose the listener publicly, tighten this middleware first.

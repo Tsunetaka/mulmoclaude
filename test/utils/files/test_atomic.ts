@@ -46,8 +46,11 @@ describe("writeFileAtomic", () => {
     assert.equal(tmps.length, 0);
   });
 
-  it("applies file mode when specified", async () => {
-    if (process.platform === "win32") return; // chmod no-op on Windows
+  it("applies file mode when specified", async (ctx) => {
+    if (process.platform === "win32") {
+      ctx.skip("chmod is a no-op on Windows");
+      return;
+    }
     const file = path.join(tmpDir, "secret.txt");
     await writeFileAtomic(file, "secret", { mode: 0o600 });
     const stat = statSync(file);
@@ -129,8 +132,11 @@ describe("writeFileAtomic — binary content (#881 v1)", () => {
     assert.deepEqual([...read], [0x80, 0x81, 0xfe, 0xff]);
   });
 
-  it("applies file mode for Buffer content", async () => {
-    if (process.platform === "win32") return; // chmod no-op on Windows
+  it("applies file mode for Buffer content", async (ctx) => {
+    if (process.platform === "win32") {
+      ctx.skip("chmod is a no-op on Windows");
+      return;
+    }
     const file = path.join(tmpDir, "bin-mode.bin");
     await writeFileAtomic(file, Buffer.from([1, 2, 3]), { mode: 0o600 });
     const stat = statSync(file);
@@ -146,5 +152,36 @@ describe("writeFileAtomic — binary content (#881 v1)", () => {
     await assert.rejects(() => writeFileAtomic(dir, Buffer.from([1, 2, 3])));
     const siblings = readdirSync(path.dirname(dir));
     assert.equal(siblings.filter((file) => file.endsWith(".tmp")).length, 0);
+  });
+});
+
+// The staging name used to be the shared `${filePath}.tmp`, so two writers of
+// one destination raced: one rename/unlink pulled the staging file out from
+// under the other. It fired in production on session meta — ten callers all
+// write the same `<sessionId>.json` — as
+// `ENOENT … rename '<file>.json.tmp' -> '<file>.json'` (#2222).
+describe("writeFileAtomic — concurrent writers to one destination (#2222)", () => {
+  it("does not lose a write when several writers target the same file", async () => {
+    const file = path.join(tmpDir, "contended.json");
+    const writers = Array.from({ length: 12 }, (_, index) => writeFileAtomic(file, `payload-${index}`));
+    // Every write must resolve: none may fail because a sibling removed its
+    // staging file mid-flight.
+    await Promise.all(writers);
+    // Last writer wins, but the file must be one intact payload — never a
+    // half-written or missing file.
+    assert.match(readFileSync(file, "utf-8"), /^payload-\d+$/);
+  });
+
+  it("leaves no staging files behind after a contended burst", async () => {
+    const file = path.join(tmpDir, "contended-cleanup.json");
+    await Promise.all(Array.from({ length: 8 }, (_, index) => writeFileAtomic(file, `v${index}`)));
+    const strays = readdirSync(tmpDir).filter((name) => name.startsWith("contended-cleanup.json.") && name.endsWith(".tmp"));
+    assert.deepEqual(strays, [], `staging files leaked: ${strays.join(", ")}`);
+  });
+
+  it("still honours an explicit uniqueTmp: false for callers that need a predictable staging path", async () => {
+    const file = path.join(tmpDir, "predictable.txt");
+    await writeFileAtomic(file, "ok", { uniqueTmp: false });
+    assert.equal(readFileSync(file, "utf-8"), "ok");
   });
 });

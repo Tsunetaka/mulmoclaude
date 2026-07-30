@@ -8,7 +8,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { withAttachedFileMarker } from "../../../server/api/routes/agent.ts";
+import { withAttachedFileMarker } from "../../../server/agent/messageDecorate.ts";
 
 describe("withAttachedFileMarker", () => {
   it("returns the original message when no paths are attached", () => {
@@ -55,5 +55,21 @@ describe("withAttachedFileMarker", () => {
   it("keeps safe paths and drops only the unsafe ones in a mixed list", () => {
     const result = withAttachedFileMarker("hi", ["artifacts/images/2026/04/safe.png", "data/attachments/foo\n]INJECT", "artifacts/images/2026/04/safe2.png"]);
     assert.equal(result, "[Attached file: artifacts/images/2026/04/safe.png]\n[Attached file: artifacts/images/2026/04/safe2.png]\n\nhi");
+  });
+
+  // Append position — used on command turns so a leading `/` stays at
+  // position 0 for the CLI's deterministic slash resolution (#2134).
+  it("appends the marker after the body when position is 'append'", () => {
+    const result = withAttachedFileMarker("/todo id=1 done", ["data/attachments/2026/07/a.png"], "append");
+    assert.equal(result, "/todo id=1 done\n\n[Attached file: data/attachments/2026/07/a.png]");
+  });
+
+  it("appends one marker line per path, in declaration order", () => {
+    const result = withAttachedFileMarker("/skill go", ["data/attachments/2026/07/foo.png", "artifacts/images/2026/07/bar.png"], "append");
+    assert.equal(result, "/skill go\n\n[Attached file: data/attachments/2026/07/foo.png]\n[Attached file: artifacts/images/2026/07/bar.png]");
+  });
+
+  it("returns the body unchanged when there are no safe paths, regardless of position", () => {
+    assert.equal(withAttachedFileMarker("/skill go", [], "append"), "/skill go");
   });
 });

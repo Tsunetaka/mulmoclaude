@@ -5,7 +5,7 @@
 //
 // Tracks #175.
 
-import { makeSkillResult, makeTextResult } from "../tools/result";
+import { makeSkillResult, makeTextResult, TEXT_LIKE_RESULT_TOOL_NAMES } from "../tools/result";
 import {
   isSessionOrigin,
   isSkillEntry,
@@ -85,6 +85,36 @@ export function parseSessionEntries(entries: readonly SessionEntry[], sessionOri
 export function resolveSelectedUuid(toolResults: readonly ToolResultComplete[]): string | null {
   if (toolResults.length === 0) return null;
   return toolResults[toolResults.length - 1].uuid;
+}
+
+// Total character length of the STREAMED-TEXT card bodies. Only text and
+// skill cards keep their running text in `message` (TEXT_LIKE_RESULT_TOOL_NAMES),
+// and only those grow token-by-token — so only those can be truncated by a
+// dropped socket.io frame while the card COUNT stays equal. Other cards
+// (images, charts, …) carry their payload in `data`, arrive complete in one
+// frame, and are caught by the card-count check — so they're excluded here to
+// avoid a `message` diff on a non-streamed card skewing the decision (#2096,
+// Sourcery review).
+function streamedTextLength(results: readonly ToolResultComplete[]): number {
+  return results.reduce((sum, result) => (TEXT_LIKE_RESULT_TOOL_NAMES.has(result.toolName) ? sum + (result.message?.length ?? 0) : sum), 0);
+}
+
+/** Decide whether a reconnect / finished catch-up should replace the
+ *  client's in-memory transcript with the server's copy.
+ *
+ *  - Server has MORE cards → adopt (the client missed whole events).
+ *  - Same card count but MORE total text on the server → adopt: a dropped
+ *    socket.io frame truncated a streamed text card, so the counts match
+ *    yet the last card's body is cut off (#2096). Card-count alone missed
+ *    this, leaving "…理由によ" on screen until a reload.
+ *  - Otherwise keep the client copy — never overwrite a richer or equal
+ *    in-flight state with an equal-or-staler snapshot (the #1915 guard
+ *    that stops a `session_finished` race from clobbering live events). */
+export function shouldAdoptServerTranscript(serverResults: readonly ToolResultComplete[], clientResults: readonly ToolResultComplete[]): boolean {
+  if (serverResults.length !== clientResults.length) {
+    return serverResults.length > clientResults.length;
+  }
+  return streamedTextLength(serverResults) > streamedTextLength(clientResults);
 }
 
 // Decide the `startedAt` / `updatedAt` to seed the in-memory

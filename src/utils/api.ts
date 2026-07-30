@@ -226,10 +226,6 @@ export function apiPut<T = unknown>(path: string, body?: unknown, extra: Omit<Ap
   return apiCall<T>(path, { ...extra, method: "PUT", body });
 }
 
-export function apiPatch<T = unknown>(path: string, body?: unknown, extra: Omit<ApiOptions, "method" | "body"> = {}): Promise<ApiResult<T>> {
-  return apiCall<T>(path, { ...extra, method: "PATCH", body });
-}
-
 export function apiDelete<T = unknown>(path: string, body?: unknown, extra: Omit<ApiOptions, "method" | "body"> = {}): Promise<ApiResult<T>> {
   return apiCall<T>(path, { ...extra, method: "DELETE", body });
 }

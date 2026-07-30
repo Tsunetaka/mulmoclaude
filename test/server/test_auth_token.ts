@@ -45,8 +45,11 @@ describe("generateAndWriteToken", () => {
     assert.equal(readFileSync(tokenPath, "utf-8"), second);
   });
 
-  it("writes with mode 0600 on POSIX", async () => {
-    if (process.platform === "win32") return; // chmod 0600 is a no-op on Windows
+  it("writes with mode 0600 on POSIX", async (ctx) => {
+    if (process.platform === "win32") {
+      ctx.skip("chmod 0600 is a no-op on Windows");
+      return;
+    }
     await generateAndWriteToken(tokenPath);
     const mode = statSync(tokenPath).mode & 0o777;
     assert.equal(mode, 0o600);

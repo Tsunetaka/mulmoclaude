@@ -121,6 +121,10 @@ const enMessages = {
     hostBody: 'Plugin "{plugin}" tried to register the {label} key "{key}" but it is reserved by the host. The plugin\'s entry has been dropped.',
     intraBody: 'Plugins "{first}" and "{second}" both register {dimension} "{key}". "{first}" claimed it first, so "{second}"\'s registration is ignored.',
   },
+  shadowedEnv: {
+    title: "Shell env is overriding .env",
+    body: "Set in both your shell and .env: {keys}. The shell value wins, so .env is ignored. If you edited .env, update or unset the shell value and restart.",
+  },
   optionalDeps: {
     // Generic `title` kept for backward compatibility with persisted
     // history entries published before the reason-aware split below;
@@ -147,6 +151,11 @@ const enMessages = {
     hideDetails: "Hide details",
     retry: "Retry",
   },
+  remoteHostOffline: {
+    title: "Remote host disconnected",
+    body: "Your phone can't send to this device until you reconnect.",
+    reconnect: "Reconnect",
+  },
   remoteHost: {
     title: "Remote host",
     online: "Remote host online",
@@ -167,6 +176,7 @@ const enMessages = {
     qrHint: "Or scan this QR code with your phone's camera.",
   },
   sidebarHeader: {
+    newMessages: "New messages",
     home: "Go to latest chat",
     toolCallHistory: "Tool call history",
     settings: "Settings",
@@ -213,6 +223,12 @@ const enMessages = {
     showSystemFilesTitle: "Show agent-internal top-level dirs (conversations/, feeds/, etc.) in addition to your user content (data/, artifacts/, config/).",
   },
   fileTree: {
+    dropHint: "Drop files here to save them in this folder",
+    upload: {
+      progress: "Uploading {done} of {total}…",
+      done: "Saved {count} file(s)",
+      failed: "{count} file(s) couldn't be saved",
+    },
     workspace: "(workspace)",
     recentlyChanged: "Recently changed",
     newFileMenuItem: "New file",
@@ -260,6 +276,7 @@ const enMessages = {
       refs: "Reference Dirs",
       map: "Map",
       photos: "Photos",
+      google: "Google",
       model: "Model",
       voice: "Voice",
       chatIndex: "Chat index",
@@ -267,6 +284,7 @@ const enMessages = {
       notifications: "Web Push",
       skills: "Skills",
       roles: "Roles",
+      quit: "Quit",
     },
     groups: {
       llm: "LLM",
@@ -275,8 +293,24 @@ const enMessages = {
       notifications: "Notifications",
       plugins: "Plugins",
       management: "Management",
+      server: "Server",
     },
     navAriaLabel: "Settings sections",
+    googleTab: {
+      description:
+        "Link your Google account so this machine can call Google APIs (Calendar first). The refresh token is stored only on this machine and is never sent to any server other than Google.",
+      statusLinked: "Linked",
+      statusNotLinked: "Not linked",
+      statusPending: "Waiting for the browser consent to finish…",
+      connect: "Link Google account",
+      unlink: "Unlink",
+      unlinkConfirm: "Unlink the Google account? The saved token is revoked and deleted from this machine.",
+      clientSecretAmbiguous:
+        "Multiple client_secret_*.json files were found in ~/.secrets/. Keep exactly one so the stored token stays paired with the right OAuth client.",
+      loadError: "Failed to load the Google link status.",
+      connectError: "Failed to start the Google authorization flow.",
+      unlinkError: "Failed to unlink the Google account.",
+    },
     mapTab: {
       description: "Set the Google Maps API key used by the map plugin. The key is stored locally and never transmitted anywhere except to Google Maps.",
       apiKeyLabel: "Google Maps API key",
@@ -300,6 +334,21 @@ const enMessages = {
       loadError: "Failed to load settings",
       saveError: "Failed to save",
     },
+    quitTab: {
+      description:
+        "Stop the MulmoClaude server running on this machine. Started from the icon, it keeps running after you close this tab — this is how you stop it without a terminal.",
+      // Message function form — skips vue-i18n's message compiler so the
+      // literal `@` in `mulmoclaude@latest` is not parsed as a linked-message
+      // reference (the compiler throws, and the whole tab renders as nothing).
+      restartHint: () => "To start it again, double-click the MulmoClaude icon (or run `npx mulmoclaude@latest`).",
+      quitLabel: "Quit MulmoClaude",
+      confirmBody: "The server stops and this page stops working. Anything still running is interrupted.",
+      confirmLabel: "Quit",
+      stopping: "Stopping…",
+      stoppedTitle: "MulmoClaude has stopped",
+      stoppedBody: "You can close this tab. Double-click the icon to start it again.",
+      error: "Failed to stop the server",
+    },
     notificationsTab: {
       description:
         "Get a push on your registered devices when a task you started here finishes — handy when you ask something, step away, and want to know the moment the answer is ready.",
@@ -307,6 +356,11 @@ const enMessages = {
       enableHint: "Fires when a chat you started here completes. Scheduled and background tasks don't trigger it.",
       remoteHostNote:
         "Requires the RemoteHost connection (it supplies the sign-in) and at least one registered device. With either missing, this does nothing.",
+      macosRemindersLabel: "Create a macOS Reminder when a task finishes",
+      macosRemindersHint:
+        "Adds the finished task to your default Reminders list. iCloud sync then mirrors it to your iPhone, which is what delivers the notification.",
+      macosRemindersForcedOff:
+        "Turned off at startup by --disable-macos-reminders or DISABLE_MACOS_REMINDER_NOTIFICATIONS. Remove the flag or unset the variable, then restart, to control it from here.",
       statusOn: "Web Push is ON",
       statusOff: "Web Push is OFF",
       loadError: "Failed to load settings",
@@ -460,6 +514,12 @@ const enMessages = {
     pin: "Pin to launcher",
     unpin: "Unpin from launcher",
     zoneAriaLabel: "Pinned shortcuts",
+    reorder: {
+      open: "Reorder shortcuts",
+      title: "Reorder",
+      moveUp: "Move up",
+      moveDown: "Move down",
+    },
   },
   fileContentHeader: {
     showRendered: "Show rendered Markdown",
@@ -768,6 +828,12 @@ const enMessages = {
     detailsToggle: "Show details",
     promptLabel: "Prompt",
     roleLabel: "Role",
+    confirmDelete: 'Delete the task "{name}"? This cannot be undone.',
+    hintNewsRss: "News / RSS fetch",
+    hintJournal: "Journal daily pass",
+    hintWiki: "Wiki maintenance",
+    hintMemory: "Memory extraction",
+    hintCalendar: "Calendar / contact sync",
   },
   pluginCanvas: {
     undo: "Undo",
@@ -776,6 +842,7 @@ const enMessages = {
     styleLabel: "Style:",
     stylePromptWithPath: "Turn the image at `{path}` into a {style} style image.",
     stylePromptNoPath: "Turn my drawing on the canvas into a {style} style image.",
+    saveFailed: "Not saved",
   },
   pluginWiki: {
     backToIndex: "Back to index",
@@ -803,6 +870,7 @@ const enMessages = {
     metadataEditor: "Editor",
     pageEditHeader: "Wiki edit",
     snapshotExpired: "Snapshot expired — showing current page",
+    snapshotLoadError: "Couldn't load the snapshot — the page may still exist. Try refreshing.",
     pageDeleted: "Page deleted",
     history: {
       tabContent: "Content",
@@ -961,62 +1029,11 @@ const enMessages = {
     errDeleteFailed: "Delete failed",
     errNetworkError: "Network error",
     errServerError: "Server error: {status}",
+    errRefreshFailed: "Saved, but the list failed to refresh.",
+    confirmDelete: 'Delete the role "{name}"? This cannot be undone.',
   },
   pluginUiImage: {
     promptLabel: "{label}:",
-  },
-  pluginMulmoScript: {
-    beatCount: "{count} beat | {count} beats",
-    movie: "Movie",
-    generating: "Generating…",
-    rendering: "Rendering…",
-    saving: "Saving…",
-    update: "Update",
-    characters: "Characters",
-    drop: "Drop",
-    gen: "Gen",
-    play: "▶ Play",
-    stop: "■ Stop",
-    playPresentation: "Play presentation",
-    regenerateMovie: "Regenerate movie",
-    movieGenerationFailed: "Movie generation failed",
-    pdf: "PDF",
-    regeneratePdf: "Regenerate PDF",
-    generatingPdf: "Generating PDF…",
-    retry: "Retry",
-    errPrefix: "⚠ Error",
-    noBeats: "No beats found in script",
-    editSource: "Edit Script Source",
-    applyChanges: "Apply Changes",
-    generateAll: "Generate All",
-    orDropImage: "or drop image",
-    generate: "Generate",
-    generateAudio: "♪ Generate",
-    saveErrorInvalidJson: "⚠ Invalid JSON: {error}",
-    saveErrorSaveFailed: "⚠ Save failed: {error}",
-  },
-  pluginMarkdown: {
-    loading: "Loading document...",
-    loadFailed: "⚠ Failed to load document: {error}",
-    refreshFailed: "⚠ Failed to refresh document: {error} — showing last successfully loaded content.",
-    noContent: "No markdown content available",
-    pdf: "PDF",
-    pdfFailedShort: "⚠ PDF failed",
-    editSource: "Edit Markdown Source",
-    saving: "Saving...",
-    applyChanges: "Apply Changes",
-    cancel: "Cancel",
-    saveFailed: "Save failed: {error}",
-    saveError: "⚠ Save failed: {error}",
-    copyLabel: "Copy",
-    copiedLabel: "Copied!",
-    taskCountMismatch: "Markdown source and rendered output disagree on the number of tasks. Refusing to toggle to avoid corruption.",
-    marpSlidesMode: "Marp slides · {count}",
-    marpExportPdf: "Export PDF",
-    marpRenderFailed: "⚠ Failed to render Marp slides: {error}",
-    marpSplitEnter: "Edit source side-by-side with preview",
-    marpSplitExit: "Hide source editor",
-    marpSplitEditorLabel: "Source",
   },
   markdownMermaid: {
     loadFailed: "⚠ Mermaid failed to load: {error}",
@@ -1028,6 +1045,9 @@ const enMessages = {
     editContent: "Edit Text Content",
     applyChanges: "Apply Changes",
     copyLabel: "Copy",
+    speakerSystem: "System",
+    speakerUser: "You",
+    speakerAssistant: "Assistant",
     copiedLabel: "Copied!",
     cancel: "Cancel",
     seededByPlugin: "from {pkg}",

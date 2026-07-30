@@ -165,25 +165,43 @@ rm -rf /tmp/npx-fresh && mkdir /tmp/npx-fresh && cd /tmp/npx-fresh
 npx --yes --registry=https://registry.npmjs.org/ mulmoclaude@<X.Y.Z> --version
 ```
 
-`/publish-mulmoclaude`'s §2 drift check only covers `@mulmobridge/*` scope — `@mulmoclaude/*` workspace packages (core + plugins under `packages/plugins/*`) are NOT audited. Before publishing the launcher, manually verify every `@mulmoclaude/<name>` in `packages/mulmoclaude/package.json`'s `dependencies` resolves on the public registry:
+§2's drift check compares source against published `dist/` for four `@mulmobridge/*` packages only — it says nothing about whether a dep's *version* was ever published at all, in either scope. That gap is what this step covers: before publishing the launcher, verify every internal dep in `packages/mulmoclaude/package.json`'s `dependencies` (both `@mulmoclaude/*` and `@mulmobridge/*`) resolves on the public registry:
 
 ```bash
 # Local vs npm — a mismatch means a prior chore(release) bumped local
-# without publishing. Publish the missing one from packages/<pkg-dir>
+# without publishing. Publish the missing one from its package dir
 # BEFORE republishing the launcher, or `npx mulmoclaude@X.Y.Z` fails
 # with ETARGET on the first install.
-for pkg in $(jq -r '.dependencies | keys[] | select(startswith("@mulmoclaude/"))' packages/mulmoclaude/package.json); do
-  dir=$(echo "$pkg" | sed 's|@mulmoclaude/|packages/plugins/|; s|^packages/plugins/core$|packages/core|')
-  local=$(jq -r .version "$dir/package.json" 2>/dev/null)
+#
+# Resolve each dep's directory by READING the workspace `name` fields.
+# Do NOT derive the path from the package name: the workspace is not
+# flat — `@mulmoclaude/core` is `packages/core`, `common` is
+# `packages/common`, `markdown-utils` is `packages/markdown-utils`, and
+# only the plugins live under `packages/plugins/`. A name→path guess
+# leaves `local=` empty for the ones it gets wrong, which prints as a ⚠
+# with no version; an operator who learns to wave those away will wave
+# away a real one too.
+#
+# The `git ls-files` pathspec is explicit for a reason: a bare
+# `git ls-files packages` also matches
+# `test/scripts/mulmoclaude/fixtures/*/packages/*/package.json`, whose
+# deliberately-stale fixture versions then overwrite the real entries and
+# invent drift that isn't there.
+for f in $(git ls-files -- 'packages/*/package.json' 'packages/*/*/package.json'); do
+  echo "$(jq -r .name "$f") $(jq -r .version "$f")"
+done > /tmp/mc-workspace-versions.txt
+
+for pkg in $(jq -r '.dependencies | keys[] | select(startswith("@mulmoclaude/") or startswith("@mulmobridge/"))' packages/mulmoclaude/package.json); do
+  local=$(awk -v n="$pkg" '$1==n {print $2}' /tmp/mc-workspace-versions.txt)
   npmv=$(npm view "$pkg" version --registry https://registry.npmjs.org/ 2>/dev/null)
-  marker=" "; [ "$local" != "$npmv" ] && marker="⚠"
-  echo " $marker $pkg local=$local npm=$npmv"
+  [ "$local" = "$npmv" ] || echo "  ⚠ $pkg local=${local:-NOT-IN-WORKSPACE} npm=${npmv:-NOT-ON-NPM}"
 done
+echo "  (no ⚠ lines above = every launcher dep resolves to a published version)"
 ```
 
-### 7. Tag + GitHub release (only for @mulmobridge/* packages that were cascade-bumped)
+### 7. Tag + GitHub release for cascade-bumped @mulmobridge/* / @mulmoclaude/* packages
 
-The user has said that `mulmoclaude`'s own launches don't need GitHub releases yet. Only publish releases for the dependent packages that got bumped in §2.
+§7 covers ONLY the shared packages that got bumped + published in §2 / §6 (the `@mulmobridge/*` and `@mulmoclaude/*` scoped packages). They each get a `--latest=false` package release. The app-level `mulmoclaude` release is separate and **mandatory** — see §9.
 
 ```bash
 # Per bumped package:
@@ -207,19 +225,65 @@ EOF
 
 `--latest=false` is mandatory for package releases so they don't displace the latest `vX.Y.Z` app release.
 
-### 8. Commit + PR
+### 8. Commit + PR (version bumps + CHANGELOG)
 
-Commit the real (non-test) version bumps + dep additions, push to a feature branch, open a PR. Never push directly to main. **The root `package.json` bump from §5.5 MUST be part of this commit** so `/release-app` reads the correct version straight away.
+Commit the real (non-test) version bumps + dep additions **and the §9 CHANGELOG entry**, push to a feature branch, open a PR. Never push directly to main. **The root `package.json` bump from §5.5 MUST be part of this commit** so the app release reads the correct version straight away.
 
 ```bash
 git add package.json \
         packages/protocol/package.json packages/chat-service/package.json \
         packages/mulmoclaude/package.json packages/mulmoclaude/bin/mulmoclaude.js \
+        docs/CHANGELOG.md \
         yarn.lock
 git commit -m "chore(mulmoclaude): bump launcher + root to X.Y.Z"
 git push -u origin <branch>
 gh pr create --title "..." --body "..."
 ```
+
+### 9. App GitHub release (`vX.Y.Z`) + CHANGELOG — mark **latest**
+
+A launcher publish is not done until it has a visible, changelog-backed `latest` release. Fold this in here (don't defer to a separate `/release-app` run) so `npx mulmoclaude@X.Y.Z` always corresponds to a `vX.Y.Z` release + CHANGELOG entry.
+
+**MUST run `date +%Y-%m-%d`** for the release date — never guess it.
+
+**9a. CHANGELOG** (write it as part of the §8 PR). Prepend a `## [X.Y.Z] - YYYY-MM-DD` section to `docs/CHANGELOG.md`, right below `## [Unreleased]`, in the app-release format:
+- a one-line **bold tagline**,
+- a `### Highlights` block with `#### <feature> (#issue, #pr)` subsections,
+- a closing `Ships \`@mulmoclaude/core@<v>\`, …` line naming every scoped package version this launcher pulls in.
+
+**9a-bis. Re-check the window between cutting the branch and merging it.** The section is written from the PRs merged as of the moment the release branch is cut — but `main` keeps moving while the release PR sits in CI and review, and everything that lands in that window ships in this release too. Run this after the §8 PR merges and BEFORE tagging:
+
+```bash
+BRANCH_POINT=$(git merge-base origin/main <release-branch>)   # or the bump commit's parent
+git log --merges --oneline "$BRANCH_POINT"..origin/main
+```
+
+Read every PR it lists and fold the user-visible ones into the `## [X.Y.Z]` section with a follow-up docs PR. Release-plumbing and dependency-bump PRs need no entry; a behaviour change does. This is not hypothetical — 1.5.0 was one merge away from shipping without the fix for its most-reported symptom (#2563, browser translation breaking every icon glyph), because that PR landed in exactly this window.
+
+**9b. Tag + release at the merged bump commit.** After the §8 PR merges, tag `main` (the tag MUST point at the commit whose root `package.json` is `X.Y.Z`):
+
+```bash
+git checkout main && git pull
+git tag "vX.Y.Z"
+git push origin "vX.Y.Z"        # release-flow exception to no-direct-push — confirm with the user first
+LAST=$(git tag -l 'v*' --sort=-v:refname | sed -n 2p)   # previous app tag, for the compare link
+gh release create "vX.Y.Z" --repo receptron/mulmoclaude --latest \
+  --title "vX.Y.Z — <short description>" \
+  --notes "$(cat <<'EOF'
+## Highlights
+
+### <Feature>
+
+<one or two paragraphs — reuse the 9a CHANGELOG highlights>
+
+## Full Changelog
+
+See [CHANGELOG.md](https://github.com/receptron/mulmoclaude/blob/main/docs/CHANGELOG.md#xyz---yyyy-mm-dd).
+EOF
+)"
+```
+
+`--latest` is **mandatory** here — the opposite of §7's `--latest=false`. The app release is the version users see as current; only ONE release carries `latest`, and it is this one. The scoped `@mulmoclaude/*` / `@mulmobridge/*` package releases from §7 MUST stay `--latest=false` so they never displace it.
 
 ### Lessons that drove this skill (keep in mind when extending it)
 

@@ -105,6 +105,10 @@ const esMessages = {
     intraBody:
       'Los plugins "{first}" y "{second}" registran ambos el {dimension} "{key}". "{first}" lo reclamó primero, por lo que el registro de "{second}" se ignora.',
   },
+  shadowedEnv: {
+    title: "El shell está anulando .env",
+    body: "Definido tanto en el shell como en .env: {keys}. Prevalece el valor del shell, por lo que .env se ignora. Si editaste .env, actualiza o elimina el valor del shell y reinicia.",
+  },
   optionalDeps: {
     // `title` genérico conservado por compatibilidad con entradas de
     // historial persistidas antes de la división por motivo; las
@@ -132,6 +136,11 @@ const esMessages = {
     hideDetails: "Ocultar detalles",
     retry: "Reintentar",
   },
+  remoteHostOffline: {
+    title: "Host remoto desconectado",
+    body: "Tu teléfono no podrá enviar a este dispositivo hasta que vuelvas a conectarte.",
+    reconnect: "Reconectar",
+  },
   remoteHost: {
     title: "Host remoto",
     online: "Host remoto en línea",
@@ -152,6 +161,7 @@ const esMessages = {
     qrHint: "O escanea este código QR con la cámara de tu teléfono.",
   },
   sidebarHeader: {
+    newMessages: "Mensajes nuevos",
     home: "Ir al chat más reciente",
     toolCallHistory: "Historial de llamadas a herramientas",
     settings: "Ajustes",
@@ -199,6 +209,12 @@ const esMessages = {
       "Muestra los directorios raíz internos del agente (conversations/, feeds/, etc.) además del contenido del usuario (data/, artifacts/, config/).",
   },
   fileTree: {
+    dropHint: "Suelta archivos aquí para guardarlos en esta carpeta",
+    upload: {
+      progress: "Subiendo {done} de {total}…",
+      done: "Se guardaron {count} archivo(s)",
+      failed: "No se pudieron guardar {count} archivo(s)",
+    },
     workspace: "(área de trabajo)",
     recentlyChanged: "Modificados recientemente",
     newFileMenuItem: "Nuevo archivo",
@@ -246,6 +262,7 @@ const esMessages = {
       refs: "Directorios de referencia",
       map: "Mapa",
       photos: "Fotos",
+      google: "Google",
       model: "Modelo",
       voice: "Voz",
       chatIndex: "Índice de chat",
@@ -253,6 +270,7 @@ const esMessages = {
       notifications: "Web Push",
       skills: "Skills",
       roles: "Roles",
+      quit: "Salir",
     },
     groups: {
       llm: "LLM",
@@ -261,8 +279,24 @@ const esMessages = {
       notifications: "Notificaciones",
       plugins: "Plugins",
       management: "Gestión",
+      server: "Servidor",
     },
     navAriaLabel: "Secciones de ajustes",
+    googleTab: {
+      description:
+        "Vincula tu cuenta de Google para que esta máquina pueda llamar a las API de Google (primero Calendar). El token de actualización se guarda solo en esta máquina y nunca se envía a ningún servidor que no sea Google.",
+      statusLinked: "Vinculada",
+      statusNotLinked: "No vinculada",
+      statusPending: "Esperando a que termine el consentimiento en el navegador…",
+      connect: "Vincular cuenta de Google",
+      unlink: "Desvincular",
+      unlinkConfirm: "¿Desvincular la cuenta de Google? El token guardado se revocará y se eliminará de esta máquina.",
+      clientSecretAmbiguous:
+        "Se encontraron varios archivos client_secret_*.json en ~/.secrets/. Conserva solo uno para que el token guardado siga emparejado con el cliente OAuth correcto.",
+      loadError: "No se pudo cargar el estado de la vinculación con Google.",
+      connectError: "No se pudo iniciar el flujo de autorización de Google.",
+      unlinkError: "No se pudo desvincular la cuenta de Google.",
+    },
     mapTab: {
       description: "Configura la clave de la API de Google Maps que usa el plugin de mapas. La clave se guarda localmente y solo se envía a Google Maps.",
       apiKeyLabel: "Clave API de Google Maps",
@@ -286,6 +320,21 @@ const esMessages = {
       loadError: "Error al cargar los ajustes",
       saveError: "Error al guardar",
     },
+    quitTab: {
+      description:
+        "Detén el servidor de MulmoClaude que se ejecuta en este equipo. Si lo abriste desde el icono, sigue funcionando aunque cierres esta pestaña: así se detiene sin usar una terminal.",
+      // Message function form — skips vue-i18n's message compiler so the
+      // literal `@` in `mulmoclaude@latest` is not parsed as a linked-message
+      // reference (the compiler throws, and the whole tab renders as nothing).
+      restartHint: () => "Para volver a iniciarlo, haz doble clic en el icono de MulmoClaude (o ejecuta `npx mulmoclaude@latest`).",
+      quitLabel: "Salir de MulmoClaude",
+      confirmBody: "El servidor se detiene y esta página deja de funcionar. Se interrumpe todo lo que esté en curso.",
+      confirmLabel: "Salir",
+      stopping: "Deteniendo…",
+      stoppedTitle: "MulmoClaude se ha detenido",
+      stoppedBody: "Puedes cerrar esta pestaña. Haz doble clic en el icono para volver a iniciarlo.",
+      error: "No se pudo detener el servidor",
+    },
     notificationsTab: {
       description:
         "Recibe una notificación push en tus dispositivos registrados cuando termina una tarea que iniciaste aquí — útil cuando preguntas algo, te alejas y quieres saber en cuanto la respuesta esté lista.",
@@ -293,6 +342,11 @@ const esMessages = {
       enableHint: "Se activa cuando se completa un chat que iniciaste aquí. Las tareas programadas y en segundo plano no lo activan.",
       remoteHostNote:
         "Requiere la conexión RemoteHost (que proporciona el inicio de sesión) y al menos un dispositivo registrado. Si falta alguno, no hace nada.",
+      macosRemindersLabel: "Crear un recordatorio de macOS al terminar una tarea",
+      macosRemindersHint:
+        "Añade la tarea terminada a tu lista de Recordatorios predeterminada. La sincronización de iCloud la refleja en tu iPhone, que es quien entrega la notificación.",
+      macosRemindersForcedOff:
+        "Desactivado al iniciar con --disable-macos-reminders o DISABLE_MACOS_REMINDER_NOTIFICATIONS. Quita la opción o anula la variable de entorno y reinicia para controlarlo desde aquí.",
       statusOn: "Web Push está ACTIVADO",
       statusOff: "Web Push está DESACTIVADO",
       loadError: "Error al cargar los ajustes",
@@ -448,6 +502,12 @@ const esMessages = {
     pin: "Fijar en el lanzador",
     unpin: "Quitar del lanzador",
     zoneAriaLabel: "Accesos directos fijados",
+    reorder: {
+      open: "Reordenar accesos directos",
+      title: "Reordenar",
+      moveUp: "Subir",
+      moveDown: "Bajar",
+    },
   },
   fileContentHeader: {
     showRendered: "Mostrar Markdown renderizado",
@@ -754,6 +814,12 @@ const esMessages = {
     detailsToggle: "Mostrar detalles",
     promptLabel: "Prompt",
     roleLabel: "Rol",
+    confirmDelete: "¿Eliminar la tarea « {name} »? Esta acción no se puede deshacer.",
+    hintNewsRss: "Obtención de noticias / RSS",
+    hintJournal: "Pase diario del diario",
+    hintWiki: "Mantenimiento del wiki",
+    hintMemory: "Extracción de memoria",
+    hintCalendar: "Sincronización de calendario / contactos",
   },
   pluginCanvas: {
     undo: "Deshacer",
@@ -762,6 +828,7 @@ const esMessages = {
     styleLabel: "Estilo:",
     stylePromptWithPath: "Convierte la imagen en `{path}` en una imagen de estilo {style}.",
     stylePromptNoPath: "Convierte mi dibujo en el lienzo en una imagen de estilo {style}.",
+    saveFailed: "Sin guardar",
   },
   pluginWiki: {
     backToIndex: "Volver al índice",
@@ -789,6 +856,7 @@ const esMessages = {
     metadataEditor: "Editor",
     pageEditHeader: "Edición de wiki",
     snapshotExpired: "Instantánea expirada — mostrando la página actual",
+    snapshotLoadError: "No se pudo cargar la instantánea — es posible que la página aún exista. Actualiza la página.",
     pageDeleted: "Página eliminada",
     history: {
       tabContent: "Contenido",
@@ -948,62 +1016,11 @@ const esMessages = {
     errDeleteFailed: "Error al eliminar",
     errNetworkError: "Error de red",
     errServerError: "Error del servidor: {status}",
+    errRefreshFailed: "Guardado, pero no se pudo actualizar la lista.",
+    confirmDelete: "¿Eliminar el rol « {name} »? Esta acción no se puede deshacer.",
   },
   pluginUiImage: {
     promptLabel: "{label}:",
-  },
-  pluginMulmoScript: {
-    beatCount: "{count} beat | {count} beats",
-    movie: "Vídeo",
-    generating: "Generando…",
-    rendering: "Renderizando…",
-    saving: "Guardando…",
-    update: "Actualizar",
-    characters: "Personajes",
-    drop: "Soltar",
-    gen: "Generar",
-    play: "▶ Reproducir",
-    stop: "■ Detener",
-    playPresentation: "Reproducir presentación",
-    regenerateMovie: "Regenerar vídeo",
-    movieGenerationFailed: "Error al generar el vídeo",
-    pdf: "PDF",
-    regeneratePdf: "Regenerar PDF",
-    generatingPdf: "Generando PDF…",
-    retry: "Reintentar",
-    errPrefix: "⚠ Error",
-    noBeats: "No se encontraron beats en el script",
-    editSource: "Editar fuente del script",
-    applyChanges: "Aplicar cambios",
-    generateAll: "Generar todo",
-    orDropImage: "o arrastra una imagen",
-    generate: "Generar",
-    generateAudio: "♪ Generar",
-    saveErrorInvalidJson: "⚠ JSON no válido: {error}",
-    saveErrorSaveFailed: "⚠ Error al guardar: {error}",
-  },
-  pluginMarkdown: {
-    loading: "Cargando documento...",
-    loadFailed: "⚠ Error al cargar el documento: {error}",
-    refreshFailed: "⚠ Error al actualizar el documento: {error} — mostrando el último contenido cargado con éxito.",
-    noContent: "No hay contenido Markdown disponible",
-    pdf: "PDF",
-    pdfFailedShort: "⚠ Error de PDF",
-    editSource: "Editar fuente Markdown",
-    saving: "Guardando...",
-    applyChanges: "Aplicar cambios",
-    cancel: "Cancelar",
-    saveFailed: "Error al guardar: {error}",
-    saveError: "⚠ Error al guardar: {error}",
-    copyLabel: "Copiar",
-    copiedLabel: "¡Copiado!",
-    taskCountMismatch: "El número de tareas no coincide entre la fuente Markdown y la salida renderizada. Se rechazó el cambio para evitar dañar el archivo.",
-    marpSlidesMode: "Diapositivas Marp · {count}",
-    marpExportPdf: "Exportar PDF",
-    marpRenderFailed: "⚠ Error al renderizar las diapositivas Marp: {error}",
-    marpSplitEnter: "Editar la fuente junto a la vista previa",
-    marpSplitExit: "Cerrar el editor de la fuente",
-    marpSplitEditorLabel: "Fuente",
   },
   markdownMermaid: {
     loadFailed: "⚠ Error al cargar Mermaid: {error}",
@@ -1015,6 +1032,9 @@ const esMessages = {
     editContent: "Editar contenido de texto",
     applyChanges: "Aplicar cambios",
     copyLabel: "Copiar",
+    speakerSystem: "Sistema",
+    speakerUser: "Tú",
+    speakerAssistant: "Asistente",
     copiedLabel: "¡Copiado!",
     cancel: "Cancelar",
     seededByPlugin: "desde {pkg}",

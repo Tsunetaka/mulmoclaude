@@ -23,6 +23,11 @@ import { workspacePath } from "../workspace.js";
 // caller-supplied `workspaceRoot` would silently discard `workspaceRoot`
 // (Node `path.join` drops everything before an absolute argument).
 import { WORKSPACE_DIRS } from "../paths.js";
+// The slug whitelist: the slug becomes a directory name under
+// `.claude/skills/`, so anything that could escape (`..`, path
+// separators, leading dots) is forbidden. The pattern is shared with the
+// collections engine — one definition, no copies to keep in sync.
+import { SAFE_SLUG_PATTERN } from "@mulmoclaude/core/collection";
 import { parseSkillFrontmatter } from "./parser.js";
 import { log } from "../../system/logger/index.js";
 import {
@@ -245,19 +250,6 @@ function adaptExternalDetail(result: ExternalCatalogDetailResult, repoId: string
   }
   return { kind: "not-found", source: "external", slug: `${result.repoId}/${result.skillFolder}` };
 }
-
-// Slug whitelist matches the convention used by user-authored
-// skills + preset slugs. The slug becomes a directory name under
-// `.claude/skills/`, so we forbid anything that could escape (`..`,
-// path separators, leading dots) or be interpreted as a special
-// shell character. The two `[a-zA-Z0-9_-]` segments around a
-// required leading + trailing alphanumeric look like nested
-// quantifiers to the security/detect-unsafe-regex rule, but each
-// segment can only consume from a single bounded character class
-// (no overlap), so worst-case backtracking is linear — annotate
-// rather than rewrite for clarity.
-// eslint-disable-next-line security/detect-unsafe-regex -- non-overlapping character classes, no catastrophic backtracking
-const SAFE_SLUG_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9_-]*[a-zA-Z0-9])?$/;
 
 /** Sanitise a user-supplied slug into a safe directory-name leaf.
  *  Returns `null` for anything that fails the slug whitelist OR is

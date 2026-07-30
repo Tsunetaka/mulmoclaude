@@ -25,9 +25,10 @@
 import "dotenv/config";
 import crypto from "crypto";
 import { readFileSync } from "fs";
-import express, { type Request, type Response as ExpressResponse } from "express";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import type { Request, Response as ExpressResponse } from "express";
 import { createBridgeClient, chunkText } from "@mulmobridge/client";
+import { createWebhookApp, createWebhookRateLimit, verifyHmacSignature } from "@mulmobridge/webhook-runtime";
+import { isRecord, parseCsvSet } from "@mulmoclaude/common";
 
 const TRANSPORT_ID = "line-works";
 const MAX_TEXT = 1_000;
@@ -69,12 +70,7 @@ function resolvePrivateKey(): string | null {
   return null;
 }
 
-const allowedUsers = new Set(
-  (process.env.LINEWORKS_ALLOWED_USERS ?? "")
-    .split(",")
-    .map((user) => user.trim())
-    .filter(Boolean),
-);
+const allowedUsers = parseCsvSet(process.env.LINEWORKS_ALLOWED_USERS);
 const allowAll = allowedUsers.size === 0;
 
 const mulmo = createBridgeClient({ transportId: TRANSPORT_ID });
@@ -177,25 +173,7 @@ async function sendLineWorks(userId: string, text: string): Promise<void> {
   }
 }
 
-// ── Webhook signature verification ─────────────────────────────
-
-function verifySignature(rawBody: string, signature: string): boolean {
-  const expected = crypto.createHmac("sha256", botSecret).update(rawBody).digest("base64");
-  if (expected.length !== signature.length) return false;
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-  } catch {
-    return false;
-  }
-}
-
 // ── Payload parsing ────────────────────────────────────────────
-
-type JsonRecord = Record<string, unknown>;
-
-function isObj(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null;
-}
 
 interface IncomingLineWorks {
   userId: string;
@@ -203,10 +181,10 @@ interface IncomingLineWorks {
 }
 
 function parseEvent(body: unknown): IncomingLineWorks | null {
-  if (!isObj(body)) return null;
+  if (!isRecord(body)) return null;
   if (body.type !== "message") return null;
-  const source = isObj(body.source) ? body.source : null;
-  const content = isObj(body.content) ? body.content : null;
+  const source = isRecord(body.source) ? body.source : null;
+  const content = isRecord(body.content) ? body.content : null;
   if (!source || !content) return null;
   const userId = typeof source.userId === "string" ? source.userId : "";
   const text = content.type === "text" && typeof content.text === "string" ? String(content.text).trim() : "";
@@ -216,50 +194,9 @@ function parseEvent(body: unknown): IncomingLineWorks | null {
 
 // ── HTTP server ────────────────────────────────────────────────
 
-const app = express();
-app.disable("x-powered-by");
-
-// Honour an explicit `trust proxy` setting so `req.ip` (the
-// rate-limit key below) reflects the real client IP rather than
-// the load balancer's. Default `false` for safety; operators
-// behind a known LB choose from:
-//   - hop count:  BRIDGE_TRUST_PROXY=1
-//   - boolean:    BRIDGE_TRUST_PROXY=true / false
-//   - preset:     BRIDGE_TRUST_PROXY=loopback
-//   - CIDR list:  BRIDGE_TRUST_PROXY=10.0.0.0/8,192.168.0.0/16
-// Without this every webhook looks like it comes from one IP and
-// the limiter degrades into a global throttle. The boolean branch
-// is required because Express does NOT auto-convert string
-// "true"/"false" — without this, `BRIDGE_TRUST_PROXY=true` is read
-// as a (never-matching) CIDR rule (Codex reviews on #1326).
-const trustProxyEnv = process.env.BRIDGE_TRUST_PROXY;
-if (trustProxyEnv) {
-  const lower = trustProxyEnv.toLowerCase();
-  const numeric = Number(trustProxyEnv);
-  const value: boolean | number | string =
-    lower === "true" ? true : lower === "false" ? false : Number.isInteger(numeric) && numeric >= 0 ? numeric : trustProxyEnv;
-  app.set("trust proxy", value);
-}
-
-app.use(express.text({ type: "application/json", limit: "1mb" }));
-
-// Per-IP throttle on the callback. CodeQL's
-// `js/missing-rate-limiting` rule recognises `express-rate-limit`
-// specifically. 120 req/min/IP is well above LINE WORKS' normal
-// delivery rate; the cap bounds a flood / stuck retry loop.
-const callbackRateLimit = rateLimit({
-  windowMs: 60_000,
-  limit: 120,
-  standardHeaders: "draft-7",
-  legacyHeaders: false,
-  // Explicit keyGenerator routed through `ipKeyGenerator(...)` so
-  // IPv6 clients get folded to their /56 subnet (a raw `req.ip` key
-  // would let IPv6 rotation within a prefix evade the per-client
-  // limit). `req.ip` itself is trust-proxy-aware via the
-  // `app.set("trust proxy", ...)` block elsewhere in this file.
-  // (Codex reviews iter-1 + iter-2 on #1326.)
-  keyGenerator: (req) => ipKeyGenerator(req.ip ?? "", 56),
-});
+// bodyLimit 1mb: LINE WORKS can send larger payloads than Express's 100kb default.
+const app = createWebhookApp({ bodyLimit: "1mb" });
+const callbackRateLimit = createWebhookRateLimit();
 
 app.get("/health", (__req, res) => {
   res.json({ status: "ok", transport: TRANSPORT_ID });
@@ -268,7 +205,7 @@ app.get("/health", (__req, res) => {
 app.post("/callback", callbackRateLimit, async (req: Request, res: ExpressResponse) => {
   const signature = typeof req.headers["x-works-signature"] === "string" ? req.headers["x-works-signature"] : "";
   const rawBody = typeof req.body === "string" ? req.body : "";
-  if (!signature || !verifySignature(rawBody, signature)) {
+  if (!signature || !verifyHmacSignature(rawBody, signature, botSecret, "sha256", "base64")) {
     console.warn("[line-works] AUTH_FAILED: signature mismatch");
     res.status(401).send("Invalid signature");
     return;

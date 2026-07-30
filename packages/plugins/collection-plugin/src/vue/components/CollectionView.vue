@@ -1,115 +1,31 @@
 <template>
   <div class="h-full flex flex-col bg-slate-50/30">
-    <header v-if="!hideHeader" class="flex items-center gap-3 px-6 py-2 border-b border-slate-200 bg-white">
-      <button
-        v-if="!embedded"
-        type="button"
-        class="h-8 w-8 flex items-center justify-center rounded text-slate-500 hover:bg-slate-50 hover:text-slate-800 transition-colors"
-        :title="t('collectionsView.backToIndex')"
-        :aria-label="t('collectionsView.backToIndex')"
-        data-testid="collections-back"
-        @click="goBack"
-      >
-        <span class="material-icons text-lg">arrow_back</span>
-      </button>
-
-      <div v-if="collection" class="h-9 w-9 flex items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100">
-        <span class="material-symbols-outlined text-xl">{{ collection.icon }}</span>
-      </div>
-
-      <div class="flex-1 min-w-0">
-        <h1 class="text-base font-bold text-slate-800 truncate">
-          {{ collection?.title ?? t("collectionsView.title") }}
-        </h1>
-        <span v-if="collection" class="block text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-          {{ collection.slug }}
-        </span>
-      </div>
-
-      <component
-        :is="pinToggle"
-        v-if="collection && !embedded"
-        :kind="isFeedRoute ? 'feed' : 'collection'"
-        :slug="collection.slug"
-        :title="collection.title"
-        :icon="collection.icon"
-      />
-
-      <button
-        v-if="collection?.schema.ingest"
-        type="button"
-        class="h-8 px-2.5 flex items-center gap-1 rounded border border-indigo-200 bg-white hover:bg-indigo-50 text-indigo-600 font-bold text-xs transition-colors disabled:opacity-50"
-        :disabled="refreshing"
-        data-testid="collections-refresh-feed"
-        @click="refreshFeed"
-      >
-        <span class="material-icons text-sm">{{ refreshing ? "hourglass_empty" : "refresh" }}</span>
-        <span>{{ t("collectionsView.refreshFeed") }}</span>
-      </button>
-
-      <button
-        v-if="collection"
-        type="button"
-        class="h-8 px-2.5 flex items-center gap-1 rounded border border-indigo-200 bg-white hover:bg-indigo-50 text-indigo-600 font-bold text-xs transition-colors"
-        data-testid="collections-chat"
-        @click="openChat"
-      >
-        <span class="material-icons text-sm">forum</span>
-        <span>{{ t("collectionsView.chat") }}</span>
-      </button>
-
-      <!-- Collection-level actions (schema `collectionActions`). No record
-           context: each seeds a chat with a progress summary of all items. -->
-      <button
-        v-for="action in collectionActions"
-        :key="action.id"
-        type="button"
-        class="h-8 px-2.5 flex items-center gap-1 rounded border border-indigo-200 bg-white hover:bg-indigo-50 text-indigo-600 font-bold text-xs transition-colors disabled:opacity-50"
-        :disabled="collectionActionPending"
-        :data-testid="`collections-action-${action.id}`"
-        @click="runCollectionAction(action)"
-      >
-        <span v-if="action.icon" class="material-icons text-sm">{{ action.icon }}</span>
-        <span>{{ action.label }}</span>
-      </button>
-
-      <!-- Hidden in calendar view: there, creation happens via the day view's
-           + button, which opens the new-item form in the popup's right pane. -->
-      <button
-        v-if="canCreate && !calendarActive"
-        type="button"
-        class="h-8 px-2.5 flex items-center gap-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition-colors shadow-sm"
-        data-testid="collections-add-item"
-        @click="openCreate"
-      >
-        <span class="material-icons text-sm">add</span>
-        <span>{{ t("common.add") }}</span>
-      </button>
-
-      <button
-        v-if="canDeleteCollection && !embedded"
-        type="button"
-        class="h-8 w-8 flex items-center justify-center rounded border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 transition-colors"
-        :title="t('collectionsView.deleteCollection')"
-        :aria-label="t('collectionsView.deleteCollection')"
-        data-testid="collections-delete"
-        @click="confirmCollectionDelete"
-      >
-        <span class="material-icons text-sm">delete_forever</span>
-      </button>
-
-      <button
-        v-if="canDeleteFeed && !embedded"
-        type="button"
-        class="h-8 w-8 flex items-center justify-center rounded border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 transition-colors"
-        :title="t('collectionsView.deleteFeed')"
-        :aria-label="t('collectionsView.deleteFeed')"
-        data-testid="feeds-delete"
-        @click="confirmFeedDelete"
-      >
-        <span class="material-icons text-sm">delete_forever</span>
-      </button>
-    </header>
+    <CollectionHeader
+      ref="collectionHeaderRef"
+      :collection="collection"
+      :embedded="embedded"
+      :hide-header="hideHeader"
+      :is-read-only="isReadOnly"
+      :data-source-route="dataSourceRoute"
+      :is-feed-route="isFeedRoute"
+      :refreshing="refreshing"
+      :pushing="pushing"
+      :collection-actions="collectionActions"
+      :collection-action-pending="collectionActionPending"
+      :running-action-ids="runningActions"
+      :can-create="canCreate"
+      :calendar-active="calendarActive"
+      :can-delete-collection="canDeleteCollection"
+      :can-delete-feed="canDeleteFeed"
+      @back="goBack"
+      @refresh-feed="refreshFeed"
+      @push-calendar="pushCalendar"
+      @open-chat="openChat"
+      @run-collection-action="runCollectionAction"
+      @open-create="openCreate"
+      @confirm-collection-delete="confirmCollectionDelete"
+      @confirm-feed-delete="confirmFeedDelete"
+    />
 
     <!-- Transient note for an agent-ingest Refresh: the worker runs in the
          background, so records don't update synchronously — tell the user the
@@ -127,193 +43,40 @@
          toggle is available — the toggle must reach an empty date-bearing
          collection (empty-day create) and a collection whose only views are
          custom ones (so its buttons + the "+" stay reachable). -->
-    <div
+    <CollectionToolbar
       v-if="collection && ((!hideSearch && items.length > 0) || (!hideViewToggle && (hasCalendar || hasKanban || hasCustomViews || canAddCustomView)))"
-      class="px-6 py-3 bg-white border-b border-slate-100 flex items-center justify-between gap-4"
-    >
-      <div v-if="!hideSearch && items.length > 0" class="relative flex-1 max-w-md">
-        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 pointer-events-none">
-          <span class="material-icons text-lg">search</span>
-        </span>
-        <input
-          v-model="searchQuery"
-          type="text"
-          :placeholder="t('collectionsView.searchPlaceholder')"
-          :aria-label="t('collectionsView.searchPlaceholder')"
-          class="w-full bg-slate-50 border border-slate-200/80 rounded-xl pl-9 pr-8 py-1.5 text-xs placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white transition-all font-medium"
-        />
-        <button
-          v-if="searchQuery"
-          type="button"
-          :aria-label="t('collectionsView.clearSearch')"
-          class="absolute inset-y-0 right-0 flex items-center pr-2.5 text-slate-400 hover:text-slate-600"
-          @click="searchQuery = ''"
-        >
-          <span class="material-icons text-sm">close</span>
-        </button>
-      </div>
-      <div class="flex items-center gap-2">
-        <!-- View toggle: table ↔ calendar ↔ kanban. Calendar shows only when
-             the schema has a `date` field, kanban only with an `enum` field;
-             local UI state, never persisted. -->
-        <div
-          v-if="!hideViewToggle && (hasCalendar || hasKanban || hasCustomViews || canAddCustomView)"
-          class="flex gap-0.5"
-          role="group"
-          :aria-label="t('collectionsView.viewToggle')"
-        >
-          <button
-            type="button"
-            class="h-8 px-2.5 flex items-center gap-1 rounded text-xs font-bold transition-colors"
-            :class="activeView === 'table' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'"
-            :aria-pressed="activeView === 'table'"
-            data-testid="collection-view-toggle-table"
-            @click="setView('table')"
-          >
-            <span class="material-icons text-sm">table_rows</span>
-            <span>{{ t("collectionsView.viewTable") }}</span>
-          </button>
-          <button
-            v-if="hasCalendar"
-            type="button"
-            class="h-8 px-2.5 flex items-center gap-1 rounded text-xs font-bold transition-colors"
-            :class="activeView === 'calendar' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'"
-            :aria-pressed="activeView === 'calendar'"
-            data-testid="collection-view-toggle-calendar"
-            @click="setView('calendar')"
-          >
-            <span class="material-icons text-sm">calendar_month</span>
-            <span>{{ t("collectionsView.viewCalendar") }}</span>
-          </button>
-          <button
-            v-if="hasKanban"
-            type="button"
-            class="h-8 px-2.5 flex items-center gap-1 rounded text-xs font-bold transition-colors"
-            :class="activeView === 'kanban' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'"
-            :aria-pressed="activeView === 'kanban'"
-            data-testid="collection-view-toggle-kanban"
-            @click="setView('kanban')"
-          >
-            <span class="material-icons text-sm">view_kanban</span>
-            <span>{{ t("collectionsView.viewKanban") }}</span>
-          </button>
-          <!-- Custom (LLM-authored) views declared on the schema. -->
-          <button
-            v-for="cv in customViews"
-            :key="cv.id"
-            type="button"
-            class="h-8 px-2.5 flex items-center gap-1 rounded text-xs font-bold transition-colors"
-            :class="activeView === customViewKey(cv.id) ? 'bg-indigo-600 text-white' : 'bg-white text-slate-500 border border-slate-200 hover:bg-slate-50'"
-            :aria-pressed="activeView === customViewKey(cv.id)"
-            :data-testid="`collection-view-custom-${cv.id}`"
-            @click="setCustomView(cv.id)"
-          >
-            <span class="material-icons text-sm">{{ cv.icon || (cv.target === "mobile" ? "smartphone" : "dashboard_customize") }}</span>
-            <span>{{ cv.label }}</span>
-          </button>
-          <!-- "+" — ask Claude to author a new custom view for this collection.
-               Opens a chooser (desktop vs phone target) when the host supports
-               remote views; otherwise seeds the desktop prompt directly. -->
-          <div v-if="canAddCustomView" ref="addMenuRef" class="relative">
-            <button
-              type="button"
-              class="h-8 w-8 flex items-center justify-center rounded bg-white text-slate-500 border border-slate-200 hover:bg-slate-50"
-              :title="t('collectionsView.addView')"
-              :aria-label="t('collectionsView.addView')"
-              :aria-expanded="addMenuOpen"
-              data-testid="collection-view-add"
-              @click="onAddViewClick"
-            >
-              <span class="material-icons text-sm">add</span>
-            </button>
-            <div
-              v-if="addMenuOpen"
-              class="absolute left-0 top-full mt-1 z-20 min-w-max rounded border border-slate-200 bg-white shadow-lg py-1"
-              data-testid="collection-view-add-menu"
-            >
-              <button
-                type="button"
-                class="w-full h-8 px-3 flex items-center gap-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
-                data-testid="collection-view-add-desktop"
-                @click="addCustomView('desktop')"
-              >
-                <span class="material-icons text-sm">dashboard_customize</span>
-                <span>{{ t("collectionsView.addViewDesktop") }}</span>
-              </button>
-              <button
-                type="button"
-                class="w-full h-8 px-3 flex items-center gap-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
-                data-testid="collection-view-add-mobile"
-                @click="addCustomView('mobile')"
-              >
-                <span class="material-icons text-sm">smartphone</span>
-                <span>{{ t("collectionsView.addViewMobile") }}</span>
-              </button>
-            </div>
-          </div>
-          <!-- Gear — per-collection config (currently: manage/delete custom
-               views). Standalone only, and only when there's a view to manage. -->
-          <button
-            v-if="canConfigureViews"
-            type="button"
-            class="h-8 w-8 flex items-center justify-center rounded bg-white text-slate-500 border border-slate-200 hover:bg-slate-50"
-            :title="t('collectionsView.config.open')"
-            :aria-label="t('collectionsView.config.open')"
-            data-testid="collection-config-open"
-            @click="configOpen = true"
-          >
-            <span class="material-icons text-sm">settings</span>
-          </button>
-        </div>
-        <!-- Which date field anchors the grid (only when >1 date field). -->
-        <select
-          v-if="calendarActive && dateFields.length > 1"
-          :value="calendarAnchorField"
-          class="h-8 px-2 rounded border border-slate-200 bg-white text-xs font-semibold text-slate-600 focus:outline-none focus:border-indigo-500 cursor-pointer"
-          :aria-label="t('collectionsView.calendarFieldLabel')"
-          data-testid="collection-calendar-field"
-          @change="anchorOverride = ($event.target as HTMLSelectElement).value"
-        >
-          <option v-for="key in dateFields" :key="key" :value="key">{{ collection?.schema.fields[key]?.label ?? key }}</option>
-        </select>
-        <!-- Which enum field groups the board (only when >1 enum field). -->
-        <select
-          v-if="kanbanActive && enumFields.length > 1"
-          :value="kanbanGroupField"
-          class="h-8 px-2 rounded border border-slate-200 bg-white text-xs font-semibold text-slate-600 focus:outline-none focus:border-indigo-500 cursor-pointer"
-          :aria-label="t('collectionsView.kanbanFieldLabel')"
-          data-testid="collection-kanban-field"
-          @change="kanbanOverride = ($event.target as HTMLSelectElement).value"
-        >
-          <option v-for="key in enumFields" :key="key" :value="key">{{ collection?.schema.fields[key]?.label ?? key }}</option>
-        </select>
-        <div v-if="items.length > 0" class="text-[10px] text-slate-400 font-bold uppercase tracking-wider select-none">
-          {{ t("collectionsView.searchSummary", { shown: filteredItems.length, total: items.length }) }}
-        </div>
-      </div>
-    </div>
+      v-model:search-query="searchQuery"
+      v-model:flag-filters="flagFilters"
+      :collection="collection"
+      :items="items"
+      :hide-search="hideSearch"
+      :hide-view-toggle="hideViewToggle"
+      :active-view="activeView"
+      :flag-chips="flagChips"
+      :custom-views="customViews"
+      :can-add-custom-view="canAddCustomView"
+      :can-configure-views="canConfigureViews"
+      :can-add-mobile-view="canAddMobileView"
+      :has-calendar="hasCalendar"
+      :has-kanban="hasKanban"
+      :has-custom-views="hasCustomViews"
+      :calendar-active="calendarActive"
+      :kanban-active="kanbanActive"
+      :date-fields="dateFields"
+      :enum-fields="enumFields"
+      :calendar-anchor-field="calendarAnchorField"
+      :kanban-group-field="kanbanGroupField"
+      :table-filtered-count="tableFilteredItems.length"
+      :filtered-count="filteredItems.length"
+      @set-view="setView"
+      @set-custom-view="setCustomView"
+      @add-view="addCustomView"
+      @open-config="configOpen = true"
+      @update:anchor-field="anchorOverride = $event"
+      @update:group-field="kanbanOverride = $event"
+    />
 
-    <!-- Repair banner: the server flagged record files that won't load /
-         violate the schema and are silently skipped. The button reports
-         them back to the LLM (same path presentCollection uses) so it
-         fixes the files. View-independent, so it sits above the body. -->
-    <div
-      v-if="collection && dataIssues.length > 0"
-      class="mx-6 mt-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4 text-sm text-amber-900 shadow-sm flex items-center gap-3"
-      data-testid="collections-data-issues"
-    >
-      <span class="material-icons text-amber-600">warning</span>
-      <span class="flex-1">{{ t("collectionsView.dataIssuesDetected", { count: dataIssues.length }) }}</span>
-      <button
-        type="button"
-        class="h-8 px-2.5 flex items-center gap-1 rounded border border-amber-300 bg-white hover:bg-amber-100 text-amber-700 font-bold text-xs transition-colors"
-        data-testid="collections-repair"
-        @click="repairCollection"
-      >
-        <span class="material-icons text-sm">build</span>
-        <span>{{ t("collectionsView.repair") }}</span>
-      </button>
-    </div>
+    <CollectionRepairBanner v-if="collection && dataIssues.length > 0" :count="dataIssues.length" @repair="repairCollection" />
 
     <div class="flex-1 overflow-auto">
       <div v-if="loading" class="flex flex-col items-center justify-center py-20 text-sm text-slate-500 gap-3">
@@ -375,10 +138,12 @@
               :action-error="actionError"
               :action-pending="actionPending"
               :visible-actions="visibleActions"
+              :running-action-ids="viewingRunningActionIds"
               :live-record="liveRecord"
               :live-derived="liveDerived"
               :view-title="viewTitle"
               :is-singleton="isSingleton"
+              :readonly="isReadOnly"
               :render="render"
               :locale="locale"
               @submit="saveEditor"
@@ -427,6 +192,7 @@
             :group-field="kanbanGroupField"
             :selected="viewing ? String(viewing[collection.schema.primaryKey] ?? '') : undefined"
             :notified="notifiedSeverities"
+            :readonly="isReadOnly"
             @select="onCalendarSelect"
             @move="onKanbanMove"
           />
@@ -451,16 +217,18 @@
 
       <div v-else-if="items.length === 0 && editing?.mode !== 'create'" class="flex flex-col items-center justify-center py-20 text-sm text-slate-400 gap-2">
         <span class="material-icons text-4xl text-slate-300">folder_open</span>
-        <p class="font-semibold text-slate-600">{{ t("collectionsView.itemsEmpty") }}</p>
+        <p class="font-semibold text-slate-600">{{ t(isReadOnly ? "collectionsView.itemsEmptyReadonly" : "collectionsView.itemsEmpty") }}</p>
       </div>
 
       <div
-        v-else-if="filteredItems.length === 0 && editing?.mode !== 'create'"
+        v-else-if="tableFilteredItems.length === 0 && editing?.mode !== 'create'"
         class="flex flex-col items-center justify-center py-20 text-sm text-slate-400 gap-2"
       >
         <span class="material-icons text-4xl text-slate-300">search_off</span>
         <p class="font-semibold text-slate-600">{{ t("collectionsView.noMatchingItems") }}</p>
-        <button type="button" class="text-xs text-indigo-600 font-semibold hover:underline" @click="searchQuery = ''">
+        <!-- Clears the flag chips too — either narrowing can be the one
+             that emptied the table. -->
+        <button type="button" class="text-xs text-indigo-600 font-semibold hover:underline" @click="((searchQuery = ''), (flagFilters = {}))">
           {{ t("collectionsView.clearSearch") }}
         </button>
       </div>
@@ -485,179 +253,23 @@
             <span class="material-icons text-base">close</span>
           </button>
         </div>
-        <table class="min-w-full text-xs">
-          <thead>
-            <tr class="bg-slate-50 border-b border-slate-200">
-              <th
-                v-for="[key, field] in listColumnFields"
-                :key="key"
-                :aria-sort="isSortableField(field) ? sortAriaValue(key) : undefined"
-                class="px-5 py-3 font-bold text-slate-500 text-left uppercase tracking-wider whitespace-nowrap"
-              >
-                <div class="flex items-center gap-1">
-                  <span class="truncate max-w-[14rem]" :title="field.label">{{ field.label }}</span>
-                  <button
-                    v-if="isSortableField(field)"
-                    type="button"
-                    class="inline-flex items-center justify-center rounded p-0.5 -my-1 leading-none transition-colors"
-                    :class="sortButtonClass(key)"
-                    :data-testid="`collections-sort-${key}`"
-                    :aria-label="t('collectionsView.sortBy', { field: field.label })"
-                    @click.stop="cycleSort(key)"
-                    @pointerenter="hoveredSortKey = key"
-                    @pointerleave="hoveredSortKey = null"
-                  >
-                    <span class="material-icons text-base align-middle">{{ sortIconName(key) }}</span>
-                  </button>
-                </div>
-              </th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100 bg-white">
-            <template v-for="item in sortedItems" :key="String(item[collection.schema.primaryKey] ?? '')">
-              <tr
-                class="hover:bg-slate-50/70 cursor-pointer transition-colors focus:outline-none focus:bg-indigo-50/30"
-                :class="isRowOpen(item) || isEditingRow(item) ? 'bg-indigo-50/40' : ''"
-                role="button"
-                tabindex="0"
-                :aria-label="t('collectionsView.openItem', { id: String(item[collection.schema.primaryKey] ?? '') })"
-                :data-testid="`collections-row-${item[collection.schema.primaryKey]}`"
-                @click="openView(item)"
-                @keydown.enter.self="openView(item)"
-                @keydown.space.self.prevent="openView(item)"
-              >
-                <td v-for="[key, field] in listColumnFields" :key="key" class="px-5 py-2 text-slate-700 align-middle max-w-xs font-medium">
-                  <!-- Conditionally hidden field (`when` predicate) → blank cell. -->
-                  <template v-if="fieldVisible(field, item)">
-                    <!-- Toggle → inline checkbox projecting an enum field.
-                         Stores nothing itself; toggling writes onValue/
-                         offValue to the projected field via the same PUT. -->
-                    <input
-                      v-if="field.type === 'toggle'"
-                      type="checkbox"
-                      :checked="toggleChecked(item, field)"
-                      :disabled="isRowInlineSaving(item)"
-                      class="h-5 w-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/20 cursor-pointer align-middle disabled:opacity-50 disabled:cursor-not-allowed"
-                      :data-testid="`collections-inline-toggle-${key}-${item[collection.schema.primaryKey]}`"
-                      :aria-label="field.label"
-                      @click.stop
-                      @change="commitToggle(item, field)"
-                    />
-
-                    <!-- Boolean → inline checkbox. Tap toggles + saves
-                         immediately; `@click.stop` so it doesn't open the
-                         row's detail panel. Unset (undefined) and explicit
-                         false both render unchecked. -->
-                    <input
-                      v-else-if="field.type === 'boolean'"
-                      type="checkbox"
-                      :checked="item[key] === true"
-                      :disabled="isRowInlineSaving(item)"
-                      class="h-5 w-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/20 cursor-pointer align-middle disabled:opacity-50 disabled:cursor-not-allowed"
-                      :data-testid="`collections-inline-bool-${key}-${item[collection.schema.primaryKey]}`"
-                      :aria-label="field.label"
-                      @click.stop
-                      @change="commitInlineEdit(item, String(key), field, ($event.target as HTMLInputElement).checked)"
-                    />
-
-                    <!-- Ref link badge (binding-driven nav, router-optional) -->
-                    <span v-else-if="field.type === 'ref' && field.to && typeof item[key] === 'string' && item[key]" class="block truncate">
-                      <a
-                        :href="cui.recordHref?.(field.to, String(item[key]))"
-                        :tabindex="cui.recordHref?.(field.to, String(item[key])) ? undefined : 0"
-                        role="link"
-                        class="text-indigo-600 hover:text-indigo-800 hover:underline font-semibold"
-                        :data-testid="`collections-ref-link-${key}-${item[key]}`"
-                        @click="activateRefLink($event, field.to, String(item[key]), true)"
-                        @keydown.enter="activateRefLink($event, field.to, String(item[key]), true)"
-                        @keydown.space="activateRefLink($event, field.to, String(item[key]), true)"
-                        >{{ refDisplay(field.to, String(item[key])) }}</a
-                      >
-                    </span>
-
-                    <!-- Enum → inline dropdown. Selecting writes + saves
-                         immediately; the empty placeholder clears the field.
-                         `@click.stop` keeps the row's detail panel closed. -->
-                    <select
-                      v-else-if="field.type === 'enum' && Array.isArray(field.values) && field.values.length > 0"
-                      :value="item[key] == null ? '' : String(item[key])"
-                      :disabled="isRowInlineSaving(item)"
-                      class="rounded-lg border px-2 py-0.5 text-[11px] font-semibold focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                      :class="enumControlClass(String(key), item[key])"
-                      :data-testid="`collections-inline-enum-${key}-${item[collection.schema.primaryKey]}`"
-                      :aria-label="field.label"
-                      @click.stop
-                      @change="commitInlineEdit(item, String(key), field, ($event.target as HTMLSelectElement).value)"
-                    >
-                      <option v-if="showEnumPlaceholder(item, String(key))" value="">{{ t("collectionsView.selectPlaceholder") }}</option>
-                      <option v-for="value in field.values" :key="value" :value="value">{{ value }}</option>
-                    </select>
-
-                    <!-- Money -->
-                    <span v-else-if="field.type === 'money'" class="block truncate tabular-nums font-semibold text-slate-900">{{
-                      formatMoney(item[key], resolveCurrency(field, item), locale)
-                    }}</span>
-
-                    <!-- Table summary counter -->
-                    <span
-                      v-else-if="field.type === 'table'"
-                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200/40"
-                    >
-                      <span class="material-icons text-[11px]">list</span>
-                      <span>{{ tableSummary(item[key]) }}</span>
-                    </span>
-
-                    <!-- Derived formula fields -->
-                    <span
-                      v-else-if="field.type === 'derived'"
-                      class="inline-block truncate tabular-nums font-bold text-indigo-900 bg-indigo-50/50 px-1.5 py-0.5 rounded border border-indigo-100/50"
-                      >{{ derivedDisplay(field, evaluateDerivedAgainstItem(field, String(key), item), item) }}</span
-                    >
-
-                    <!-- URL string → external link (new tab). `@click.stop` so
-                     clicking the link doesn't also open the row's detail. -->
-                    <a
-                      v-else-if="field.type !== 'file' && isExternalUrl(item[key])"
-                      :href="String(item[key])"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="block truncate text-blue-600 hover:text-blue-800 hover:underline font-semibold"
-                      :data-testid="`collections-url-link-${key}-${item[collection.schema.primaryKey]}`"
-                      @click.stop
-                      >{{ String(item[key]) }}</a
-                    >
-
-                    <!-- File: served HTML/SVG artifact → open the rendered
-                         app in a new tab. `@click.stop` keeps the row's
-                         detail panel from also opening. -->
-                    <a
-                      v-else-if="field.type === 'file' && artifactUrl(item[key])"
-                      :href="artifactUrl(item[key]) ?? undefined"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="block truncate text-blue-600 hover:text-blue-800 hover:underline font-semibold"
-                      :data-testid="`collections-file-link-${key}-${item[collection.schema.primaryKey]}`"
-                      @click.stop
-                      >{{ String(item[key]) }}</a
-                    >
-
-                    <!-- File: any other workspace path → open in File Explorer. -->
-                    <a
-                      v-else-if="field.type === 'file' && fileRoutePath(item[key])"
-                      :href="fileRoutePath(item[key]) ?? undefined"
-                      class="block truncate text-blue-600 hover:text-blue-800 hover:underline font-semibold"
-                      :data-testid="`collections-file-link-${key}-${item[collection.schema.primaryKey]}`"
-                      @click="activatePathLink($event, fileRoutePath(item[key]) ?? '', true)"
-                      >{{ String(item[key]) }}</a
-                    >
-
-                    <span v-else class="block truncate text-slate-600">{{ formatCell(item[key], field.type) }}</span>
-                  </template>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
+        <CollectionTable
+          v-model:hovered-sort-key="hoveredSortKey"
+          :collection="collection"
+          :list-column-fields="listColumnFields"
+          :sorted-items="sortedItems"
+          :render="render"
+          :is-read-only="isReadOnly"
+          :enum-originally-empty="enumOriginallyEmpty"
+          :inline-saving-rows="inlineSavingRows"
+          :sort-state="sortState"
+          :open-row-id="openRowId"
+          :editing-row-id="editingRowId"
+          @open-view="openView"
+          @cycle-sort="cycleSort"
+          @commit-toggle="commitToggle"
+          @commit-inline-edit="commitInlineEdit"
+        />
       </div>
     </div>
 
@@ -675,10 +287,12 @@
         :action-error="actionError"
         :action-pending="actionPending"
         :visible-actions="visibleActions"
+        :running-action-ids="viewingRunningActionIds"
         :live-record="liveRecord"
         :live-derived="liveDerived"
         :view-title="viewTitle"
         :is-singleton="isSingleton"
+        :readonly="isReadOnly"
         :render="render"
         :locale="locale"
         @submit="saveEditor"
@@ -691,6 +305,18 @@
       />
     </CollectionRecordModal>
 
+    <!-- `kind: "mutate"` params mini-form (teleported; stacks over the
+         record modal its button lives in). -->
+    <CollectionMutateParamsModal
+      v-if="mutateModal"
+      :key="`${mutateModal.action.id}-${mutateModal.itemId}`"
+      :action="mutateModal.action"
+      :pending="mutatePending"
+      :error="mutateError"
+      @close="mutateModal = null"
+      @submit="submitMutateParams"
+    />
+
     <!-- Per-collection config (gear): manage/delete custom views. -->
     <CollectionViewConfigModal
       v-if="configOpen && collection"
@@ -701,79 +327,19 @@
       @close="configOpen = false"
     />
 
-    <!-- Chat modal — collect a message and start a new general-role chat
-         seeded with the collection's skill command (`/<slug> <message>`). -->
-    <div
-      v-if="chatOpen && collection"
-      class="fixed inset-0 z-30 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 transition-all duration-300"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="collections-chat-title"
-      data-testid="collections-chat-modal"
-      @click.self="closeChat"
-      @keydown.esc="closeChat"
-    >
-      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-xl flex flex-col border border-slate-200 overflow-hidden">
-        <header class="px-6 py-4 border-b border-slate-100 flex items-center gap-3 bg-slate-50/50">
-          <div class="h-9 w-9 flex items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100/50">
-            <span class="material-icons text-lg">forum</span>
-          </div>
-          <div class="flex-1">
-            <h2 id="collections-chat-title" class="text-sm font-bold text-slate-800 uppercase tracking-wide">{{ t("collectionsView.chatTitle") }}</h2>
-            <span class="text-xs text-slate-400 font-semibold">{{ collection.title }}</span>
-          </div>
-          <button
-            type="button"
-            class="h-8 w-8 flex items-center justify-center rounded text-slate-400 hover:bg-slate-200/50 hover:text-slate-600 transition-colors"
-            :aria-label="t('common.close')"
-            data-testid="collections-chat-close"
-            @click="closeChat"
-          >
-            <span class="material-icons text-lg">close</span>
-          </button>
-        </header>
-
-        <div class="px-6 py-5">
-          <textarea
-            ref="chatInputEl"
-            v-model="chatMessage"
-            rows="4"
-            :placeholder="t('collectionsView.chatPlaceholder')"
-            class="w-full bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2.5 text-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white transition-all resize-none"
-            data-testid="collections-chat-input"
-            @keydown.meta.enter="submitChat"
-            @keydown.ctrl.enter="submitChat"
-          ></textarea>
-        </div>
-
-        <footer class="px-6 py-3.5 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50/50">
-          <button
-            type="button"
-            class="h-8 px-2.5 rounded text-xs font-bold text-slate-500 hover:bg-slate-200/50 transition-colors"
-            data-testid="collections-chat-cancel"
-            @click="closeChat"
-          >
-            {{ t("common.cancel") }}
-          </button>
-          <button
-            type="button"
-            class="h-8 px-2.5 rounded bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 disabled:opacity-50 transition-all shadow-sm shadow-indigo-600/10"
-            :disabled="!chatMessage.trim()"
-            data-testid="collections-chat-send"
-            @click="submitChat"
-          >
-            {{ t("collectionsView.chatStart") }}
-          </button>
-        </footer>
-      </div>
-    </div>
+    <CollectionChatModal v-if="chatOpen && collection" :collection-title="collection.title" @close="closeChat" @submit="submitChat" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useCollectionI18n } from "../lang";
+import CollectionHeader from "./CollectionHeader.vue";
+import CollectionMutateParamsModal from "./CollectionMutateParamsModal.vue";
 import CollectionRecordModal from "./CollectionRecordModal.vue";
+import CollectionChatModal from "./CollectionChatModal.vue";
+import CollectionRepairBanner from "./CollectionRepairBanner.vue";
+import CollectionToolbar from "./CollectionToolbar.vue";
 import CollectionCalendarView from "./CollectionCalendarView.vue";
 import CollectionDayView from "./CollectionDayView.vue";
 import CollectionKanbanView from "./CollectionKanbanView.vue";
@@ -781,42 +347,33 @@ import CollectionRecordPanel from "./CollectionRecordPanel.vue";
 import CollectionViewConfigModal from "./CollectionViewConfigModal.vue";
 import CollectionCustomView from "./CollectionCustomView.vue";
 import CollectionRemoteViewPreview from "./CollectionRemoteViewPreview.vue";
+import CollectionTable from "./CollectionTable.vue";
 import { useCollectionRendering } from "../useCollectionRendering";
-import {
-  readCollectionViewMode,
-  writeCollectionViewMode,
-  readCollectionSort,
-  writeCollectionSort,
-  customViewKey,
-  type CollectionViewMode,
-  type BuiltInViewMode,
-} from "../collectionViewMode";
-import { collectionUi } from "../uiContext";
-import { activateRefLink, activatePathLink } from "../refLink";
+import { writeCollectionViewMode, writeCollectionSort, writeCollectionFlagFilters, type CollectionViewMode, type BuiltInViewMode } from "../collectionViewMode";
+import { collectionUi, type CollectionPushResult } from "../uiContext";
+import { pushProblems } from "../calendarPushResult";
+import { useTableSort } from "../composables/useTableSort";
+import { useCollectionActions } from "../composables/useCollectionActions";
+import { useFlagFilters } from "../composables/useFlagFilters";
+import { useCollectionChat } from "../composables/useCollectionChat";
+import { useViewMode } from "../composables/useViewMode";
+import { useLiveCollectionRefresh } from "../composables/useLiveCollectionRefresh";
 import {
   dateOf,
-  isSortableField,
-  nextSortDirection,
-  sortItems,
-  numericSortValue,
-  stringSortValue,
-  dateSortValue,
-  enumSortValue,
-  boolSortValue,
+  itemMatchesQuery,
+  snapshotEmptyEnums,
+  rowIdOf,
+  toggleChecked,
+  nextUniqueItemId,
   shortHexId,
-  defangForPrompt,
-  actionVisible,
-  fieldVisible,
-  resolveEnumColor,
+  COMPUTED_TYPES,
   buildUpdatedRecord,
   coerceInlineValue,
   draftToRecord,
   firstMissingRequiredField,
   rowFromItem,
   type Ymd,
-  type SortState,
-  type SortValue,
-  type CollectionAction,
+  type SortValueDeps,
   type CollectionCustomView as CustomViewSpec,
   type CollectionDetail,
   type CollectionItem,
@@ -881,7 +438,7 @@ const { t, locale } = useCollectionI18n();
 // the pin toggle) come through the injected CollectionUi binding. The aliases
 // keep the body's call sites unchanged where the host shape matched 1:1.
 const cui = collectionUi();
-const { confirm: openConfirm, unpin, pinToggle, startChat } = cui;
+const { confirm: openConfirm, unpin, startChat } = cui;
 const appApi = { startNewChat: startChat };
 
 /** Embedded when a `slug` prop is supplied; standalone (route-driven)
@@ -922,6 +479,7 @@ const notifiedSeverities = computed<Map<string, CollectionNotifySeverity>>(() =>
 });
 /** True while a feed collection's manual refresh is in flight. */
 const refreshing = ref(false);
+const pushing = ref(false);
 /** Transient note shown after an agent-ingest Refresh dispatches a background
  *  worker (records update asynchronously, so there's nothing to show inline).
  *  Auto-clears; `refreshNoteTimer` cancels a pending clear on re-trigger. */
@@ -958,43 +516,16 @@ const enumOriginallyEmpty = ref<Set<string>>(new Set());
  *  otherwise clobber the newer field on disk while the UI shows the
  *  newer optimistic value (Codex PR #1599 P2). */
 const inlineSavingRows = ref<Set<string>>(new Set());
-const actionPending = ref(false);
-const actionError = ref<string | null>(null);
-const collectionActionPending = ref(false);
-const chatOpen = ref(false);
-const chatMessage = ref("");
-const chatInputEl = ref<HTMLTextAreaElement | null>(null);
 
 // Shared rendering + linked-data layer: owns the ref/embed caches and
-// every value-formatting helper, reused by the extracted record panel
-// (table + calendar) so there's one implementation. Destructure the
-// helpers the list table renders with; pass the whole object to the
-// panel as its `render` prop.
+// every value-formatting helper, reused by the extracted table / cell / record
+// panel so there's one implementation. The whole object is passed down as the
+// `render` prop; only the few helpers this component still calls directly
+// (sort deps, dataSource route) are destructured here.
 const render = useCollectionRendering(collection, locale);
-const {
-  refRecordCache,
-  refDisplay,
-  formatMoney,
-  resolveCurrency,
-  derivedDisplay,
-  evaluateDerivedAgainstItem,
-  formatCell,
-  isExternalUrl,
-  artifactUrl,
-  fileRoutePath,
-} = render;
+const { refDisplay, evaluateDerivedAgainstItem, fileRoutePath } = render;
 
 const searchQuery = ref("");
-
-/** Case-insensitive substring match across an item's scalar fields.
- *  Object-valued fields (table rows, nested records) are skipped —
- *  they don't render as searchable text in the list table. */
-function itemMatchesQuery(item: CollectionItem, query: string): boolean {
-  return Object.values(item).some((val) => {
-    if (val === undefined || val === null || typeof val === "object") return false;
-    return String(val).toLowerCase().includes(query);
-  });
-}
 
 const filteredItems = computed<CollectionItem[]>(() => {
   const query = searchQuery.value.trim().toLowerCase();
@@ -1002,100 +533,53 @@ const filteredItems = computed<CollectionItem[]>(() => {
   return items.value.filter((item) => itemMatchesQuery(item, query));
 });
 
+// ── Flag filter chips (table view only) ───────────────────────────
+// One tri-state chip per predicate-shaped field (all → hide → only), ANDed with
+// the text search. The reactive shell + per-collection localStorage state live
+// in `useFlagFilters`; the tri-state transition / own-property read / colour
+// mappings in `../flagFilterDisplay`. `tableFilteredItems` + `flagValueOf` feed
+// the sort below.
+// The filter-menu open/close + click-outside and the chip display/cycle helpers
+// now live in CollectionToolbar (its `menuRef` must bind the wrapper the toolbar
+// renders); the parent keeps only the filtering DATA — `flagFilters` (v-model to
+// the toolbar + persist watch + empty-state clear), `flagChips` (toolbar prop),
+// `tableFilteredItems` (table / sort / count), and `flagValueOf` (sort).
+const {
+  flagFilters,
+  flagChips,
+  tableFilteredItems,
+  flagValueOf,
+  resetForSlug: resetFlagFiltersForSlug,
+} = useFlagFilters({ collection, filteredItems, activeSlug, deriveRecord: render.deriveRecord, t });
+
 // ── List-table sort (single active column, header toggle) ─────────
-// Calendar / kanban keep their own ordering; only the table consumes
-// `sortedItems`. The active sort is a single SHARED per-collection
-// preference in localStorage — both the standalone page and embedded chat
-// cards read AND write it, so a sort set anywhere is consistent the next
-// time the collection is viewed. Resets only when a DIFFERENT collection
-// loads (the slug watch), so the sort survives a refresh / edit / remount.
-function storedSortFor(slug: string | undefined): SortState | null {
-  return (slug && readCollectionSort(slug)) || null;
-}
-const sortState = ref<SortState | null>(storedSortFor(activeSlug.value));
-// The column whose sort button is currently hovered (at most one). Hover
-// previews the NEXT click's state, so descending visibly fades back to the
-// light-grey "off" look — signalling the next click clears the sort.
-const hoveredSortKey = ref<string | null>(null);
+// Row readers the pure `sortValueOf` can't get from the raw cell: toggle /
+// flag projections, the derived-formula evaluator, the derived-record
+// enrichment, and ref display resolution — all backed by the rendering
+// composable. Stable function refs, so one object serves every row.
+const sortValueDeps: SortValueDeps = {
+  toggleChecked,
+  flagValueOf,
+  evaluateDerived: evaluateDerivedAgainstItem,
+  deriveRecord: render.deriveRecord,
+  resolveRefDisplay: refDisplay,
+};
 
-function sortDirectionFor(key: string): "asc" | "desc" | null {
-  return sortState.value?.field === key ? sortState.value.direction : null;
-}
-
-/** The direction whose visuals to render: on hover, preview the next
- *  click's state; otherwise show the column's actual state. */
-function effectiveSortDir(key: string): "asc" | "desc" | null {
-  const current = sortDirectionFor(key);
-  return hoveredSortKey.value === key ? nextSortDirection(current) : current;
-}
-
-/** Cycle a column none → asc → desc → none; activating one clears the rest. */
-function cycleSort(key: string): void {
-  const next = nextSortDirection(sortDirectionFor(key));
-  sortState.value = next ? { field: key, direction: next } : null;
-}
-
-function sortIconName(key: string): string {
-  return effectiveSortDir(key) === "desc" ? "arrow_downward" : "arrow_upward";
-}
-
-// Dark grey while a direction is active; light grey for the "off" state —
-// so hovering a descending column previews the cleared look.
-function sortButtonClass(key: string): string {
-  return effectiveSortDir(key) ? "text-slate-600" : "text-slate-300";
-}
-
-/** ARIA `aria-sort` token for a column's header cell. */
-function sortAriaValue(key: string): "ascending" | "descending" | "none" {
-  const dir = sortDirectionFor(key);
-  return dir === "asc" ? "ascending" : dir === "desc" ? "descending" : "none";
-}
-
-/** Comparable value for scalar fields that key off the raw cell value. */
-function scalarSortValue(field: FieldSpec, raw: unknown): SortValue {
-  switch (field.type) {
-    case "number":
-    case "money":
-      return numericSortValue(raw);
-    case "date":
-    case "datetime":
-      return dateSortValue(raw);
-    case "enum":
-      return enumSortValue(field.values, raw);
-    case "boolean":
-      return boolSortValue(raw === true);
-    case "ref":
-      return field.to && typeof raw === "string" && raw ? stringSortValue(refDisplay(field.to, raw)) : stringSortValue(raw);
-    default:
-      return stringSortValue(raw);
-  }
-}
-
-/** Comparable value for one row under the active field. Toggle and derived
- *  need the whole record; every other type keys off the raw cell. */
-function sortValueOf(field: FieldSpec, key: string, item: CollectionItem): SortValue {
-  if (field.type === "toggle") return boolSortValue(toggleChecked(item, field));
-  if (field.type === "derived") return derivedSortValue(field, key, item);
-  return scalarSortValue(field, item[key]);
-}
-
-/** Derived rows sort by their display type: money/number → numeric,
- *  date/datetime → epoch, anything else → the enriched value as a string. */
-function derivedSortValue(field: FieldSpec, key: string, item: CollectionItem): SortValue {
-  const { display } = field;
-  if (display === undefined || display === "number" || display === "money") {
-    return numericSortValue(evaluateDerivedAgainstItem(field, key, item));
-  }
-  const enriched = collection.value ? render.deriveAll(collection.value.schema, item, render.refRecordCache.value) : item;
-  if (display === "date" || display === "datetime") return dateSortValue(enriched[key]);
-  return stringSortValue(enriched[key]);
-}
-
-const sortedItems = computed<CollectionItem[]>(() => {
-  const state = sortState.value;
-  const field = state ? collection.value?.schema.fields[state.field] : undefined;
-  if (!state || !field) return filteredItems.value;
-  return sortItems(filteredItems.value, state.direction, (item) => sortValueOf(field, state.field, item));
+// Sort state + header display, extracted to a composable. Calendar / kanban keep
+// their own ordering; only the table consumes `sortedItems`. The shared
+// per-collection localStorage sort is read here and reset on collection switch
+// (below); the write lives in the persist watch.
+const {
+  sortState,
+  hoveredSortKey,
+  sortedItems,
+  cycleSort,
+  resetForSlug: resetSortForSlug,
+} = useTableSort({
+  collection,
+  tableFilteredItems,
+  activeSlug,
+  sortValueDeps,
 });
 
 // ────────────────────────────────────────────────────────────────
@@ -1108,46 +592,7 @@ const sortedItems = computed<CollectionItem[]>(() => {
 
 /** Stringified primary-key value for a row (the row's stable identity). */
 function rowId(item: CollectionItem): string {
-  const primaryKey = collection.value?.schema.primaryKey;
-  return primaryKey ? String(item[primaryKey] ?? "") : "";
-}
-
-/** Stable key for one cell in the `enumOriginallyEmpty` snapshot. */
-function cellKey(rowIdValue: string, fieldKey: string): string {
-  return `${rowIdValue}:${fieldKey}`;
-}
-
-/** Build the set of enum cells that were empty in the freshly-fetched
- *  records — the only cells whose inline dropdown offers an empty option. */
-function snapshotEmptyEnums(schema: CollectionDetail["schema"], records: CollectionItem[]): Set<string> {
-  const empty = new Set<string>();
-  const enumKeys = Object.entries(schema.fields)
-    .filter(([, field]) => field.type === "enum")
-    .map(([fieldKey]) => fieldKey);
-  if (enumKeys.length === 0) return empty;
-  for (const record of records) {
-    const recordId = String(record[schema.primaryKey] ?? "");
-    for (const fieldKey of enumKeys) {
-      if (record[fieldKey] == null || record[fieldKey] === "") empty.add(cellKey(recordId, fieldKey));
-    }
-  }
-  return empty;
-}
-
-/** Whether an inline enum dropdown should render its empty placeholder
- *  option: only for cells with no value at load time. */
-function showEnumPlaceholder(item: CollectionItem, fieldKey: string): boolean {
-  return enumOriginallyEmpty.value.has(cellKey(rowId(item), fieldKey));
-}
-
-/** Tailwind fill/text/border classes tinting an inline enum `<select>` by its
- *  current value's colour (palette, or notification red/amber/grey when the
- *  field is the schema's notifyWhen target). */
-function enumControlClass(fieldKey: string, value: unknown): string {
-  const schema = collection.value?.schema;
-  if (!schema) return "";
-  const cls = resolveEnumColor(schema, fieldKey, value);
-  return `${cls.badge} ${cls.border}`;
+  return rowIdOf(collection.value?.schema.primaryKey, item);
 }
 
 /** This row is the one open in read-only detail. */
@@ -1155,19 +600,25 @@ function isRowOpen(item: CollectionItem): boolean {
   return viewing.value !== null && rowId(viewing.value) === rowId(item);
 }
 
-/** This row is the one being edited (highlights it in the list while the
- *  edit modal is open). Create mode has no backing row, so nothing matches. */
-function isEditingRow(item: CollectionItem): boolean {
-  const draft = editing.value;
-  if (!draft || draft.mode === "create") return false;
-  return draft.originalId === rowId(item);
-}
+/** rowId of the record open in read-only detail (drives the table's row
+ *  highlight), or null when nothing is open. */
+const openRowId = computed<string | null>(() => (viewing.value ? rowId(viewing.value) : null));
 
-/** Re-run a feed collection's retrieval now, then reload its records.
- *  Only reachable when `schema.ingest` is present (button is gated). */
+/** rowId of the record being edited (highlights it in the list while the edit
+ *  modal is open), or null. Create mode has no backing row, so nothing matches. */
+const editingRowId = computed<string | null>(() => {
+  const draft = editing.value;
+  if (!draft || draft.mode === "create") return null;
+  return draft.originalId;
+});
+
+/** Re-run a collection's retrieval now, then reload its records: a feed's
+ *  `ingest`, or a `googleCalendar` sync (#2427). Only reachable when one of
+ *  the two is present (button is gated). */
 async function refreshFeed(): Promise<void> {
   const current = collection.value;
-  if (!current?.schema.ingest || refreshing.value) return;
+  if (!current || refreshing.value) return;
+  if (!current.schema.ingest && !current.schema.googleCalendar) return;
   refreshing.value = true;
   inlineError.value = null;
   const result = await cui.refreshCollection(current.slug);
@@ -1192,6 +643,39 @@ async function refreshFeed(): Promise<void> {
   }
 }
 
+/** Push locally created / edited records to the declared Google calendar
+ *  (#2598) — the opposite direction from `refreshFeed`.
+ *
+ *  Reloads afterwards because a create gives Google the record's own id and the
+ *  push stores the new baseline; the reload is what shows the user the state the
+ *  next push will diff against. */
+async function pushCalendar(): Promise<void> {
+  const current = collection.value;
+  if (!current || pushing.value || !current.schema.googleCalendar) return;
+  pushing.value = true;
+  inlineError.value = null;
+  const result = await cui.pushCalendarCollection(current.slug);
+  pushing.value = false;
+  if (!result.ok) {
+    loadError.value = result.error;
+    return;
+  }
+  await loadCollection(current.slug);
+  reportPush(result.data);
+}
+
+/** Say what the push did. Problems arrive as fields on an HTTP 200, so a silent
+ *  success here would render a setup failure as "nothing to push". */
+function reportPush(result: CollectionPushResult): void {
+  const problems = pushProblems(result);
+  if (problems.length > 0) {
+    inlineError.value = t("collectionsView.pushFailed", { error: problems.join("; ") });
+    return;
+  }
+  const { created, updated, conflicts, localDeletes } = result;
+  showRefreshNote(t("collectionsView.pushDone", { created, updated, conflicts, localDeletes }));
+}
+
 /** Show a transient refresh note, replacing any pending auto-clear. */
 function showRefreshNote(message: string): void {
   refreshNote.value = message;
@@ -1202,153 +686,42 @@ function showRefreshNote(message: string): void {
   }, 6000);
 }
 
-/** Collection-level header actions. No `when` predicate (no record). */
-const collectionActions = computed<CollectionAction[]>(() => collection.value?.schema.collectionActions ?? []);
+// ── Schema-declared actions (collection-level, per-record, mutate) ──
+// The reactive shell + the `runningActions` generation guard live in
+// `useCollectionActions`; the load path (`loadCollection` / `refreshItemsInPlace`)
+// drives the guard through `clearRunningActions` / `beginRunningActionsReconcile`.
+const {
+  runningActions,
+  actionPending,
+  actionError,
+  collectionActionPending,
+  mutateModal,
+  mutatePending,
+  mutateError,
+  collectionActions,
+  visibleActions,
+  viewingRunningActionIds,
+  runCollectionAction,
+  runAction,
+  submitMutateParams,
+  repairCollection,
+  clearRunningActions,
+  beginRunningActionsReconcile,
+} = useCollectionActions({ collection, viewing, dataIssues, inlineError, cui, props, t });
 
-/** Run a collection-level action: ask the server to assemble the seed
- *  prompt (a progress summary of all records + the template), then start
- *  a new chat in the action's role with it. Generic — no domain knowledge. */
-async function runCollectionAction(action: CollectionAction): Promise<void> {
-  const current = collection.value;
-  if (!current || collectionActionPending.value) return;
-  collectionActionPending.value = true;
-  inlineError.value = null;
-  const result = await cui.runCollectionAction(current.slug, action.id);
-  collectionActionPending.value = false;
-  if (!result.ok) {
-    inlineError.value = result.error;
-    return;
-  }
-  if (props.sendTextMessage) {
-    props.sendTextMessage(result.data.prompt);
-    return;
-  }
-  appApi.startNewChat(result.data.prompt, result.data.role);
-}
+// ── Chat entry points (header "chat about collection" + per-record chat box) ──
+// The modal open/close + the skill/feed chat-seed builder live in
+// `useCollectionChat`; the seed shape is core's `skillCommandSeed`.
+const { chatOpen, openChat, closeChat, submitChat, onItemChat } = useCollectionChat({ collection, viewing, cui, props, t });
 
-/** Report the server-detected record data problems back to the LLM so it
- *  fixes the offending files. Mirrors the `presentCollection` validation
- *  path (`dispatchPresentCollection`), but user-initiated via the Repair
- *  button instead of fired automatically after a write. Dispatches into
- *  the current chat when embedded, else seeds a new General chat. */
-function repairCollection(): void {
-  const current = collection.value;
-  if (!current || dataIssues.value.length === 0) return;
-  // Issue text carries record-controlled values (ids, enum values), so defang
-  // structural injection vectors before it rides into the LLM prompt. Shared
-  // with the server's presentCollection path via `defangForPrompt` so the two
-  // can't drift (it also collapses whitespace, closing a newline-injection gap).
-  const lines = dataIssues.value.map((issue) => `- ${defangForPrompt(issue.file)}: ${defangForPrompt(issue.problem)}`).join("\n");
-  const prompt = t("collectionsView.repairPrompt", { title: current.title, count: dataIssues.value.length, issues: lines });
-  if (props.sendTextMessage) {
-    props.sendTextMessage(prompt);
-    return;
-  }
-  appApi.startNewChat(prompt, cui.generalRoleId);
-}
-
-/** Actions whose optional `when` predicate matches the open record.
- *  Status-driven buttons (e.g. invoice "Record payment") stay hidden
- *  until the record reaches the matching state. */
-const visibleActions = computed<CollectionAction[]>(() => {
-  const record = viewing.value;
-  if (!record) return [];
-  return (collection.value?.schema.actions ?? []).filter((action) => actionVisible(action, record));
-});
-
-/** Run a schema-declared action on the open record: ask the server to
- *  assemble the seed prompt, then start a new chat in the action's
- *  role with it. Generic — no knowledge of what the action does. */
-async function runAction(action: CollectionAction): Promise<void> {
-  if (!collection.value || !viewing.value) return;
-  const itemId = String(viewing.value[collection.value.schema.primaryKey] ?? "");
-  if (!itemId) return;
-  actionPending.value = true;
-  actionError.value = null;
-  const result = await cui.runItemAction(collection.value.slug, itemId, action.id);
-  actionPending.value = false;
-  if (!result.ok) {
-    actionError.value = result.error;
-    return;
-  }
-  // In a chat card we have a channel into the current session — send
-  // the seed prompt there rather than spawning a new chat. Standalone
-  // route mode has no such channel, so start a fresh chat in the
-  // action's role (which carries the tools the action needs).
-  if (props.sendTextMessage) {
-    props.sendTextMessage(result.data.prompt);
-    return;
-  }
-  appApi.startNewChat(result.data.prompt, result.data.role);
-}
-
-/** Open the chat modal, blanking any prior draft and focusing the input. */
-function openChat(): void {
-  chatMessage.value = "";
-  chatOpen.value = true;
-  void nextTick(() => chatInputEl.value?.focus());
-}
-
-function closeChat(): void {
-  chatOpen.value = false;
-}
-
-/** Build the chat seed text for the current view.
- *
- *  A collection IS a skill, so its slug doubles as a slash command:
- *  "I want to create an item" on `mc_worklog` becomes
- *  `/mc_worklog I want to create an item`.
- *
- *  A feed is data-only — it has NO skill, so `/<slug>` would resolve to
- *  nothing. Instead, point the agent at the feed's schema + records
- *  (`feeds/<slug>/schema.json` and `<dataPath>/`) and let it act on the
- *  request directly. */
-function buildChatSeed(slug: string, message: string, itemId?: string): string {
-  const current = collection.value;
-  // Only an actual Feed (source `feed`) is skill-less + data-only. A
-  // skill-backed collection — even one carrying an agent-ingest block — DOES
-  // have a `/<slug>` skill command, so seed that. (Checked via `source`
-  // directly, not the `isFeed` computed defined further down, to keep this
-  // helper self-contained and avoid a use-before-define.)
-  if (current?.source !== "feed") return itemId ? `/${slug} id=${itemId} ${message}` : `/${slug} ${message}`;
-  const dataPath = current.schema.dataPath ?? `data/feeds/${slug}`;
-  // A feed has no skill command — point the agent at a specific record by id
-  // inside the same schema-driven seed.
-  const scoped = itemId ? `(for record \`${itemId}\`) ${message}` : message;
-  return t("collectionsView.feedChatSeed", { slug, dataPath, message: scoped });
-}
-
-/** Start a new general-role chat seeded from the current view. */
-function submitChat(): void {
-  if (!collection.value) return;
-  const message = chatMessage.value.trim();
-  if (!message) return;
-  closeChat();
-  const text = buildChatSeed(collection.value.slug, message);
-  // Chat card → send into the current session; standalone → new chat.
-  if (props.sendTextMessage) {
-    props.sendTextMessage(text);
-    return;
-  }
-  appApi.startNewChat(text, cui.generalRoleId);
-}
-
-/** The open record's chat box: start a chat scoped to that one record. Seeds
- *  the collection's skill command with an `id=<itemId>` selector
- *  (`/<slug> id=<itemId> <message>`) so the agent acts on this record. */
-function onItemChat(message: string): void {
-  if (!collection.value || !viewing.value) return;
-  const text = message.trim();
-  if (!text) return;
-  const itemId = String(viewing.value[collection.value.schema.primaryKey] ?? "");
-  const seed = buildChatSeed(collection.value.slug, text, itemId || undefined);
-  // Chat card → send into the current session; standalone → new chat.
-  if (props.sendTextMessage) {
-    props.sendTextMessage(seed);
-    return;
-  }
-  appApi.startNewChat(seed, cui.generalRoleId);
-}
+// ── Related-collections pulldown ──────────────────────────────────────
+// Its whole markup AND its `useRelatedMenu` (open-state, click-outside ref,
+// lazy per-slug ontology fetch) live in CollectionHeader — the menu sits
+// entirely inside the header, so the ref and the document listener belong in
+// one component. The parent still drives the per-slug reset (in the activeSlug
+// watcher below) through the child's exposed `resetForSlugChange`, at the same
+// point it always did.
+const collectionHeaderRef = ref<InstanceType<typeof CollectionHeader> | null>(null);
 
 async function loadCollection(slug: string): Promise<void> {
   // Snapshot the shortcut kind BEFORE the await — if the user navigates
@@ -1361,6 +734,7 @@ async function loadCollection(slug: string): Promise<void> {
   collection.value = null;
   items.value = [];
   dataIssues.value = []; // never carry a previous collection's issues over
+  clearRunningActions(); // ditto for another collection's spinners
   searchQuery.value = ""; // Reset search query on collection load
   // NOTE: the active column sort is NOT reset here — it's part of the view
   // state, so it must survive a refresh / edit reload and an embedded card
@@ -1368,6 +742,7 @@ async function loadCollection(slug: string): Promise<void> {
   render.resetLinkedCaches();
   viewing.value = null;
   openDay.value = null; // never carry a previous collection's open day over
+  const reconcileRunningActions = beginRunningActionsReconcile();
   const result = await cui.fetchCollectionDetail(slug);
   loading.value = false;
   if (!result.ok) {
@@ -1385,6 +760,7 @@ async function loadCollection(slug: string): Promise<void> {
   collection.value = result.data.collection;
   items.value = result.data.items;
   dataIssues.value = result.data.issues ?? [];
+  reconcileRunningActions(result.data.runningActions);
   enumOriginallyEmpty.value = snapshotEmptyEnums(result.data.collection.schema, result.data.items);
   // Fan out to fetch each unique target collection so the table can
   // render ref values as display names (not slugs) and the form
@@ -1419,12 +795,14 @@ async function loadCollection(slug: string): Promise<void> {
  *  fetch is a no-op (keep the current data) — a transient blip shouldn't blank a
  *  view the user is reading. */
 async function refreshItemsInPlace(slug: string): Promise<void> {
+  const reconcileRunningActions = beginRunningActionsReconcile();
   const result = await cui.fetchCollectionDetail(slug);
   // Bail if the fetch failed or the user switched collections mid-flight.
   if (!result.ok || activeSlug.value !== slug) return;
   collection.value = result.data.collection;
   items.value = result.data.items;
   dataIssues.value = result.data.issues ?? [];
+  reconcileRunningActions(result.data.runningActions);
   enumOriginallyEmpty.value = snapshotEmptyEnums(result.data.collection.schema, result.data.items);
   await render.loadLinkedCollections(result.data.collection.schema, slug);
   if (activeSlug.value !== slug) return; // re-check after the await
@@ -1461,15 +839,17 @@ function maybeAutoRefreshFeed(slug: string): void {
  *  and it'd be identical in every row). The detail modal and the edit
  *  form iterate the full `schema.fields` so embeds render there too. */
 // Fields shown as columns in the list table. Excludes `embed`
-// (display-only fixed record, no per-record value), `image` — a
-// per-row <img> fetches one file each, too expensive for a collection
-// with many records, and the image is shown in the detail view anyway —
-// and the primary key (an id is plumbing, not data: it identifies the
-// row via data-testid / ref links but doesn't earn a column).
+// (display-only fixed record, no per-record value), `backlinks` (a
+// whole reverse-ref sub-table can't live in a cell — detail view only),
+// `image` — a per-row <img> fetches one file each, too expensive for a
+// collection with many records, and the image is shown in the detail
+// view anyway — and the primary key (an id is plumbing, not data: it
+// identifies the row via data-testid / ref links but doesn't earn a
+// column).
 const listColumnFields = computed<[string, FieldSpec][]>(() =>
   collection.value
     ? Object.entries(collection.value.schema.fields).filter(
-        ([key, field]) => field.type !== "embed" && field.type !== "image" && key !== collection.value?.schema.primaryKey,
+        ([key, field]) => field.type !== "embed" && field.type !== "backlinks" && field.type !== "image" && key !== collection.value?.schema.primaryKey,
       )
     : [],
 );
@@ -1478,10 +858,24 @@ const listColumnFields = computed<[string, FieldSpec][]>(() =>
  *  exactly one record, its primary key fixed to the declared value. */
 const isSingleton = computed<boolean>(() => Boolean(collection.value?.schema.singleton));
 
+/** True when the collection is backed by an external `dataSource` (CSV) —
+ *  read-only in every write surface here; the server enforces the same
+ *  rule with 405s, this just keeps dead controls off the screen. */
+const isReadOnly = computed<boolean>(() => collection.value?.schema.dataSource !== undefined);
+
+/** File-explorer route for the dataSource file (the one editable thing
+ *  about a read-only collection), or null on a router-less host. */
+const dataSourceRoute = computed<string | null>(() => {
+  const sourcePath = collection.value?.schema.dataSource?.path;
+  return sourcePath ? fileRoutePath(sourcePath) : null;
+});
+
 /** Whether the Add button should show. Always for a normal collection;
- *  for a singleton only until its one record exists. */
+ *  for a singleton only until its one record exists; never for a
+ *  read-only (dataSource) collection. */
 const canCreate = computed<boolean>(() => {
   if (!collection.value) return false;
+  if (isReadOnly.value) return false;
   return !(isSingleton.value && items.value.length > 0);
 });
 
@@ -1524,17 +918,9 @@ const isFeedRoute = computed<boolean>(() => !embedded.value && cui.isFeedRoute()
 // `CollectionViewMode` ("table" | "calendar" | "kanban" | "dashboard" |
 // `custom:<id>`) is imported from the view-mode util.
 
-/** The view to open with: the embedded card's restored `initialView` if
- *  present (its own persisted state wins), else the slug's stored
- *  preference, else "table". Embedded cards READ the store but never WRITE
- *  it (the persist watch only emits `viewStateChange` for them), so a stale
- *  card re-rendering can't clobber the shared preference. */
-function initialViewMode(): CollectionViewMode {
-  if (props.initialView) return props.initialView;
-  const slug = activeSlug.value;
-  return (slug && readCollectionViewMode(slug)) || "table";
-}
-const view = ref<CollectionViewMode>(initialViewMode());
+// The raw `view` ref + its init/restore live in `useViewMode` (created below,
+// once the field lists it gates on — hasCalendar / hasKanban / customViews —
+// exist).
 
 /** `date` / `datetime` fields in declaration order — the calendar can anchor
  *  on any (a `datetime` anchor also carries the clock for the day view). */
@@ -1561,10 +947,6 @@ const enumFields = computed<string[]>(() =>
 /** Whether the kanban toggle is offered (needs an `enum` field to group on). */
 const hasKanban = computed<boolean>(() => enumFields.value.length > 0);
 
-/** The effective view, collapsing any stale mode whose enabling field
- *  vanished (e.g. `view = "kanban"` after switching to an enum-less
- *  collection) back to "table". Single source of truth for the toggle and
- *  the body branches. */
 /** Custom (LLM-authored) HTML views declared on the schema. Mobile-target
  *  views need the host's `fetchRemoteView` binding (the phone-frame preview's
  *  data source) — on a host without it they're hidden from the selector. */
@@ -1574,62 +956,31 @@ const customViews = computed<CustomViewSpec[]>(() => {
 });
 const hasCustomViews = computed<boolean>(() => customViews.value.length > 0);
 
-const activeView = computed<CollectionViewMode>(() => {
-  if (view.value === "calendar" && hasCalendar.value) return "calendar";
-  if (view.value === "kanban" && hasKanban.value) return "kanban";
-  if (view.value.startsWith("custom:")) {
-    const viewId = view.value.slice("custom:".length);
-    if (customViews.value.some((entry) => entry.id === viewId)) return view.value;
-  }
-  return "table";
-});
-
-/** The selected custom view's spec, or null when a built-in view is active. */
-const activeCustomView = computed<CustomViewSpec | null>(() => {
-  const mode = activeView.value;
-  if (!mode.startsWith("custom:")) return null;
-  const viewId = mode.slice("custom:".length);
-  return customViews.value.find((entry) => entry.id === viewId) ?? null;
-});
-
-/** Narrow a (possibly custom) mode to a built-in one, used where only the
- *  built-in views are representable (the embedded card's viewState). */
-function builtInViewOrTable(mode: CollectionViewMode): BuiltInViewMode {
-  return mode === "calendar" || mode === "kanban" ? mode : "table";
-}
+// View-mode state (raw `view` ref + `activeView` collapse + set/reset). The
+// localStorage WRITE stays in the parent's combined persist watch below (with
+// sort + flag filters + the embedded `viewStateChange` emit), same pattern as the
+// sort / flag composables — this owns the ref + read-on-init + `resetForSlug`.
+const {
+  activeView,
+  activeCustomView,
+  calendarActive,
+  kanbanActive,
+  setView,
+  setCustomView,
+  builtInViewOrTable,
+  resetForSlug: resetViewModeForSlug,
+} = useViewMode({ activeSlug, props, hasCalendar, hasKanban, customViews });
 
 /** Whether to offer the "+" (author a new custom view) button. Standalone
  *  page only (the seed starts a chat). Feeds qualify too — their views are
  *  authored under feeds/<slug>/ and the seed prompt points there. */
 const canAddCustomView = computed<boolean>(() => Boolean(collection.value) && !embedded.value);
 
-// ── "+" add-view chooser (desktop vs phone target) ───────────────────
-const addMenuOpen = ref<boolean>(false);
-const addMenuRef = ref<HTMLElement | null>(null);
-
 /** Whether authoring a phone (remote app) view is worth offering — mirrors
- *  the selector filter above: without the host's `fetchRemoteView` binding a
- *  mobile view could be authored but never shown here. */
+ *  the selector filter: without the host's `fetchRemoteView` binding a mobile
+ *  view could be authored but never shown. Passed to the toolbar, which owns
+ *  the "+" chooser (open/close + click-outside) and only signals the target. */
 const canAddMobileView = computed<boolean>(() => Boolean(cui.fetchRemoteView));
-
-/** "+" click: open the target chooser, or skip the one-item menu and seed
- *  the desktop prompt directly when mobile views aren't available. */
-function onAddViewClick(): void {
-  if (!canAddMobileView.value) {
-    addCustomView("desktop");
-    return;
-  }
-  addMenuOpen.value = !addMenuOpen.value;
-}
-
-function closeAddMenuOnOutsideClick(event: MouseEvent): void {
-  if (!addMenuRef.value?.contains(event.target as Node)) addMenuOpen.value = false;
-}
-
-watch(addMenuOpen, (open) => {
-  if (open) document.addEventListener("mousedown", closeAddMenuOnOutsideClick);
-  else document.removeEventListener("mousedown", closeAddMenuOnOutsideClick);
-});
 
 /** Seed a chat asking Claude to author a new custom view for this collection.
  *  Reuses the same chat-seed path as collection actions — the host injects a
@@ -1639,7 +990,6 @@ watch(addMenuOpen, (open) => {
  *  is target-aware: phone views follow the custom-view-remote contract and
  *  register with `target: "mobile"`. */
 function addCustomView(target: "desktop" | "mobile"): void {
-  addMenuOpen.value = false;
   const current = collection.value;
   if (!current) return;
   const base = current.source === "feed" ? `feeds/${current.slug}` : `data/skills/${current.slug}`;
@@ -1667,12 +1017,6 @@ async function onViewsChanged(): Promise<void> {
   const current = collection.value;
   if (current) await loadCollection(current.slug);
 }
-
-/** True when the calendar is the active body. */
-const calendarActive = computed<boolean>(() => activeView.value === "calendar");
-
-/** True when the kanban is the active body. */
-const kanbanActive = computed<boolean>(() => activeView.value === "kanban");
 
 // In-view override for which enum field groups the board; null ⇒ the schema
 // hint, else the first enum field.
@@ -1710,27 +1054,12 @@ const calendarTimeField = computed<string | undefined>(() => {
   return calendarAnchorField.value === schema.calendarField ? schema.calendarTimeField : undefined;
 });
 
-function setView(next: CollectionViewMode): void {
-  view.value = next;
-}
-
-/** Select a custom view by id (builds the `custom:<id>` mode key). */
-function setCustomView(viewId: string): void {
-  const mode: CollectionViewMode = `custom:${viewId}`;
-  view.value = mode;
-}
-
 /** A short, slug-safe id not already used by a loaded record. Collisions
  *  are astronomically unlikely (32 bits), but we still re-roll a few
  *  times against the in-memory set before giving up and using the last
  *  candidate (the server's overwrite guard is the final backstop). */
 function generateUniqueItemId(primaryKey: string): string {
-  const existing = new Set(items.value.map((item) => String(item[primaryKey] ?? "")));
-  let candidate = shortHexId();
-  for (let attempt = 0; attempt < 8 && existing.has(candidate); attempt++) {
-    candidate = shortHexId();
-  }
-  return candidate;
+  return nextUniqueItemId(items.value, primaryKey, shortHexId);
 }
 
 function openCreate(): void {
@@ -1748,11 +1077,11 @@ function openCreate(): void {
       boolTouched[key] = false;
     } else if (field.type === "table") {
       table[key] = [];
-    } else if (field.type !== "derived" && field.type !== "embed" && field.type !== "toggle") {
+    } else if (!COMPUTED_TYPES.has(field.type)) {
       text[key] = "";
     }
-    // derived (computed), embed (display-only, foreign record), and toggle
-    // (projection of an enum field) have no draft slot.
+    // The computed/projected kinds (COMPUTED_TYPES: derived, embed,
+    // backlinks, rollup, toggle) have no draft slot.
   }
   // Singleton collections fix the primary key to the schema-declared
   // value (e.g. "me") so the first Add can't pick an arbitrary id.
@@ -1796,7 +1125,7 @@ function openEdit(item: CollectionItem): void {
       table[key] = rows
         .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object" && !Array.isArray(row))
         .map((row) => rowFromItem(row, sub));
-    } else if (field.type !== "derived" && field.type !== "embed" && field.type !== "toggle") {
+    } else if (!COMPUTED_TYPES.has(field.type)) {
       text[key] = raw === undefined || raw === null ? "" : String(raw);
     }
   }
@@ -1936,17 +1265,8 @@ const liveRecord = computed<CollectionItem | null>(() => {
  *  rendering composable; this binds it to the current draft. */
 const liveDerived = computed<CollectionItem | null>(() => {
   if (!collection.value || !liveRecord.value) return null;
-  return render.deriveAll(collection.value.schema, liveRecord.value, refRecordCache.value);
+  return render.deriveRecord(liveRecord.value);
 });
-
-/** Short summary for a `table`-typed cell in the main collection
- *  table. Counts rows; nothing fancier yet (per-row preview is
- *  hard to fit in a single cell). */
-function tableSummary(value: unknown): string {
-  if (!Array.isArray(value)) return "—";
-  if (value.length === 0) return "—";
-  return t("collectionsView.tableSummary", { count: value.length });
-}
 
 async function saveEditor(): Promise<void> {
   if (!collection.value || !editing.value) return;
@@ -1989,18 +1309,12 @@ function applyInlineValue(item: CollectionItem, key: string, value: unknown): vo
   item[key] = value;
 }
 
-/** True while this row has an inline cell save in flight — its inline
- *  controls render disabled to serialize edits (one PUT per row). */
-function isRowInlineSaving(item: CollectionItem): boolean {
-  return inlineSavingRows.value.has(rowId(item));
-}
-
 /** Inline table-cell edit (boolean checkbox / enum dropdown): optimistic
  *  update, then PUT the full record. Gated per row so a second edit can't
  *  race the in-flight one. On failure, roll the cell back and surface the
  *  error. Bypasses the detail/edit panel entirely. */
 async function commitInlineEdit(item: CollectionItem, key: string, field: FieldSpec, raw: boolean | string): Promise<void> {
-  if (!collection.value) return;
+  if (!collection.value || isReadOnly.value) return;
   const { slug } = collection.value;
   const itemId = rowId(item);
   if (!itemId || inlineSavingRows.value.has(itemId)) return;
@@ -2017,22 +1331,15 @@ async function commitInlineEdit(item: CollectionItem, key: string, field: FieldS
   }
 }
 
-/** Whether a `toggle` field reads as checked: its projected enum field
- *  currently equals `onValue`. The toggle stores nothing itself. */
-function toggleChecked(item: CollectionItem, field: FieldSpec): boolean {
-  return field.field !== undefined && String(item[field.field] ?? "") === field.onValue;
-}
-
 /** Flip a `toggle`: write the projected enum field to `offValue` when
  *  currently checked, else `onValue`. Reuses the inline-edit PUT path
  *  (optimistic + rollback) — the toggle has no value of its own. */
 function commitToggle(item: CollectionItem, field: FieldSpec): void {
+  if (field.type !== "toggle" || !collection.value) return;
   const targetKey = field.field;
-  if (!targetKey || !collection.value) return;
   const enumField = collection.value.schema.fields[targetKey];
   if (!enumField) return;
   const next = toggleChecked(item, field) ? field.offValue : field.onValue;
-  if (next === undefined) return;
   void commitInlineEdit(item, targetKey, enumField, next);
 }
 
@@ -2228,13 +1535,19 @@ watch(
     // restore the new collection's stored mode (else "table"); the axis
     // fields always reset to their schema defaults.
     if (prevSlug !== undefined && slug !== prevSlug) {
-      view.value = (slug && readCollectionViewMode(slug)) || "table";
+      resetViewModeForSlug(slug);
       anchorOverride.value = null;
       kanbanOverride.value = null;
-      addMenuOpen.value = false;
+      // The toolbar closes its own filter / add-view menus on this slug change
+      // (it owns their open state now).
+      // Drop the previous collection's cached neighbors so the next open
+      // re-derives them for the new slug (also clears any in-flight spinner).
+      collectionHeaderRef.value?.resetForSlugChange();
       // A sort belongs to a collection's own schema, so don't carry it across —
-      // restore the new collection's stored (shared) sort instead.
-      sortState.value = storedSortFor(slug);
+      // restore the new collection's stored (shared) sort instead. Same for
+      // the flag filter chips.
+      resetSortForSlug(slug);
+      resetFlagFiltersForSlug(slug);
     }
     if (slug) {
       loadCollection(slug);
@@ -2263,58 +1576,10 @@ watch(
 // clobbers the user's draft. A change that lands mid-edit sets a pending flag
 // that the `editing` watch below flushes once the edit ends — whether it ends
 // by save or cancel — so a cancelled edit doesn't leave the view stale.
-const LIVE_REFRESH_DEBOUNCE_MS = 150;
-let changeUnsub: (() => void) | null = null;
-let liveRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-let pendingRemoteRefresh = false;
-
-function clearLiveRefreshTimer(): void {
-  if (liveRefreshTimer !== undefined) {
-    clearTimeout(liveRefreshTimer);
-    liveRefreshTimer = undefined;
-  }
-}
-
-function onRemoteChange(slug: string): void {
-  clearLiveRefreshTimer();
-  liveRefreshTimer = setTimeout(() => {
-    liveRefreshTimer = undefined;
-    if (editing.value) {
-      pendingRemoteRefresh = true; // defer past the edit, don't drop it
-      return;
-    }
-    if (activeSlug.value === slug) void refreshItemsInPlace(slug);
-  }, LIVE_REFRESH_DEBOUNCE_MS);
-}
-
-// Flush a remote change that arrived mid-edit once the edit ends (save or
-// cancel). The save path refetches on its own, but cancel has no other refresh
-// path — without this, a cancelled edit would strand the deferred update.
-watch(editing, (current) => {
-  if (current || !pendingRemoteRefresh) return;
-  pendingRemoteRefresh = false;
-  if (activeSlug.value) void refreshItemsInPlace(activeSlug.value);
-});
-
-watch(
-  activeSlug,
-  (slug) => {
-    changeUnsub?.();
-    changeUnsub = null;
-    clearLiveRefreshTimer();
-    if (slug && cui.subscribeChanges) {
-      changeUnsub = cui.subscribeChanges(slug, () => onRemoteChange(slug));
-    }
-  },
-  { immediate: true },
-);
+useLiveCollectionRefresh({ activeSlug, editing, cui, refreshItemsInPlace });
 
 onUnmounted(() => {
-  changeUnsub?.();
-  changeUnsub = null;
-  clearLiveRefreshTimer();
   if (refreshNoteTimer !== undefined) clearTimeout(refreshNoteTimer);
-  document.removeEventListener("mousedown", closeAddMenuOnOutsideClick);
 });
 
 // Embedded mode: report view/anchor changes so the chat card persists them
@@ -2324,7 +1589,7 @@ onUnmounted(() => {
 // loading: that's the point where a stored mode unsupported by this schema
 // (its date/enum field gone) has collapsed to "table" and must be normalized
 // back into storage — otherwise no other dependency changes and it lingers.
-watch([activeView, calendarAnchorField, kanbanGroupField, sortState, loading], () => {
+watch([activeView, calendarAnchorField, kanbanGroupField, sortState, flagFilters, loading], () => {
   // Persist the EFFECTIVE view (activeView), not the raw `view` ref — a
   // stale "calendar"/"kanban" that has fallen back to "table" (its enabling
   // field gone) must not be saved as an impossible mode.
@@ -2344,6 +1609,9 @@ watch([activeView, calendarAnchorField, kanbanGroupField, sortState, loading], (
     // there's no per-card value to go stale and clobber the store.
     if (!embedded.value) writeCollectionViewMode(activeSlug.value, activeView.value);
     writeCollectionSort(activeSlug.value, sortState.value);
+    // Flag chips share the sort's both-ways model: a card re-reads them on
+    // mount, so there's no per-card value to go stale and clobber the store.
+    writeCollectionFlagFilters(activeSlug.value, flagFilters.value);
   }
 });
 

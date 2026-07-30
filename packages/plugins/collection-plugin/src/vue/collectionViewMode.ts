@@ -33,6 +33,32 @@ export function applicableViewModes(schema: CollectionSchema): CollectionViewMod
   return modes;
 }
 
+/** The EFFECTIVE view for a raw mode, collapsing any mode whose enabling
+ *  condition is gone: `calendar`/`kanban` fall back to `table` once their
+ *  date/enum field vanishes (e.g. after a collection switch), and a
+ *  `custom:<id>` falls back once that id is no longer a declared view. Single
+ *  source of truth for the toggle highlight and the body branches. */
+export function resolveActiveViewMode(
+  view: CollectionViewMode,
+  hasCalendar: boolean,
+  hasKanban: boolean,
+  customViewIds: readonly string[],
+): CollectionViewMode {
+  if (view === "calendar" && hasCalendar) return "calendar";
+  if (view === "kanban" && hasKanban) return "kanban";
+  if (view.startsWith("custom:")) {
+    const viewId = view.slice("custom:".length);
+    if (customViewIds.includes(viewId)) return view;
+  }
+  return "table";
+}
+
+/** Narrow a (possibly custom) mode to a built-in one, for surfaces that can
+ *  only represent the built-ins (the embedded card's `viewState`). */
+export function builtInViewOrTable(mode: CollectionViewMode): BuiltInViewMode {
+  return mode === "calendar" || mode === "kanban" ? mode : "table";
+}
+
 const STORAGE_KEY = "collection_view_modes";
 const SORT_STORAGE_KEY = "collection_sorts";
 
@@ -119,6 +145,55 @@ export function writeCollectionSort(slug: string, sort: SortState | null): void 
     const all = Object.fromEntries(Object.entries(readAllSorts()).filter(([key]) => key !== slug));
     if (sort) all[slug] = sort;
     localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(all));
+  } catch {
+    // Best-effort, same as the view-mode store.
+  }
+}
+
+// ── Flag filter chips (table view) ───────────────────────────────────
+
+/** One chip's active filter mode: `hide` drops matching rows, `only`
+ *  keeps just them. A chip with no entry shows all rows. */
+export type FlagFilterMode = "hide" | "only";
+/** Chip key (flag field name, or the synthesized completion key) → mode. */
+export type FlagFilterState = Record<string, FlagFilterMode>;
+
+const FLAG_FILTER_STORAGE_KEY = "collection_flag_filters";
+
+function isFlagFilterState(value: unknown): value is FlagFilterState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every((mode) => mode === "hide" || mode === "only");
+}
+
+function readAllFlagFilters(): Record<string, FlagFilterState> {
+  try {
+    const raw = localStorage.getItem(FLAG_FILTER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, FlagFilterState> = {};
+    for (const [slug, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (isFlagFilterState(value)) out[slug] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** The slug's persisted chip states ({} when none). A key whose flag no
+ *  longer exists in the schema is harmless — the chip list is derived
+ *  from the live schema, so a stale entry just never renders/filters. */
+export function readCollectionFlagFilters(slug: string): FlagFilterState {
+  return readAllFlagFilters()[slug] ?? {};
+}
+
+/** Persist the slug's chip states; an empty state clears the entry. */
+export function writeCollectionFlagFilters(slug: string, filters: FlagFilterState): void {
+  try {
+    const all = Object.fromEntries(Object.entries(readAllFlagFilters()).filter(([key]) => key !== slug));
+    if (Object.keys(filters).length > 0) all[slug] = filters;
+    localStorage.setItem(FLAG_FILTER_STORAGE_KEY, JSON.stringify(all));
   } catch {
     // Best-effort, same as the view-mode store.
   }

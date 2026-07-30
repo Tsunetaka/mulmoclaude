@@ -110,13 +110,18 @@ describe("collectSkillsFromDir", () => {
     assert.equal(projectSkills[0].source, "project");
   });
 
-  it("gracefully handles an unreadable SKILL.md", async () => {
-    // Windows does not honour POSIX-style chmod(0o000); the CI
-    // runner reads the file anyway and the test would fail.
-    if (process.platform === "win32") return;
-    // Some CI sandboxes run as root which also bypasses chmod. Skip
-    // when we can't actually enforce unreadable permissions.
-    if (process.getuid && process.getuid() === 0) return;
+  it("gracefully handles an unreadable SKILL.md", async (ctx) => {
+    if (process.platform === "win32") {
+      // Windows does not honour POSIX-style chmod(0o000); the CI
+      // runner reads the file anyway and the test would fail.
+      ctx.skip("Windows does not honour chmod(0o000)");
+      return;
+    }
+    if (process.getuid && process.getuid() === 0) {
+      // Some CI sandboxes run as root which also bypasses chmod.
+      ctx.skip("root bypasses chmod, cannot enforce unreadable permissions");
+      return;
+    }
     const dir = join(root, "locked");
     await mkdir(dir);
     const path = join(dir, "SKILL.md");

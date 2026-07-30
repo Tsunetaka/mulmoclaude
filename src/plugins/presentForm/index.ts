@@ -24,8 +24,6 @@ const presentFormPlugin: ToolPlugin<FormData, FormData, FormArgs> = {
   viewComponent: wrapWithScope("form", pkg.viewComponent),
   previewComponent: wrapWithScope("form", pkg.previewComponent),
 };
-
-export default presentFormPlugin;
 export { TOOL_NAME };
 
 export const REGISTRATION: PluginRegistration = {

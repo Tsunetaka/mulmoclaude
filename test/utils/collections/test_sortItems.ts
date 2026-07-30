@@ -15,18 +15,18 @@ import {
   boolSortValue,
   type SortValue,
 } from "@mulmoclaude/core/collection";
-import type { CollectionItem } from "../../../src/components/collectionTypes.js";
+import type { FieldSpec, CollectionItem } from "../../../src/components/collectionTypes.js";
 
 describe("isSortableField", () => {
   it("offers sorting for value-bearing field types", () => {
     for (const type of ["string", "text", "email", "number", "money", "date", "datetime", "enum", "boolean", "toggle", "ref", "derived"] as const) {
-      assert.equal(isSortableField({ type, label: type }), true, type);
+      assert.equal(isSortableField({ type, label: type } as FieldSpec), true, type);
     }
   });
 
   it("offers no sorting for non-textual field types", () => {
     for (const type of ["markdown", "table", "image", "file", "embed"] as const) {
-      assert.equal(isSortableField({ type, label: type }), false, type);
+      assert.equal(isSortableField({ type, label: type } as FieldSpec), false, type);
     }
   });
 });

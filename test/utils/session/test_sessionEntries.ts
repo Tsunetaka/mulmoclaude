@@ -3,7 +3,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseSessionEntries, resolveSelectedUuid, resolveSessionTimestamps } from "../../../src/utils/session/sessionEntries.js";
+import { parseSessionEntries, resolveSelectedUuid, resolveSessionTimestamps, shouldAdoptServerTranscript } from "../../../src/utils/session/sessionEntries.js";
 import type { SessionEntry, SessionSummary } from "../../../src/types/session.js";
 import type { ToolResultComplete } from "gui-chat-protocol/vue";
 
@@ -269,5 +269,53 @@ describe("resolveSessionTimestamps", () => {
       startedAt: now,
       updatedAt: now,
     });
+  });
+});
+
+// --- shouldAdoptServerTranscript (#2096) --------------------------
+
+describe("shouldAdoptServerTranscript", () => {
+  const card = (message: string): ToolResultComplete =>
+    ({ uuid: message, toolName: "text-response", message, title: "Assistant", data: {} }) as ToolResultComplete;
+
+  it("adopts when the server has more cards (client missed events)", () => {
+    assert.equal(shouldAdoptServerTranscript([card("a"), card("b")], [card("a")]), true);
+  });
+
+  it("adopts when card counts match but a text card was truncated mid-stream (#2096)", () => {
+    // Same 2 cards, but the client's last card is cut off ("理由によ")
+    // while the server has the full body — the dropped-frame case.
+    const server = [card("intro"), card("理由によって打ち手が全然違う。次の一手として、…")];
+    const client = [card("intro"), card("理由によ")];
+    assert.equal(shouldAdoptServerTranscript(server, client), true);
+  });
+
+  it("keeps the client copy when counts and total text are equal (no clobber on a finished race)", () => {
+    const same = [card("intro"), card("done")];
+    assert.equal(shouldAdoptServerTranscript(same, [card("intro"), card("done")]), false);
+  });
+
+  it("keeps the client copy when the client has richer in-flight text than the server snapshot", () => {
+    assert.equal(shouldAdoptServerTranscript([card("short")], [card("a much longer live body")]), false);
+  });
+
+  it("keeps the client copy when the server has fewer cards (stale snapshot)", () => {
+    assert.equal(shouldAdoptServerTranscript([card("a")], [card("a"), card("b")]), false);
+  });
+
+  it("handles empty transcripts", () => {
+    assert.equal(shouldAdoptServerTranscript([], []), false);
+    assert.equal(shouldAdoptServerTranscript([card("a")], []), true);
+  });
+
+  it("ignores non-text (tool) card message diffs — only streamed text/skill bodies count (Sourcery review)", () => {
+    const toolCard = (message: string): ToolResultComplete =>
+      ({ uuid: "img", toolName: "generateImage", message, title: "Image", data: { url: "x" } }) as ToolResultComplete;
+    // Same card count; only the non-streamed tool card's `message` differs.
+    // Its payload lives in `data` and it arrives complete, so it must NOT
+    // trigger adoption on its own.
+    const server = [card("hi"), toolCard("done rendering the sunset image")];
+    const client = [card("hi"), toolCard("rendering")];
+    assert.equal(shouldAdoptServerTranscript(server, client), false);
   });
 });

@@ -1,0 +1,123 @@
+name: duplication-scan
+
+# Copy/paste detection (jscpd) reported to GitHub Code Scanning.
+#
+# Why SARIF instead of `--threshold`: a global duplication-% gate cannot
+# stop NEW duplication. Against 163k lines of TypeScript, copy/pasting a
+# 20-line function moves the ratio from 3.27% to 3.28% — it never reaches
+# any sane threshold, so the `truncate()`-grew-to-6-implementations class
+# of drift (#1304) slips through every time. Code Scanning diffs alerts
+# against the base branch instead, so a PR that introduces a clone is
+# flagged on its own merits, undiluted by repo size.
+#
+# Reports only — this workflow does not fail the build. The tree already
+# carries ~314 TypeScript clones; blocking on day one would just train
+# people to ignore it. Revisit once the alert stream proves useful.
+#
+# Follows the repo's supply-chain posture (see secret-scan.yml): pull a
+# version-pinned CLI binary and SHA256-verify it rather than depending on
+# a third-party GitHub Action. Refresh JSCPD_VERSION + JSCPD_SHA256
+# together when bumping (jscpd ships no checksums.txt — compute it from
+# the linux x64 gnu tarball).
+
+on:
+  pull_request:
+    branches:
+      - main
+    # Duplication can only change when source changes.
+    paths-ignore:
+      - 'docs/**'
+      - 'plans/**'
+      - '**/*.md'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  duplication-scan:
+    name: Duplication Scan (jscpd)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Required to publish the SARIF report to Code Scanning. Scoped to
+      # this job so the rest of the workflow keeps read-only defaults.
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # No git pushes from this job; don't leave the token in
+          # .git/config (zizmor artipacked).
+          persist-credentials: false
+
+      - name: Install jscpd
+        env:
+          JSCPD_VERSION: 5.0.12
+          # SHA256 of jscpd-linux-x64-gnu.tar.gz from
+          # https://github.com/kucherenko/jscpd/releases — refresh
+          # alongside any JSCPD_VERSION bump.
+          JSCPD_SHA256: c1107547ee52bc83131d6e62d1fc9c156d194c593a4532876cdb1584b4e1dc3b
+        run: |
+          set -euo pipefail
+          ARCHIVE="jscpd-linux-x64-gnu.tar.gz"
+          curl -sSfL -o "$ARCHIVE" \
+            "https://github.com/kucherenko/jscpd/releases/download/v${JSCPD_VERSION}/${ARCHIVE}"
+          echo "${JSCPD_SHA256}  ${ARCHIVE}" | sha256sum -c -
+          sudo tar -xz -C /usr/local/bin -f "$ARCHIVE" jscpd
+          rm -f "$ARCHIVE"
+          jscpd --version
+
+      # Scan `.` — NOT `src server packages`. jscpd strips the scan-root
+      # prefix from the paths it reports, so passing roots explicitly
+      # yields SARIF locations like `bridges/google-chat/src/index.ts`
+      # (the file is really under `packages/`) and even a bare
+      # `index.ts`, which Code Scanning cannot map back to a file. Only
+      # a repo-root scan produces repo-relative paths. Scope is carved
+      # out with --ignore below instead.
+      #
+      # --ignore takes FILE globs; --ignore-pattern is something else
+      # entirely (code-level regexes that skip tokens mid-detection), so
+      # excludes written there silently match nothing. jscpd's README
+      # option table mislabels this — trust `jscpd --help`.
+      #
+      # `--format typescript` is deliberate. Measured across the repo,
+      # markdown (22.70%) and json (15.30%) score far "worse" than
+      # TypeScript (3.27%) but are pure noise: 25+ workspaces legitimately
+      # share package.json boilerplate, and docs repeat themselves by
+      # nature. Neither is a DRY target, and leaving them in would bury
+      # the real signal.
+      #
+      # Tests are excluded: fixtures and arrange/act/assert scaffolding
+      # duplicate by nature, and the 528 extra findings they bring would
+      # drown the ~186 that are actually worth reading.
+      #
+      # `**/_generated/**` is excluded: codegen output (the plugin barrels
+      # from scripts/codegen-plugin-barrels.ts) duplicates by nature and
+      # is regenerated, never hand-refactored.
+      #
+      # The test globs are written `**/test/**` rather than `test/**` to
+      # say "any test dir, at any depth" out loud — packages/*/test/ has
+      # to be excluded too. jscpd's --ignore globs are unanchored, so the
+      # two forms are equivalent today (verified: identical file and clone
+      # counts); the explicit form just doesn't depend on that.
+      - name: Run jscpd
+        run: |
+          set -euo pipefail
+          jscpd . \
+            --format typescript \
+            --ignore "**/node_modules/**,**/dist/**,**/*.d.ts,**/test/**,**/e2e/**,**/e2e-live/**,**/spreadsheet/engine/**,**/_generated/**" \
+            --reporters console,sarif \
+            --output report
+
+      - name: Upload SARIF to Code Scanning
+        # Hash-pinned: .github/zizmor.yml grants a tag-pin exemption to
+        # `actions/*` only, and codeql-action lives under `github/*`.
+        uses: github/codeql-action/upload-sarif@b7351df727350dca84cb9d725d57dcf5bc82ba26  # v3.37.1
+        with:
+          sarif_file: report/jscpd-report.sarif
+          # Distinct category keeps these alerts from colliding with the
+          # CodeQL default-setup analysis already running on this repo.
+          category: jscpd

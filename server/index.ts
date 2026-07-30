@@ -1,7 +1,13 @@
-import "dotenv/config";
+// Must stay FIRST and stay an import: importing it populates
+// `process.env` from `<cwd>/.env` during the import phase, before any
+// module below reads env at its own scope. A call in the body would run
+// after every import had already been evaluated — too late. See
+// server/system/loadEnv.ts.
+import { shadowedByServerLoad } from "./system/loadEnv.js";
 // Wire @mulmoclaude/core/collection/server to this host's workspace + logger
 // before any module that touches collection storage loads.
 import "./workspace/collections/configure.js";
+import "./services/google/configure.js";
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -19,6 +25,7 @@ import transcribeRoutes from "./api/routes/transcribe.js";
 import presentHtmlRoutes from "./api/routes/presentHtml.js";
 import shareRoutes from "./api/routes/share.js";
 import remoteHostRoutes from "./api/routes/remoteHost.js";
+import googleRoutes from "./api/routes/google.js";
 import presentSvgRoutes from "./api/routes/presentSvg.js";
 import chartRoutes from "./api/routes/chart.js";
 import rolesRoutes from "./api/routes/roles.js";
@@ -37,7 +44,7 @@ import configRefreshRoutes from "./api/routes/config-refresh.js";
 import hookLogRoutes from "./api/routes/hookLog.js";
 import skillsRoutes from "./api/routes/skills.js";
 import workFilesRoutes from "./api/routes/workFiles.js";
-import collectionsRoutes from "./api/routes/collections.js";
+import collectionsRoutes, { makeViewActionRateLimiter } from "./api/routes/collections.js";
 import collectionsRegistryRoutes from "./api/routes/collectionsRegistry.js";
 import { startCollectionWatchers } from "./workspace/collections/watcher.js";
 import runtimePluginRoutes from "./api/routes/runtime-plugin.js";
@@ -59,12 +66,14 @@ import { setActiveBackend } from "./agent/backend/index.js";
 import { fakeEchoBackend } from "./agent/backend/fake-echo.js";
 import { startMacosReminderAdapter } from "./notifier/macosReminderAdapter.js";
 import notifierRoutes from "./api/routes/notifier.js";
+import { createShutdownRouter } from "./api/routes/shutdown.js";
 import { initNotifier } from "./notifier/engine.js";
 import { registerSaveAttachmentHook } from "./utils/files/attachment-store.js";
 import { capturePhotoLocation } from "./workspace/photo-locations/index.js";
 import { createJournalRouter } from "./api/routes/journal.js";
 import { createTranslationRouter } from "./api/routes/translation.js";
 import { announcePluginMetaDiagnostics } from "./plugins/diagnostics.js";
+import { announceShadowedEnv, SHADOWED_ENV_KEYS_VAR } from "./system/shadowedEnv.js";
 import { announceOptionalDeps } from "./system/announceOptionalDeps.js";
 import { announceGeminiKey } from "./system/announceGeminiKey.js";
 import { migrateLegacyBillingPresets } from "./workspace/billing-migration.js";
@@ -74,12 +83,18 @@ import { readSessionJsonl, readSessionMeta } from "./utils/files/session-io.js";
 import { resolveBridgeSessionRole } from "./api/bridge/sessionRole.js";
 import { onSessionEvent, initSessionStore } from "./events/session-store/index.js";
 import { initFileChangePublisher } from "./events/file-change.js";
+// Importing also binds the shared mulmoScript server ops to this host's
+// backend and registers the built-in "mulmoScript" dispatch handler (side
+// effect at module load — plans/done/feat-mulmoscript-plugin.md phase 3).
+import { initMulmoScriptGenerationPublisher } from "./plugins/mulmoscript-server.js";
 import { initCollectionChangePublisher } from "./events/collection-change.js";
+import { initPhotoLocationsChangePublisher } from "./events/photo-locations-change.js";
 import { getRole, loadAllRoles } from "./workspace/roles.js";
 import { discoverSkills } from "./workspace/skills/index.js";
 import { WORKSPACE_PATHS } from "./workspace/paths.js";
 import { resolveClientDir } from "./utils/clientDir.js";
 import { serverError } from "./utils/httpError.js";
+import { browserVisibleOrigin } from "./utils/forwardedOrigin.js";
 import { makeUuid } from "./utils/id.js";
 import { mcpToolsRouter, mcpTools, isMcpToolEnabled } from "./agent/mcp-tools/index.js";
 import { preflightUserServers, logPreflightResult } from "./agent/mcpPreflight.js";
@@ -91,14 +106,16 @@ import { runTopicMigrationOnce } from "./workspace/memory/topic-run.js";
 import { migrateCookingRecipesFromPlugin } from "./workspace/cooking-recipes/migrate.js";
 import { env, isAblated, isGeminiAvailable } from "./system/env.js";
 import { buildSandboxStatus } from "./api/sandboxStatus.js";
+import { buildDiagnosticsMarkdown } from "./utils/diagnostics/collect.js";
 import { existsSync, readFileSync } from "fs";
-import { realpath as fsRealpath } from "fs/promises";
-import { containsDotfileSegment, resolveWithinRoot } from "./utils/files/safe.js";
+import { realpath as fsRealpath, stat as fsStat } from "fs/promises";
+import { makeCachedRealpath, resolveArtifactRequestPath } from "./utils/files/safe.js";
 import { cpus, loadavg } from "os";
 import { isDockerAvailable, ensureSandboxImage } from "./system/docker.js";
 import { maybeRunJournal } from "./workspace/journal/index.js";
 import { backfillAllSessions } from "./workspace/chat-index/index.js";
 import { feedRefreshTaskDef } from "@mulmoclaude/core/feeds/server";
+import { googleCalendarSyncTaskDef } from "@mulmoclaude/core/google";
 import { configureFeeds } from "./workspace/feeds/configure.js";
 import { createPubSub } from "./events/pub-sub/index.js";
 import { PUBSUB_CHANNELS } from "../src/config/pubsubChannels.js";
@@ -115,6 +132,8 @@ import { isViewDataPath } from "./api/auth/viewToken.js";
 import { deleteTokenFile, generateAndWriteToken, getCurrentToken } from "./api/auth/token.js";
 import { log } from "./system/logger/index.js";
 import { logBackgroundError } from "./utils/logBackgroundError.js";
+import { isNonEmptyString } from "./utils/types.js";
+import { collectSessionEntriesNewestFirst } from "./utils/sessionJsonl.js";
 import { errorMessage } from "./utils/errors.js";
 import { registerScheduledSkills } from "./workspace/skills/scheduler.js";
 import { registerUserTasks } from "./workspace/skills/user-tasks.js";
@@ -123,7 +142,9 @@ import { EVENT_TYPES } from "../src/types/events.js";
 import { SESSION_ORIGINS } from "../src/types/session.js";
 import { buildHtmlPreviewCsp } from "../src/utils/html/previewCsp.js";
 import { readCspExtraSync, warnIfCspExtended } from "./utils/files/csp-io.js";
-import { readAndInjectHtmlArtifact } from "./utils/html/htmlArtifactSplicer.js";
+import { readAndInjectHtmlArtifact, readAndInjectHtmlFile } from "./utils/html/htmlArtifactSplicer.js";
+import { resolveHtmlFileRequestPath } from "@mulmoclaude/core/files";
+import { HTML_FILE_MOUNT } from "@mulmoclaude/html-plugin";
 import { ONE_SECOND_MS, ONE_MINUTE_MS, ONE_HOUR_MS, STARTUP_FAILURE_FORCE_EXIT_MS, FATAL_LOG_FLUSH_MS } from "./utils/time.js";
 import { isPortFree, findAvailablePort, MAX_PORT_PROBES } from "./utils/port.mjs";
 import { SCHEDULE_TYPES, MISSED_RUN_POLICIES } from "@receptron/task-scheduler";
@@ -350,17 +371,7 @@ app.use("/api", (req, res, next) => {
 //  3. `dotfiles: deny` + `fallthrough: false` on `express.static`
 //     itself, plus its built-in `..` normalize for path traversal.
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|mp4|webm|mov|m4v|ogv|mp3|ogg|oga|wav|m4a|aac)$/i;
-let imagesDirReal: string | null = null;
-async function getImagesDirReal(): Promise<string | null> {
-  if (imagesDirReal) return imagesDirReal;
-  try {
-    imagesDirReal = await fsRealpath(WORKSPACE_PATHS.images);
-    return imagesDirReal;
-  } catch {
-    // Dir not yet materialised (fresh workspace, no image saved).
-    return null;
-  }
-}
+const getImagesDirReal = makeCachedRealpath(WORKSPACE_PATHS.images);
 app.use(
   "/artifacts/images",
   async (req, res, next) => {
@@ -373,17 +384,9 @@ app.use(
       res.status(404).end();
       return;
     }
-    let relPath: string;
-    try {
-      // decodeURIComponent throws URIError on malformed escapes
-      // (`%ZZ`, stray `%`). Fail closed so a junk URL returns 404
-      // instead of bubbling a 500 out of the express error chain.
-      relPath = decodeURIComponent(req.path.replace(/^\//, ""));
-    } catch {
-      res.status(404).end();
-      return;
-    }
-    if (!resolveWithinRoot(root, relPath)) {
+    // No explicit dotfile check here: this mount never short-circuits,
+    // so `express.static`'s `dotfiles: "deny"` below is the authority.
+    if (resolveArtifactRequestPath(root, req.path, false) === null) {
       res.status(404).end();
       return;
     }
@@ -439,42 +442,8 @@ app.use(
 // eslint-disable-next-line sonarjs/regex-complexity -- flat extension allowlist with no nested quantifiers, ReDoS-safe; complexity is just the disjunction count
 const HTML_PREVIEW_EXT_RE = /\.(html?|png|jpe?g|webp|gif|svg|ico|mp4|webm|mov|m4v|ogv|mp3|ogg|oga|wav|m4a|aac)$/i;
 const HTML_DOCUMENT_EXT_RE = /\.html?$/i;
-let htmlsDirReal: string | null = null;
-async function getHtmlsDirReal(): Promise<string | null> {
-  if (htmlsDirReal) return htmlsDirReal;
-  try {
-    htmlsDirReal = await fsRealpath(WORKSPACE_PATHS.htmls);
-    return htmlsDirReal;
-  } catch {
-    return null;
-  }
-}
+const getHtmlsDirReal = makeCachedRealpath(WORKSPACE_PATHS.htmls);
 
-// Honour `X-Forwarded-*` so dev (Vite proxies `/artifacts/html` →
-// `localhost:3001` with `changeOrigin: true`) emits the browser-
-// visible origin (`localhost:5173`) rather than the upstream socket.
-// In prod (no proxy) the headers are absent and we fall back to the
-// raw `Host` / `req.protocol`.
-//
-// `X-Forwarded-*` values can be a comma-separated proxy chain (each
-// hop appends its own value). The CSP origin only needs the
-// outermost hop — the value the browser actually sees — so we take
-// the first entry and trim. Without this, a multi-hop deployment
-// would emit `https://a.example.com, b.example.com://x` and break
-// preview resource loading at the browser (#1056 review).
-function browserVisibleOrigin(req: Request): string {
-  const fwdHost = firstForwardedValue(req.get("x-forwarded-host"));
-  const fwdProto = firstForwardedValue(req.get("x-forwarded-proto"));
-  const host = fwdHost ?? req.get("host");
-  const proto = fwdProto ?? req.protocol;
-  return `${proto}://${host}`;
-}
-
-function firstForwardedValue(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  const first = raw.split(",")[0]?.trim();
-  return first && first.length > 0 ? first : undefined;
-}
 app.use(
   "/artifacts/html",
   async (req, res, next) => {
@@ -487,26 +456,13 @@ app.use(
       res.status(404).end();
       return;
     }
-    let relPath: string;
-    try {
-      relPath = decodeURIComponent(req.path.replace(/^\//, ""));
-    } catch {
-      res.status(404).end();
-      return;
-    }
-    if (!resolveWithinRoot(root, relPath)) {
-      res.status(404).end();
-      return;
-    }
-    // Dotfile deny — `express.static` below enforces this for the
-    // non-HTML branch via `dotfiles: "deny"`, but the HTML short-
-    // circuit added in #1056 was bypassing the guard and would
-    // happily serve `/artifacts/html/.hidden.html` (Codex review on
-    // #1056). Apply the same policy uniformly so both branches
-    // refuse any path component starting with `.`. The helper
-    // splits on both `/` and `\` so an encoded backslash (`%5C`)
-    // can't sneak a `dir\.hidden.html` past the check on Windows.
-    if (containsDotfileSegment(relPath)) {
+    // denyDotfiles: the HTML short-circuit below serves the file itself
+    // (bypassing `express.static`'s `dotfiles: "deny"`), so this mount
+    // must reject dotfile segments in the guard — without it,
+    // `/artifacts/html/.hidden.html` would be served (Codex review on
+    // #1056).
+    const relPath = resolveArtifactRequestPath(root, req.path, true);
+    if (relPath === null) {
       res.status(404).end();
       return;
     }
@@ -528,6 +484,67 @@ app.use(
   },
   express.static(WORKSPACE_PATHS.htmls, { dotfiles: "deny", fallthrough: false }),
 );
+
+// Mount for HTML pages OUTSIDE `artifacts/html/` — presentHtml's `path` form
+// accepts any page on disk, so the View's iframe needs a URL for one. The
+// `/htmlfile/<scope>/<segments…>` scheme and the reasons it is path-shaped
+// rather than `?path=` live in `src/config/htmlFileUrl.ts`; the resolver and
+// what it refuses are in `server/utils/files/htmlFileRequest.ts`.
+//
+// Same guards as `/artifacts/html` — extension allowlist, dotfile refusal,
+// realpath + regular-file check, CSP header on documents, `nosniff` — with ONE
+// deliberate difference: there is no containment root, because a page the tool
+// was pointed at may legitimately live anywhere. The trust boundary is
+// therefore entirely the loopback-only listener plus `requireSameOrigin`
+// (bearer auth does not apply outside `/api`, and an iframe `src` cannot carry
+// an Authorization header anyway).
+const getWorkspaceDirReal = makeCachedRealpath(workspacePath);
+// A page legitimately pulls a burst of subresources (images, media) through this
+// same mount while it renders, so the bucket is roomy — it exists to bound a
+// runaway loop hammering the filesystem, not to police normal use. Same limiter
+// the collection view routes use.
+const HTML_FILE_RATE_LIMIT_PER_MINUTE = 600;
+const htmlFileRateLimit = makeViewActionRateLimiter(HTML_FILE_RATE_LIMIT_PER_MINUTE, ONE_MINUTE_MS);
+app.use(HTML_FILE_MOUNT, htmlFileRateLimit, async (req, res, next) => {
+  if (!HTML_PREVIEW_EXT_RE.test(req.path)) {
+    res.status(404).end();
+    return;
+  }
+  const workspaceReal = await getWorkspaceDirReal();
+  const absPath = workspaceReal === null ? null : resolveHtmlFileRequestPath(workspaceReal, req.path);
+  if (absPath === null) {
+    res.status(404).end();
+    return;
+  }
+  // Judge the symlink by what it points at, and refuse anything that is not a
+  // regular file (a directory named `page.html` would otherwise 500 the read).
+  let realFile: string;
+  try {
+    realFile = await fsRealpath(absPath);
+    if (!(await fsStat(realFile)).isFile()) {
+      res.status(404).end();
+      return;
+    }
+  } catch {
+    res.status(404).end();
+    return;
+  }
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  if (!HTML_DOCUMENT_EXT_RE.test(req.path)) {
+    res.sendFile(realFile, (err) => {
+      if (err) next(err);
+    });
+    return;
+  }
+  res.setHeader("Content-Security-Policy", buildHtmlPreviewCsp(browserVisibleOrigin(req), undefined, readCspExtraSync()));
+  const spliced = await readAndInjectHtmlFile(realFile);
+  if (spliced === null) {
+    res.status(404).end();
+    return;
+  }
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(spliced);
+});
 
 // Static mount for SVG artifacts. SVG files are loaded into the View
 // and Preview as `<img src="/artifacts/svg/<name>.svg">`. Browsers
@@ -559,16 +576,7 @@ const SVG_RESPONSE_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src
 // `<img src>` request can't carry an Authorization header. Loopback-
 // only listener + `requireSameOrigin` remain the trust boundary.
 const SVG_EXT_RE = /\.svg$/i;
-let svgsDirReal: string | null = null;
-async function getSvgsDirReal(): Promise<string | null> {
-  if (svgsDirReal) return svgsDirReal;
-  try {
-    svgsDirReal = await fsRealpath(WORKSPACE_PATHS.svgs);
-    return svgsDirReal;
-  } catch {
-    return null;
-  }
-}
+const getSvgsDirReal = makeCachedRealpath(WORKSPACE_PATHS.svgs);
 app.use(
   "/artifacts/svg",
   async (req, res, next) => {
@@ -581,18 +589,10 @@ app.use(
       res.status(404).end();
       return;
     }
-    let relPath: string;
-    try {
-      relPath = decodeURIComponent(req.path.replace(/^\//, ""));
-    } catch {
-      res.status(404).end();
-      return;
-    }
-    if (!resolveWithinRoot(root, relPath)) {
-      res.status(404).end();
-      return;
-    }
-    if (containsDotfileSegment(relPath)) {
+    // denyDotfiles for the same reason as the html mount: this handler
+    // sets headers and serves via a bearer-bypassed <img> path, so the
+    // dotfile guard can't be left solely to `express.static`.
+    if (resolveArtifactRequestPath(root, req.path, true) === null) {
       res.status(404).end();
       return;
     }
@@ -641,6 +641,24 @@ app.get(API_ROUTES.sandbox, (_req: Request, res: Response) => {
   res.json(status ?? {});
 });
 
+// Environment report for a bug report (#2571). Lives inline next to
+// `/api/sandbox` for the same reason: it needs the boot-time `sandboxEnabled`,
+// which isn't exported. The redaction decisions are in
+// `server/utils/diagnostics/report.ts` — deliberately in code rather than in a
+// prompt, because `googleMapsApiKey` is stored in plaintext and `mcp.json`
+// carries provider tokens, and a prose instruction to the agent can't be tested.
+app.get(API_ROUTES.diagnosticsReport, (_req: Request, res: Response) => {
+  try {
+    res.type("text/markdown; charset=utf-8").send(buildDiagnosticsMarkdown({ sandboxEnabled, workspacePath }));
+  } catch (err) {
+    // Generic reply on purpose: this endpoint's whole job is withholding local
+    // detail, and `errorMessage(err)` on a config parse failure would hand back
+    // the very paths and values the success path redacts. Detail stays in the log.
+    log.warn("diagnostics", "report build failed", { error: errorMessage(err) });
+    serverError(res, "Failed to build the diagnostics report");
+  }
+});
+
 // Routers register FULL `/api/...` paths internally (see
 // `src/config/apiRoutes.ts`), so they mount at root. The previous
 // `app.use("/api", ...)` prefix was dropped when #289 part 1 moved
@@ -675,6 +693,7 @@ app.use(transcribeRoutes);
 app.use(presentHtmlRoutes);
 app.use(shareRoutes);
 app.use(remoteHostRoutes);
+app.use(googleRoutes);
 app.use(presentSvgRoutes);
 app.use(chartRoutes);
 app.use(rolesRoutes);
@@ -718,22 +737,11 @@ async function getSessionRoleForBridge(sessionId: string): Promise<string | null
 async function getSessionHistoryForBridge(sessionId: string, opts: { limit: number; offset: number }) {
   const content = await readSessionJsonl(sessionId);
   if (!content) return { messages: [], total: 0 };
-  const allMessages: { source: string; text: string }[] = [];
-  const lines = content.split("\n").filter(Boolean);
-  // Collect all text events newest-first
-  for (let i = lines.length - 1; i >= 0; i--) {
-    try {
-      const entry = JSON.parse(lines[i]);
-      if (entry.type === EVENT_TYPES.text && typeof entry.message === "string") {
-        allMessages.push({
-          source: entry.source ?? "unknown",
-          text: entry.message,
-        });
-      }
-    } catch {
-      // skip malformed lines
-    }
-  }
+  const allMessages = collectSessionEntriesNewestFirst(content, (entry) =>
+    entry.type === EVENT_TYPES.text && typeof entry.message === "string"
+      ? { source: isNonEmptyString(entry.source) ? entry.source : "unknown", text: entry.message }
+      : undefined,
+  );
   const total = allMessages.length;
   const messages = allMessages.slice(opts.offset, opts.offset + opts.limit);
   return { messages, total };
@@ -784,6 +792,7 @@ app.use(createJournalRouter());
 app.use(createTranslationRouter());
 app.use(mcpToolsRouter);
 app.use(schedulerTasksRoutes);
+app.use(createShutdownRouter());
 
 if (env.isProduction) {
   // `{ index: false }` so express.static doesn't intercept `GET /`
@@ -816,11 +825,25 @@ if (env.isProduction) {
   });
 }
 
-app.use((err: Error, _req: Request, res: Response, __next: NextFunction) => {
+app.use((err: Error, _req: Request, res: Response, next: NextFunction) => {
   log.error("express", "unhandled error", {
     error: err.message,
     stack: err.stack,
   });
+  // A partially-sent response can't take a status line. Without this guard
+  // `serverError` throws ERR_HTTP_HEADERS_SENT from inside the error handler:
+  // the socket still ends up destroyed (Express catches the secondary throw
+  // and falls through to finalhandler), but the logs then show the real error
+  // followed by a misleading second crash. Delegating instead reaches the same
+  // destroy via the intended path, logging only what actually happened.
+  //
+  // Reachable since asyncHandler started forwarding `next(err)` on the
+  // headersSent path (#2593) — before that, nothing routed a mid-response
+  // failure here.
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
   serverError(res, "Internal Server Error");
 });
 
@@ -965,11 +988,22 @@ async function initBootDiagnostics(): Promise<void> {
   // notification.
   await announcePluginMetaDiagnostics();
 
+  // --- Shell-shadows-`.env` diagnostic (#2604, #2610) ---
+  // Two `.env` files can lose to the shell: the user's launch dir, which
+  // the launcher reports, and this process's own cwd, which `yarn dev`
+  // lands in. Without this the user sees no reason why editing `.env`
+  // changes nothing.
+  await announceShadowedEnv(process.env[SHADOWED_ENV_KEYS_VAR], shadowedByServerLoad());
+
+  // One settings read shared by the dep announce (gates the whisper warning on
+  // voice-input opt-in) and the sidecar warm-up below.
+  const bootSettings = loadSettings();
+
   // --- Optional host-dependency probe (#1385) ---
   // Probes docker / ffmpeg / … once, warns (log + bell) for any
   // missing one so a feature degrading is visible instead of a
   // later opaque crash. Never throws.
-  await announceOptionalDeps();
+  await announceOptionalDeps(bootSettings);
 
   // --- Gemini key presence (#2081) ---
   announceGeminiKey();
@@ -979,7 +1013,7 @@ async function initBootDiagnostics(): Promise<void> {
   // pre-spawn the whisper-server sidecar now (deps were just probed) so
   // the user's first dictation doesn't pay the ~10s+ model-load cost
   // inside the request. No-op when voice input is off / not ready.
-  warmupVoiceInput(loadSettings());
+  warmupVoiceInput(bootSettings);
 
   // --- Billing-suite migration ---
   // The invoicing collections moved from bundled `mc-*` presets to
@@ -1124,6 +1158,10 @@ function initEventPublishers(pubsub: IPubSub): void {
   // near the route mount; only the pub/sub instance is wired here.
   initAccountingEventPublisher(pubsub);
   initCollectionChangePublisher(pubsub);
+  initPhotoLocationsChangePublisher(pubsub);
+  // MulmoScript generation events → plugin pubsub channel (the extracted
+  // presentMulmoScript View's spinner/reload signal).
+  initMulmoScriptGenerationPublisher(pubsub);
 }
 
 // System task defs + user-configurable schedule overrides. Split out
@@ -1165,6 +1203,7 @@ function buildSystemTaskDefs(): SystemTaskDef[] {
     // factory so the id/schedule/run can't drift across hosts. The override
     // loop below still mutates `task.schedule` host-side.
     feedRefreshTaskDef(),
+    googleCalendarSyncTaskDef(),
   ];
 
   // Apply user-configurable schedule overrides from
@@ -1352,7 +1391,12 @@ process.on("SIGTERM", () => {
   // `http://<laptop-ip>:3001/api/*`), which combined with the
   // workspace file API is a credential-theft risk. Personal dev
   // tool — localhost is the right default.
-  const httpServer = app.listen(port, "127.0.0.1", async () => {
+  // Express discards whatever the listen callback returns, so an async callback
+  // would leave a throw in it as an unhandled rejection. The callback below
+  // stays synchronous and hands the async setup off here. The server arrives as
+  // a parameter rather than a closure variable — `httpServer` is this call's
+  // own result and isn't defined yet at this point.
+  const onListening = async (httpServer: ReturnType<typeof app.listen>): Promise<void> => {
     // Initialize the notifier engine synchronously, before any await
     // in this callback. The HTTP listener is already accepting
     // connections by the time this callback fires, so any awaited
@@ -1409,8 +1453,25 @@ process.on("SIGTERM", () => {
       httpServer.close(() => process.exit(1));
       setTimeout(() => process.exit(1), STARTUP_FAILURE_FORCE_EXIT_MS).unref();
     });
+  };
+
+  const httpServer = app.listen(port, "127.0.0.1", () => {
+    // Terminal handler, not a bare `void`: `onListening` runs the whole
+    // post-listen setup, and a rejection outside its own
+    // `startRuntimeServices(...).catch(...)` branch would otherwise be an
+    // unhandled rejection on a half-initialised server.
+    onListening(httpServer).catch((err: unknown) => {
+      log.error("server", "post-listen initialization failed — exiting", { error: String(err) });
+      process.exit(1);
+    });
   });
-})();
+})().catch((err: unknown) => {
+  // Anything thrown before the listener is up (port resolution, token write)
+  // lands here. Without this the failure surfaced only as an unhandled
+  // rejection — no log line, and the exit code depended on the Node version.
+  log.error("server", "server startup failed — exiting", { error: String(err) });
+  process.exit(1);
+});
 
 function registerDebugTasks(taskManager: ITaskManager, pubsub: IPubSub) {
   let tick = 0;

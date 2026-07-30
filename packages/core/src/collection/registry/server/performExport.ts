@@ -12,6 +12,7 @@ import { parseSkillDescription } from "./skillDescription.js";
 import { writeCollectionExport, type ExportMeta, type ExportResult } from "./exportCollection.js";
 
 const STATUS_NOT_FOUND = 404;
+const STATUS_UNPROCESSABLE = 422;
 
 async function readJsonObject(file: string): Promise<Record<string, unknown> | null> {
   try {
@@ -29,6 +30,11 @@ export async function performExport(
 ): Promise<ExportResult> {
   const collection = await loadCollection(slug);
   if (!collection) return { ok: false, status: STATUS_NOT_FOUND, error: `collection not found: ${slug}` };
+  // Mirrors the import-side refusal: a `dataSource` collection's records are
+  // a machine-local data file a bundle can't carry.
+  if (collection.schema.dataSource !== undefined) {
+    return { ok: false, status: STATUS_UNPROCESSABLE, error: `collection '${slug}' is backed by an external dataSource and cannot be exported to a registry` };
+  }
   const skillMd = await readFile(path.join(collection.skillDir, "SKILL.md"), "utf-8").catch(() => "");
   const existingMeta = await readJsonObject(path.join(collection.skillDir, "meta.json"));
   const meta: ExportMeta = {

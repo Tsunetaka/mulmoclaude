@@ -1,0 +1,36 @@
+import type { Messages } from "./messages";
+
+const en: Messages = {
+  beatCount: (count) => (count === 1 ? `${count} beat` : `${count} beats`),
+  movie: "Movie",
+  generating: "Generating…",
+  rendering: "Rendering…",
+  saving: "Saving…",
+  update: "Update",
+  characters: "Characters",
+  drop: "Drop",
+  gen: "Gen",
+  play: "▶ Play",
+  stop: "■ Stop",
+  playPresentation: "Play presentation",
+  regenerateMovie: "Regenerate movie",
+  movieGenerationFailed: "Movie generation failed",
+  pdf: "PDF",
+  regeneratePdf: "Regenerate PDF",
+  generatingPdf: "Generating PDF…",
+  retry: "Retry",
+  errPrefix: "⚠ Error",
+  noBeats: "No beats found in script",
+  editSource: "Edit Script Source",
+  applyChanges: "Apply Changes",
+  generateAll: "Generate All",
+  orDropImage: "or drop image",
+  generate: "Generate",
+  generateAudio: "♪ Generate",
+  saveErrorInvalidJson: (error) => `⚠ Invalid JSON: ${error}`,
+  saveErrorSaveFailed: (error) => `⚠ Save failed: ${error}`,
+  close: "Close",
+  cancel: "Cancel",
+};
+
+export default en;

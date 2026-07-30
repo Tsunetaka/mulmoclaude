@@ -12,6 +12,7 @@
 import "dotenv/config";
 import { Client, GatewayIntentBits, Partials, type Message } from "discord.js";
 import { createBridgeClient } from "@mulmobridge/client";
+import { parseCsvSet } from "@mulmoclaude/common";
 
 const TRANSPORT_ID = "discord";
 const MAX_DISCORD_LENGTH = 2000;
@@ -22,12 +23,7 @@ if (!token) {
   process.exit(1);
 }
 
-const allowedChannels = new Set(
-  (process.env.DISCORD_ALLOWED_CHANNELS ?? "")
-    .split(",")
-    .map((channelId) => channelId.trim())
-    .filter(Boolean),
-);
+const allowedChannels = parseCsvSet(process.env.DISCORD_ALLOWED_CHANNELS);
 const allowAll = allowedChannels.size === 0;
 
 const discord = new Client({
@@ -39,7 +35,11 @@ const discord = new Client({
 
 const mulmo = createBridgeClient({ transportId: TRANSPORT_ID });
 
-mulmo.onPush(async (pushEvent) => {
+mulmo.onPush((pushEvent) => {
+  onPushEvent(pushEvent).catch((err) => console.error(`[discord] push handler error: ${err}`));
+});
+
+async function onPushEvent(pushEvent: { chatId: string; message: string }): Promise<void> {
   try {
     const channel = discord.channels.cache.get(pushEvent.chatId) ?? (await discord.channels.fetch(pushEvent.chatId).catch(() => null));
     if (channel?.isTextBased() && "send" in channel) {
@@ -51,9 +51,13 @@ mulmo.onPush(async (pushEvent) => {
   } catch (err) {
     console.error(`[discord] push send failed: ${err}`);
   }
+}
+
+discord.on("messageCreate", (msg: Message) => {
+  onMessageCreate(msg).catch((err) => console.error(`[discord] messageCreate handler error: ${err}`));
 });
 
-discord.on("messageCreate", async (msg: Message) => {
+async function onMessageCreate(msg: Message): Promise<void> {
   if (msg.author.bot) return;
   const { channelId } = msg;
   const text = msg.content.trim();
@@ -73,7 +77,7 @@ discord.on("messageCreate", async (msg: Message) => {
   } catch (err) {
     console.error(`[discord] message handling failed: ${err}`);
   }
-});
+}
 
 async function sendChunked(msg: Message, text: string): Promise<void> {
   if (text.length === 0) {

@@ -117,12 +117,3 @@ export async function maybeRegenerateTopicIndex(relativePath: string): Promise<b
     return false;
   }
 }
-
-/** Test-only — drop the per-workspace regen chain so each test
- *  starts with a fresh queue. Without this, a chain rejection from
- *  one test could carry into the next (the .catch in `chainRegen`
- *  swallows it for the next caller, but the test runner sees the
- *  unhandled-rejection from the original promise). */
-export function _resetTopicIndexRegenChainForTesting(): void {
-  regenChains.clear();
-}

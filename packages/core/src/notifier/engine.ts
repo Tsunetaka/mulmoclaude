@@ -19,6 +19,7 @@
 // still wins and the failure is logged. Active is the source of
 // truth; history is an audit aid.
 
+import type { MinimalLogger } from "@mulmoclaude/common";
 import { randomUUID } from "node:crypto";
 import { loadActive, loadHistory, saveActive, saveHistory, type WriteJson } from "./store.js";
 import { validatePublishInput } from "./validate.js";
@@ -39,10 +40,7 @@ export { NOTIFIER_LIMITS, validatePublishInput } from "./validate.js";
 /** Minimal logger the engine needs. The host passes its structured
  *  logger; absent one, failures are swallowed (the engine never throws
  *  on a fan-out/persist-best-effort path). */
-export interface NotifierLogger {
-  warn: (message: string, data?: Record<string, unknown>) => void;
-  error: (message: string, data?: Record<string, unknown>) => void;
-}
+export type NotifierLogger = Pick<MinimalLogger, "warn" | "error">;
 
 export interface NotifierConfig {
   /** Atomic JSON writer (the host's `writeJsonAtomic`). */
@@ -316,28 +314,27 @@ export async function publish<TPluginData = unknown>(input: PublishInput<TPlugin
   return { id: entryId };
 }
 
-export async function clear(entryId: string): Promise<void> {
+/** Remove an active entry and record its terminal history. `clear`
+ *  (user dismissed) and `cancel` (producer withdrew) differ only in the
+ *  emitted event / history reason. No-op when the id is unknown. */
+async function terminateEntry(entryId: string, reason: "cleared" | "cancelled"): Promise<void> {
   await enqueue((state) => {
     const entry = state.entries[entryId];
     if (!entry) return null;
     state.entries = removeEntry(state, entryId);
     return {
-      event: { type: "cleared", id: entryId },
-      historyEntry: buildHistoryEntry(entry, "cleared"),
+      event: reason === "cleared" ? { type: "cleared", id: entryId } : { type: "cancelled", id: entryId },
+      historyEntry: buildHistoryEntry(entry, reason),
     };
   });
 }
 
+export async function clear(entryId: string): Promise<void> {
+  await terminateEntry(entryId, "cleared");
+}
+
 export async function cancel(entryId: string): Promise<void> {
-  await enqueue((state) => {
-    const entry = state.entries[entryId];
-    if (!entry) return null;
-    state.entries = removeEntry(state, entryId);
-    return {
-      event: { type: "cancelled", id: entryId },
-      historyEntry: buildHistoryEntry(entry, "cancelled"),
-    };
-  });
+  await terminateEntry(entryId, "cancelled");
 }
 
 /** In-place update for an active entry. Only the fields present on

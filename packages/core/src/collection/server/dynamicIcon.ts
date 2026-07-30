@@ -3,9 +3,10 @@
 // `../core/dynamicIcon` with the one bit of I/O it needs: loading the
 // source collection's raw stored records.
 
+import { fieldText } from "../core/fieldText";
 import { firstDateField, resolveIcon, selectDynamicRecord } from "../core/dynamicIcon";
 import { loadCollection, type DiscoveryOptions } from "./discovery";
-import { listItems } from "./io";
+import { storeFor } from "./store";
 import { log } from "./host";
 import type { LoadedCollection } from "./discoveredCollection";
 import type { CollectionItem } from "../core/schema";
@@ -26,7 +27,7 @@ function buildRecordsById(items: CollectionItem[], primaryKey: string): Record<s
  *  ties pick a different record — and thus a different icon — between
  *  reconciles. A stable id sort pins one answer. */
 function sortByPrimaryKey(items: CollectionItem[], primaryKey: string): CollectionItem[] {
-  return [...items].sort((left, right) => String(left[primaryKey] ?? "").localeCompare(String(right[primaryKey] ?? "")));
+  return [...items].sort((left, right) => fieldText(left[primaryKey]).localeCompare(fieldText(right[primaryKey])));
 }
 
 /** Compute the effective launcher icon for `collection`: its static
@@ -43,7 +44,7 @@ export async function computeCollectionIcon(collection: LoadedCollection, opts: 
   try {
     const source = await loadCollection(spec.source.collection, opts);
     if (!source) return spec.fallback ?? schema.icon;
-    const items = await listItems(source.dataDir, { workspaceRoot: opts.workspaceRoot });
+    const items = await storeFor(source, { workspaceRoot: opts.workspaceRoot }).list();
     const ordered = sortByPrimaryKey(items, source.schema.primaryKey);
     const orderBy = spec.source.orderBy ?? firstDateField(source.schema);
     const recordsById = buildRecordsById(ordered, source.schema.primaryKey);

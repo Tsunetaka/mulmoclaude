@@ -126,6 +126,8 @@ Embed an existing image.
 
 Source kinds: `url`, `base64`, `path`
 
+**Where relative `path` sources resolve from:** the script file's own directory — `<workspace>/artifacts/stories/` — NOT the workspace root. So a workspace file such as `data/photo.png` must be written as `../../data/photo.png`, or (preferred, keeps the script portable) copied next to the script, e.g. to `artifacts/stories/assets/photo.png` and referenced as `assets/photo.png`. This applies to every media source of kind `path` (`image`, `movie`, `pdf`, `svg`, mermaid `code`).
+
 ### `chart`
 Render a chart from data.
 

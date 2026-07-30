@@ -91,6 +91,7 @@ test.describe("queries panel (useQueriesPanel)", () => {
     await expect(textarea).toHaveValue("Tell me about this app, MulmoClaude.");
 
     // …and no message was sent.
+    // eslint-disable-next-line sonarjs/no-fixed-wait-in-tests -- negative assertion: Shift+click fills the input but must NOT send; the absence of an /api/agent POST has no observable signal.
     await page.waitForTimeout(300);
     expect(captured.getBody()).toBeNull();
   });

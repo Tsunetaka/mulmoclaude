@@ -10,7 +10,18 @@ import { createListAccountingBooks, type ListAccountingBooksDeps } from "../../s
 
 describe("remote-host handler registry", () => {
   it("exposes every registered handler", () => {
-    for (const name of ["listCollections", "getCollection", "listShortcuts", "listSkills", "listFeeds", "getFeed", "listAccountingBooks", "startChat"]) {
+    for (const name of [
+      "listCollections",
+      "getCollection",
+      "listShortcuts",
+      "listSkills",
+      "listFeeds",
+      "getFeed",
+      "listAccountingBooks",
+      "startChat",
+      "google.calendar.createEvent",
+      "google.calendar.listEvents",
+    ]) {
       assert.equal(typeof handlers[name], "function", `missing handler: ${name}`);
     }
   });
