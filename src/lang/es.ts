@@ -1105,6 +1105,7 @@ const esMessages = {
     nextPage: "Página siguiente",
     editDone: "Finalizar edición",
     selectDoc: "Seleccionar documento",
+    rescan: "Reescanear",
     canvasRefresh: "Actualizar lienzo",
     toggleChat: "Chat de Claude",
     theme: "Tema",

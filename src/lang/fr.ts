@@ -1096,6 +1096,7 @@ const frMessages = {
     nextPage: "Page suivante",
     editDone: "Terminer l'édition",
     selectDoc: "Sélectionner le document",
+    rescan: "Rescanner",
     canvasRefresh: "Actualiser le canevas",
     toggleChat: "Chat Claude",
     theme: "Thème",

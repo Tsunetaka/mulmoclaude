@@ -1088,6 +1088,7 @@ const jaMessages = {
     nextPage: "次のページ",
     editDone: "編集完了",
     selectDoc: "文書選択",
+    rescan: "再スキャン",
     canvasRefresh: "canvas 更新",
     toggleChat: "Claude チャット",
     theme: "テーマ",

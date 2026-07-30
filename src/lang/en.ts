@@ -1118,6 +1118,7 @@ const enMessages = {
     nextPage: "Next page",
     editDone: "Done Editing",
     selectDoc: "Select Document",
+    rescan: "Rescan",
     canvasRefresh: "Update Canvas",
     toggleChat: "Claude Chat",
     theme: "Theme",

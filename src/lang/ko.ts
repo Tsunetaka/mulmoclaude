@@ -1088,6 +1088,7 @@ const koMessages = {
     nextPage: "다음 페이지",
     editDone: "편집 완료",
     selectDoc: "문서 선택",
+    rescan: "다시 스캔",
     canvasRefresh: "캔버스 업데이트",
     toggleChat: "Claude 채팅",
     theme: "테마",

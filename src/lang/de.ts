@@ -1107,6 +1107,7 @@ const deMessages = {
     nextPage: "Nächste Seite",
     editDone: "Bearbeitung abschließen",
     selectDoc: "Dokument auswählen",
+    rescan: "Erneut scannen",
     canvasRefresh: "Canvas aktualisieren",
     toggleChat: "Claude-Chat",
     theme: "Thema",

@@ -1,12 +1,9 @@
 <!-- eslint-disable @intlify/vue-i18n/no-raw-text -- WorkFileSelectorView は日本語専用機能。文字列を i18n バンドルに含めない設計。 -->
 <template>
   <div class="flex flex-col h-full overflow-auto bg-gray-50 text-gray-900 p-4">
-    <div class="flex items-center gap-2 mb-4">
-      <h1 class="text-xl font-bold">作業ファイル選択</h1>
-      <button class="ml-auto px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50" :disabled="loading" @click="scanFiles">
-        {{ loading ? "スキャン中..." : "再スキャン" }}
-      </button>
-    </div>
+    <!-- 「再スキャン」は上部リボンのツールバーボタンに集約した（SlideEditorRibbon）。
+         このページに居るので文書選択ボタンは出さず、その位置に再スキャンを置く。 -->
+    <h1 class="text-xl font-bold mb-4">作業ファイル選択</h1>
 
     <div v-if="errorMsg" class="mb-4 p-3 bg-red-100 text-red-700 rounded text-sm">{{ errorMsg }}</div>
 
@@ -366,8 +363,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
+import { useWorkFileSelector } from "../composables/useWorkFileSelector";
 import { apiGet, apiPost, apiDelete, apiFetchRaw } from "../utils/api";
 import { API_ROUTES } from "../config/apiRoutes";
 import { PAGE_ROUTES } from "../router/pageRoutes";
@@ -406,8 +404,14 @@ interface ScanResult {
 }
 
 const router = useRouter();
+// 上部リボンの「再スキャン」ボタンとの橋渡し（ヘッダーからボタンを撤去した代替）。
+const workFileSelector = useWorkFileSelector();
 const categories = ref<CategoryInfo[]>([]);
 const loading = ref(false);
+// スキャン進行状態をリボンへ共有（ボタン disabled／スピナー用）。
+watch(loading, (isScanning) => {
+  workFileSelector.scanning.value = isScanning;
+});
 const errorMsg = ref<string | null>(null);
 const expandedCategories = ref<Set<string>>(new Set());
 const expandedWds = ref<Set<string>>(new Set());
@@ -908,6 +912,15 @@ async function executeDeleteVersion(): Promise<void> {
 }
 
 onMounted(() => {
+  workFileSelector.register({
+    onRescan: () => {
+      scanFiles().catch(() => {});
+    },
+  });
   scanFiles().catch(() => {});
+});
+
+onUnmounted(() => {
+  workFileSelector.unregister();
 });
 </script>

@@ -62,6 +62,22 @@
       </div>
     </template>
 
+    <!-- ── 作業ファイル選択（ピッカー）コントロール ──
+         「再スキャン」を右ゾーン先頭（＝文書選択ボタンのあった位置）に置く。
+         このページには既に居るので文書選択ボタンは出さない（select-doc は slides 限定）。 -->
+    <div v-if="showPickerControls" class="relative group">
+      <button
+        class="ribbon-icon-btn"
+        data-testid="ribbon-btn-rescan"
+        :disabled="scanning"
+        :aria-label="t('slides.rescan')"
+        @click="workFileSelector.triggerRescan()"
+      >
+        <span class="material-icons text-lg text-[#8ab4e8]" :class="{ 'animate-spin': scanning }">refresh</span>
+      </button>
+      <div class="ribbon-tooltip">{{ t("slides.rescan") }}</div>
+    </div>
+
     <!-- ── Action buttons (right zone, data-driven) ── -->
     <div v-for="btn in visibleButtons" :key="btn.id" class="relative group">
       <button
@@ -84,6 +100,7 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { PAGE_ROUTES, type PageRouteName } from "../router/pageRoutes";
 import { useSlideEditor, UNAPPLIED_THEME } from "../composables/useSlideEditor";
+import { useWorkFileSelector } from "../composables/useWorkFileSelector";
 import { NEW_DECK_THEMES } from "../utils/slides/newDeck";
 import iconSelectDoc from "../assets/icons/icon_overview_white.png";
 import iconDone from "../assets/icons/icon_check.png";
@@ -96,6 +113,10 @@ const router = useRouter();
 const slideEditor = useSlideEditor();
 const { active, dirtyCount, chatOpen, theme } = slideEditor;
 
+// 作業ファイル選択（ピッカー）と共有する再スキャン状態・アクション。
+const workFileSelector = useWorkFileSelector();
+const { scanning } = workFileSelector;
+
 // テーマプルダウンの選択肢（new-deck モーダルと同じ 10 テーマカタログを流用）。
 const themes = NEW_DECK_THEMES;
 
@@ -107,6 +128,9 @@ function onThemeChange(event: Event): void {
 
 // slides ページで編集ビューがマウント済みのときだけ canvas 更新・チャットを出す。
 const showSlideControls = computed<boolean>(() => route.name === PAGE_ROUTES.slides && active.value);
+
+// 作業ファイル選択（picker）ページのときだけ「再スキャン」を出す。
+const showPickerControls = computed<boolean>(() => route.name === PAGE_ROUTES.workFiles);
 
 // A single ribbon action. `pages` lists every route the button shows on, so
 // the same button set can stay identical across the picker → editor flow now
@@ -136,10 +160,12 @@ function goHome(): void {
 // the top bar is identical whether picking or editing a document.
 const RIBBON_BUTTONS: RibbonButton[] = [
   {
+    // 文書選択（＝作業ファイル選択へ戻る）は編集画面(slides)でのみ意味を持つ。
+    // ピッカー(workFiles)には既に居るので出さない — 代わりに再スキャンを同位置へ。
     id: "select-doc",
     labelKey: "slides.selectDoc",
     icon: iconSelectDoc,
-    pages: [PAGE_ROUTES.workFiles, PAGE_ROUTES.slides],
+    pages: [PAGE_ROUTES.slides],
     action: goToPicker,
   },
   {
@@ -167,7 +193,8 @@ const visibleButtons = computed<RibbonButton[]>(() => {
   @apply w-8 h-8 flex items-center justify-center rounded
          bg-[#1a2a44] hover:bg-[#2a3a66]
          border border-[#2a3a60] hover:border-[#3a5a8a]
-         transition-colors;
+         transition-colors
+         disabled:opacity-50 disabled:cursor-not-allowed;
 }
 
 /* 編集完了 — グリーン系 */

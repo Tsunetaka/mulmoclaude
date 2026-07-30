@@ -1093,6 +1093,7 @@ const ptBRMessages = {
     nextPage: "Próxima página",
     editDone: "Concluir edição",
     selectDoc: "Selecionar documento",
+    rescan: "Reescanear",
     canvasRefresh: "Atualizar canvas",
     toggleChat: "Chat do Claude",
     theme: "Tema",

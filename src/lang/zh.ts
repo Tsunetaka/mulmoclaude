@@ -1073,6 +1073,7 @@ const zhMessages = {
     nextPage: "下一页",
     editDone: "完成编辑",
     selectDoc: "选择文档",
+    rescan: "重新扫描",
     canvasRefresh: "更新画布",
     toggleChat: "Claude 聊天",
     theme: "主题",
