@@ -463,6 +463,15 @@ const HOST_API_ROUTES = {
      *  pptx mtime > thumb mtime の古いものだけ）。JSON で各バージョンの
      *  workspace 相対サムネパスと生成有無を返す。 */
     releasedThumbs: "/api/work/released-thumbs",
+    /** POST — WD を WSL に「登録」する（明示操作でのみ実体化）。`data/work/<wdId>/` を
+     *  作成し、D: を正に素材・ReleasedVersion をミラーしてリリース済サムネまで生成する。
+     *  body `{ wdId, windowsWdPath }`。返り値 `{ registered, thumbs }`。
+     *  登録するまで WD は WSL 上に作られない（展開しただけでは実体化しない）。 */
+    register: "/api/work/register",
+    /** POST — WD の WSL 実体（`data/work/<wdId>/`）を丸ごと削除する（「抹消」）。
+     *  編集中バージョンが残っていれば 409。Windows(D:) には一切触れない（再登録で復元可）。
+     *  body `{ wdId }`。返り値 `{ unregistered, deleted }`。 */
+    unregister: "/api/work/unregister",
     /** POST — ReleasedVersion 由来の新版を **Windows COM 分割**（`split_pages.py`）する。
      *  `<wd>/ReleasedVersion/<sourceFilename>` を読み `<wd>/<version>/.pages/` に
      *  ページ単位 pptx ＋ structure.json を生成。SSE ストリーム。

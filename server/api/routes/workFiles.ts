@@ -135,6 +135,9 @@ interface WdInfo {
   windowsWdPath: string;
   hasCheckedOut: boolean;
   checkedOutVersion: string | null;
+  /** WSL 側 `data/work/<id>/` が実体化済みか（＝「登録」済み）。
+   *  未登録の WD は展開してもミラー・サムネ生成を行わず、UI では「登録」ボタンを出す。 */
+  registered: boolean;
   versions: VersionInfo[];
 }
 
@@ -213,6 +216,7 @@ async function processWdFolder(wdName: string, catWslPath: string, catWinPath: s
   const editing = await scanEditingVersions(wdId);
   const versions = [...released, ...editing].sort(compareVersionAsc);
   const lockedEditing = editing.find((ver) => ver.locked);
+  const registered = await pathExists(path.join(workspacePath, "data/work", wdId));
 
   return {
     id: wdId,
@@ -220,6 +224,7 @@ async function processWdFolder(wdName: string, catWslPath: string, catWinPath: s
     windowsWdPath: wdWinPath,
     hasCheckedOut: Boolean(lockedEditing),
     checkedOutVersion: lockedEditing?.version ?? null,
+    registered,
     versions,
   };
 }
@@ -986,7 +991,24 @@ async function syncSourceMaterialsFromWindows(wdId: string, windowsWdPath: strin
   return total;
 }
 
-// POST /api/work/released-thumbs — リリース選択前プレビュー（N5）
+// 登録済み WD の D:→WSL ミラー（ReleasedVersion＋素材）＋リリース済サムネ生成をまとめて行う。
+// 「登録」ボタン（register）と、登録済み WD の展開時プレビュー（released-thumbs）が共有する本体。
+async function mirrorWindowsAndBuildThumbs(wdId: string, windowsWdPath: string): Promise<ReleasedThumb[]> {
+  // D: を正として WSL の ReleasedVersion を先に同期（孤児サムネ/版ズレ解消）。
+  await syncReleasedFromWindows(wdId, windowsWdPath);
+  // 併せて素材（FrameFiles/ScreenShots/RelatedMaterials/AudioFiles md/*.md 等）を D: を正にミラー。
+  await syncSourceMaterialsFromWindows(wdId, windowsWdPath);
+  const releasedDirWsl = path.join(windowsToWsl(windowsWdPath), "ReleasedVersion");
+  return generateReleasedThumbs(wdId, releasedDirWsl);
+}
+
+// data/work/<wdId>/ が実体化済み（＝登録済み）か。
+async function isWdRegistered(wdId: string): Promise<boolean> {
+  return pathExists(path.join(workspacePath, "data/work", wdId));
+}
+
+// POST /api/work/released-thumbs — リリース選択前プレビュー（N5）。
+// 未登録（WSL に data/work/<wd>/ が無い）WD では一切ミラー・生成しない（勝手に WD を実体化しない）。
 router.post(API_ROUTES.work.releasedThumbs, async (req, res) => {
   const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
 
@@ -996,16 +1018,66 @@ router.post(API_ROUTES.work.releasedThumbs, async (req, res) => {
   }
 
   try {
-    // WD 展開時: D: を正として WSL の ReleasedVersion を先に同期（孤児サムネ/版ズレ解消）。
-    await syncReleasedFromWindows(wdId, windowsWdPath);
-    // 併せて素材（FrameFiles/ScreenShots/RelatedMaterials/AudioFiles md/*.md 等）を D: を正にミラー。
-    await syncSourceMaterialsFromWindows(wdId, windowsWdPath);
-    const releasedDirWsl = path.join(windowsToWsl(windowsWdPath), "ReleasedVersion");
-    const thumbs = await generateReleasedThumbs(wdId, releasedDirWsl);
+    if (!(await isWdRegistered(wdId))) {
+      res.json({ thumbs: [] }); // 未登録 WD は WSL に何も書かない
+      return;
+    }
+    const thumbs = await mirrorWindowsAndBuildThumbs(wdId, windowsWdPath);
     res.json({ thumbs });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error("workFiles.releasedThumbs", "released thumb generation failed", { err });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// POST /api/work/register — WD を WSL に「登録」する（明示操作でのみ実体化）。
+// data/work/<wd>/ を作成（空 WD でも登録できるよう mkdir）し、D: を正に素材・
+// ReleasedVersion をミラーしてリリース済サムネまで生成する。body `{ wdId, windowsWdPath }`。
+router.post(API_ROUTES.work.register, async (req, res) => {
+  const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
+
+  if (!wdId || !isValidWorkWdId(wdId) || !windowsWdPath) {
+    res.status(400).json({ error: "wdId (valid WD-ID) and windowsWdPath required" });
+    return;
+  }
+
+  try {
+    await fsp.mkdir(path.join(workspacePath, "data/work", wdId), { recursive: true });
+    const thumbs = await mirrorWindowsAndBuildThumbs(wdId, windowsWdPath);
+    log.info("workFiles.register", "registered WD on WSL", { wdId });
+    res.json({ registered: true, thumbs });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error("workFiles.register", "WD registration failed", { err });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// POST /api/work/unregister — WD の WSL 実体（data/work/<wd>/）を丸ごと削除する（「抹消」）。
+// 編集中バージョンが 1 つでも残っていれば 409 で拒否（編集中は WSL にしか無く失われるため）。
+// Windows(D:) 側には一切触れない（D: が正。再登録でいつでも復元できる）。body `{ wdId }`。
+router.post(API_ROUTES.work.unregister, async (req, res) => {
+  const { wdId } = req.body as { wdId?: string };
+
+  if (!wdId || !isValidWorkWdId(wdId)) {
+    res.status(400).json({ error: "wdId (valid WD-ID) required" });
+    return;
+  }
+
+  try {
+    const editing = await scanEditingVersions(wdId);
+    if (editing.length > 0) {
+      res.status(409).json({ error: "編集中バージョンが残っています。リリース済のみの状態でのみ抹消できます。" });
+      return;
+    }
+    const workDataDir = path.join(workspacePath, "data/work");
+    const deleted = await removeContainedDir(path.join(workDataDir, wdId), workDataDir, wdId);
+    log.info("workFiles.unregister", "unregistered WD on WSL", { wdId, deleted });
+    res.json({ unregistered: true, deleted });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error("workFiles.unregister", "WD unregistration failed", { err });
     res.status(500).json({ error: msg });
   }
 });

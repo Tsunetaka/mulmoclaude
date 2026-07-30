@@ -34,24 +34,69 @@
             <span class="material-icons text-sm text-gray-400">{{ expandedWds.has(wd.id) ? "expand_more" : "chevron_right" }}</span>
             <span class="font-mono text-xs text-blue-700 bg-blue-50 px-1 rounded">{{ wd.id }}</span>
             <span class="text-sm font-medium truncate">{{ wd.title }}</span>
-            <span v-if="wd.hasCheckedOut" class="ml-auto text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded">CO: {{ wd.checkedOutVersion }}</span>
+            <span class="ml-auto flex items-center gap-1.5">
+              <!-- 登録済み（WSL に作業フォルダあり）マーカー：折りたたみ表示でも識別できる -->
+              <span v-if="wd.registered" class="material-icons text-base text-green-600" title="登録済み — WSL に作業フォルダがあります" aria-label="登録済み"
+                >folder</span
+              >
+              <span v-if="wd.hasCheckedOut" class="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded">CO: {{ wd.checkedOutVersion }}</span>
+            </span>
           </button>
 
           <div v-if="expandedWds.has(wd.id)" class="px-3 pb-3 border-t border-gray-100 pt-2">
-            <!-- バージョンなし → 新規作成ボタン -->
-            <div v-if="wd.versions.length === 0">
-              <button
-                class="px-3 py-1.5 rounded text-sm font-medium border border-dashed border-blue-400 text-blue-600 hover:bg-blue-50 transition-colors"
-                @click="onCreateNew(wd)"
-              >
-                ＋ 新規作成
-              </button>
+            <!-- ワーキングディレクトリ箱：登録（未登録時）／抹消（登録済み時）を常設 -->
+            <div class="mb-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+              <div class="flex items-center gap-2">
+                <span class="material-icons text-sm text-gray-400">folder</span>
+                <span class="text-sm font-semibold text-gray-700">ワーキングディレクトリ</span>
+                <span v-if="wd.registered" class="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded">登録済み</span>
+                <span v-else class="text-xs px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded">未登録</span>
+                <span class="ml-auto flex items-center gap-2">
+                  <!-- 未登録：登録ボタン（WSL に実体化＋D: からミラー） -->
+                  <button
+                    v-if="!wd.registered"
+                    class="px-3 py-1 rounded text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                    :disabled="wdBusy.has(wd.id)"
+                    @click="onRegister(wd)"
+                  >
+                    {{ wdBusy.has(wd.id) ? "登録中..." : "登録" }}
+                  </button>
+                  <!-- 登録済み：新規作成（デッキ未作成時のみ）＋抹消 -->
+                  <template v-else>
+                    <button
+                      v-if="wd.versions.length === 0"
+                      class="px-3 py-1 rounded text-sm font-medium border border-dashed border-blue-400 text-blue-600 hover:bg-blue-50 transition-colors"
+                      @click="onCreateNew(wd)"
+                    >
+                      ＋ 新規作成
+                    </button>
+                    <button
+                      class="px-3 py-1 rounded text-sm font-medium border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      :disabled="hasEditingVersion(wd) || wdBusy.has(wd.id)"
+                      :title="
+                        hasEditingVersion(wd)
+                          ? '編集中バージョンがあるため抹消できません（リリース済のみのとき可）'
+                          : 'WSL の作業フォルダを削除（D: には触れません）'
+                      "
+                      @click="openEraseModal(wd)"
+                    >
+                      抹消
+                    </button>
+                  </template>
+                </span>
+              </div>
+              <p v-if="!wd.registered" class="mt-1 text-xs text-gray-500 leading-relaxed">
+                「登録」を押すと WSL 上に作業フォルダを作成し、D: の素材とリリース済版を取り込みます。登録するまで編集・プレビューはできません。
+              </p>
             </div>
+            <div v-if="!wd.registered && wd.versions.length === 0" class="text-xs text-gray-400">リリース済のバージョンはありません。</div>
             <div class="flex flex-wrap gap-2 items-start">
               <div v-for="v in wd.versions" :key="v.version" class="flex flex-col">
                 <button
-                  class="rounded text-sm font-medium border transition-colors flex flex-col"
+                  class="rounded text-sm font-medium border transition-colors flex flex-col disabled:opacity-60 disabled:cursor-not-allowed"
                   :class="[versionButtonClass(v), thumbUrlFor(wd.id, v.version) ? 'p-1.5 w-40 items-stretch' : 'px-3 py-1.5 items-start']"
+                  :disabled="!wd.registered"
+                  :title="!wd.registered ? '「登録」すると開けます' : ''"
                   @click="onVersionClick(wd, v)"
                 >
                   <img
@@ -252,6 +297,31 @@
         </div>
       </div>
     </div>
+
+    <!-- 抹消確認モーダル：WSL の data/work/<wd>/ を丸ごと削除（D: には触れない） -->
+    <div v-if="eraseModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 flex flex-col">
+        <div class="flex items-center gap-2 px-4 py-3 border-b">
+          <span class="font-semibold text-red-600">作業フォルダを抹消 — {{ eraseModal.wdId }}</span>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" :disabled="eraseBusy" @click="closeEraseModal">✕</button>
+        </div>
+        <div class="px-4 py-3 space-y-2 text-sm text-gray-700">
+          <p>
+            WSL 上の作業フォルダ <span class="font-mono">data/work/{{ eraseModal.wdId }}/</span> を丸ごと削除します。
+          </p>
+          <p class="text-xs text-gray-500 leading-relaxed">
+            Windows(D:) のファイルには一切触れません。リリース済版・素材は D: に残るので、必要になれば「登録」でいつでも取り込み直せます。
+          </p>
+          <p v-if="eraseError" class="text-xs text-red-600">{{ eraseError }}</p>
+        </div>
+        <div class="px-4 py-3 border-t flex justify-end gap-2">
+          <button class="px-4 py-2 bg-gray-200 rounded text-sm" :disabled="eraseBusy" @click="closeEraseModal">キャンセル</button>
+          <button class="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50" :disabled="eraseBusy" @click="executeErase">
+            {{ eraseBusy ? "抹消中..." : "抹消する" }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -281,6 +351,7 @@ interface WdInfo {
   windowsWdPath: string;
   hasCheckedOut: boolean;
   checkedOutVersion: string | null;
+  registered: boolean;
   versions: VersionInfo[];
 }
 
@@ -304,6 +375,8 @@ const expandedWds = ref<Set<string>>(new Set());
 // リリース選択前プレビュー（N5）。wdId → version → workspace 相対サムネパス。
 const releasedThumbs = ref<Record<string, Record<string, string>>>({});
 const thumbsLoading = ref<Set<string>>(new Set());
+// 登録／抹消の実行中 WD（ボタン多重押下の抑止）。
+const wdBusy = ref<Set<string>>(new Set());
 
 // ── 採番モーダル状態 ─────────────────────────────────────────────────────────
 interface VersionModal {
@@ -344,8 +417,14 @@ function toggleWd(wdInfo: WdInfo): void {
     expandedWds.value.delete(wdInfo.id);
   } else {
     expandedWds.value.add(wdInfo.id);
-    loadReleasedThumbs(wdInfo).catch(() => {});
+    // 登録済み WD のみプレビューを取り込む。未登録は WSL に何も作らない。
+    if (wdInfo.registered) loadReleasedThumbs(wdInfo).catch(() => {});
   }
+}
+
+// 編集中バージョンを 1 つでも持つか（抹消の可否判定に使う）。
+function hasEditingVersion(wdInfo: WdInfo): boolean {
+  return wdInfo.versions.some((ver) => ver.kind === "editing");
 }
 
 interface ReleasedThumb {
@@ -652,6 +731,76 @@ function handleNewDeckDone(): void {
   newDeckModal.value = null;
   if (modal) openEditor(modal.wdId, NEW_DECK_VERSION);
   scanFiles().catch(() => {});
+}
+
+// ── WD の登録／抹消 ─────────────────────────────────────────────────────────
+function setWdBusy(wdId: string, busy: boolean): void {
+  const next = new Set(wdBusy.value);
+  if (busy) next.add(wdId);
+  else next.delete(wdId);
+  wdBusy.value = next;
+}
+
+// 「登録」：WSL に data/work/<wd>/ を実体化し、D: の素材・ReleasedVersion を取り込む。
+// 成功後はサムネを取り込み、再スキャンして registered / versions を反映する。
+async function onRegister(wdInfo: WdInfo): Promise<void> {
+  if (wdBusy.value.has(wdInfo.id)) return;
+  setWdBusy(wdInfo.id, true);
+  errorMsg.value = null;
+  try {
+    const result = await apiPost<{ registered: boolean; thumbs: ReleasedThumb[] }>(API_ROUTES.work.register, {
+      wdId: wdInfo.id,
+      windowsWdPath: wdInfo.windowsWdPath,
+    });
+    if (!result.ok) {
+      errorMsg.value = result.error;
+      return;
+    }
+    const map: Record<string, string> = {};
+    for (const thumb of result.data.thumbs) {
+      if (!thumb.error) map[thumb.version] = thumb.path;
+    }
+    releasedThumbs.value = { ...releasedThumbs.value, [wdInfo.id]: map };
+    await scanFiles();
+  } finally {
+    setWdBusy(wdInfo.id, false);
+  }
+}
+
+// ── 抹消モーダル ─────────────────────────────────────────────────────────────
+const eraseModal = ref<{ wdId: string } | null>(null);
+const eraseBusy = ref(false);
+const eraseError = ref<string | null>(null);
+
+function openEraseModal(wdInfo: WdInfo): void {
+  if (hasEditingVersion(wdInfo)) return;
+  eraseModal.value = { wdId: wdInfo.id };
+  eraseBusy.value = false;
+  eraseError.value = null;
+}
+
+function closeEraseModal(): void {
+  if (eraseBusy.value) return;
+  eraseModal.value = null;
+}
+
+// 「抹消」実行：WSL の data/work/<wd>/ を丸ごと削除（D: 不変）。編集中があればサーバーが 409。
+async function executeErase(): Promise<void> {
+  const modal = eraseModal.value;
+  if (!modal || eraseBusy.value) return;
+  eraseBusy.value = true;
+  eraseError.value = null;
+  try {
+    const result = await apiPost<{ unregistered: boolean; deleted: boolean }>(API_ROUTES.work.unregister, { wdId: modal.wdId });
+    if (!result.ok) {
+      eraseError.value = result.error;
+      return;
+    }
+    eraseModal.value = null;
+    await scanFiles();
+  } finally {
+    eraseBusy.value = false;
+  }
 }
 
 onMounted(() => {
