@@ -1154,21 +1154,48 @@ function comExitMessage(code: number | null): string {
 
 // gen_thumbs.py（WSL LibreOffice・COM 非依存）を spawn してページサムネを生成する。
 // 対象バージョンの `.pages`（structure.json 同梱）→ `.thumbcache/<id>_md.png`。
+// full=true で全ページ強制再生成、false で欠落 or dirty のみ差分再生成（dirty は保持）。
 // 失敗しても呼び出し側フローは止めない（サムネは後追い再生成できる）。
-async function runGenThumbs(wdId: string, version: string, send: (line: string) => void): Promise<void> {
+async function runGenThumbs(wdId: string, version: string, send: (line: string) => void, full = true): Promise<void> {
   const versionDir = path.join(workspacePath, "data/work", wdId, version);
   const pagesDir = path.join(versionDir, ".pages");
   const thumbDir = path.join(versionDir, ".thumbcache");
   await fsp.mkdir(thumbDir, { recursive: true });
   const scriptPath = path.join(workspacePath, "data/work/tools/gen_thumbs.py");
+  const genArgs = [scriptPath, "--pages-dir", pagesDir, "--thumb-dir", thumbDir];
+  if (full) genArgs.push("--full");
   await new Promise<void>((resolve) => {
-    const proc = spawn("python3", [scriptPath, "--pages-dir", pagesDir, "--thumb-dir", thumbDir, "--full"], {
+    const proc = spawn("python3", genArgs, {
       env: { ...process.env },
     });
     pipeToSse(proc, send, "🖼 ");
     proc.on("close", () => resolve());
     proc.on("error", (err) => {
       send(`⚠ gen_thumbs: ${err.message}`);
+      resolve();
+    });
+  });
+}
+
+// 新版作成 / リリース時に表紙の日付・バージョン番号を更新する項目セット（update_cover_meta --fields）。
+const COVER_META_FIELDS_NEW_VERSION = "date,version"; // 新版作成: 作成日 + バージョン番号
+const COVER_META_FIELDS_RELEASE = "date"; // リリース: 日付（リリース日）のみ
+
+// update_cover_meta.py（python-pptx・COM 非依存）を spawn し、表紙ページの日付 /
+// バージョン番号を更新する。表紙 pptx を書き換えると manifest で表紙が dirty 化され、
+// 後続の gen_thumbs（差分）とユーザーの canvas 更新で反映される。表紙 / 日付ボックス /
+// DocIdVersionLabel を持たない外部デッキやロック中の表紙は安全にスキップされる。
+// 失敗しても新版作成 / リリースのフロー自体は止めない（警告のみ）。
+async function runUpdateCoverMeta(wdId: string, version: string, fields: string, send: (line: string) => void): Promise<void> {
+  const versionDir = path.join(workspacePath, "data/work", wdId, version);
+  const scriptPath = path.join(workspacePath, "data/work/tools/update_cover_meta.py");
+  const metaArgs = [scriptPath, "--version-dir", versionDir, "--wd", wdId, "--version", version, "--fields", fields];
+  await new Promise<void>((resolve) => {
+    const proc = spawn("python3", metaArgs, { env: { ...process.env } });
+    pipeToSse(proc, send, "📅 ");
+    proc.on("close", () => resolve());
+    proc.on("error", (err) => {
+      send(`⚠ update_cover_meta: ${err.message}`);
       resolve();
     });
   });
@@ -1271,9 +1298,13 @@ router.post(API_ROUTES.work.split, async (req, res) => {
   // ツール側の「ファイル名から既定」に委ねる（誤った由来メタの記録を防ぐ）。
   const effectiveFrom = resolved.name === sourceFilename ? (sourceFrom ?? "") : "";
   const args = ["split", ctx.wd, ctx.version, resolved.name, sourceKind ?? "released", effectiveFrom];
-  // 案A：COM 分割の成功後にサーバー側 gen_thumbs でサムネまで生成し、エディタが
-  // 即サムネ表示できるようにする（canvas は明示「更新」ボタンで後追い）。
-  await runComScript(args, ctx.wd, ctx.send, () => runGenThumbs(ctx.wd, ctx.version, ctx.send));
+  // 案A：COM 分割の成功後にサーバー側で表紙メタ（作成日 + バージョン番号）を更新してから
+  // gen_thumbs でサムネまで生成し、エディタが即サムネ表示できるようにする
+  // （canvas は明示「更新」ボタンで後追い）。
+  await runComScript(args, ctx.wd, ctx.send, async () => {
+    await runUpdateCoverMeta(ctx.wd, ctx.version, COVER_META_FIELDS_NEW_VERSION, ctx.send);
+    await runGenThumbs(ctx.wd, ctx.version, ctx.send);
+  });
   res.end();
 });
 
@@ -1288,6 +1319,9 @@ router.post(API_ROUTES.work.combine, async (req, res) => {
   if (!ctx) return;
   const args = ["combine", ctx.wd, ctx.version, outFilename];
   if (dedupMasters === false) args.push("nodedup");
+  // リリース時は結合前に表紙の日付（リリース日）を更新する（バージョン番号は新版作成時に確定済み）。
+  // COM 結合は .pages/*.pptx を読むため、先に表紙 pptx を書き換えておけば結合物へ反映される。
+  await runUpdateCoverMeta(ctx.wd, ctx.version, COVER_META_FIELDS_RELEASE, ctx.send);
   // 結合成功後、新版 ReleasedVersion を Windows(D:) へ自動 push（L823 の注記どおり
   // 「新版は D: へ push してからミラー」の順序を守る）。windows_path は .checkout-source から。
   await runComScript(args, ctx.wd, ctx.send, async () => {
@@ -1421,8 +1455,14 @@ async function performFork(wdId: string, targetVersion: string, sourceVersion: s
   await copyForkCanvas(srcDir, dstDir);
   send(`✅ ${sourceVersion} → ${targetVersion} をコピーしました`);
 
+  // 新版なので表紙の日付（作成日）・バージョン番号を更新する（表紙ページが dirty 化される）。
+  await runUpdateCoverMeta(wdId, targetVersion, COVER_META_FIELDS_NEW_VERSION, send);
+
   if (hasThumb) {
-    send("🖼 サムネ・canvas を元版から引き継ぎ（再生成不要）");
+    // 引き継いだサムネのうち表紙だけがメタ更新で dirty。差分再生成で表紙サムネのみ更新する
+    // （canvas は dirty のまま → 明示「更新」ボタンで後追い反映）。
+    send("🖼 サムネ・canvas を元版から引き継ぎ（表紙のみ差分再生成）");
+    await runGenThumbs(wdId, targetVersion, send, false);
   } else {
     await runGenThumbs(wdId, targetVersion, send);
   }
