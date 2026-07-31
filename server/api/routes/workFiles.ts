@@ -277,6 +277,21 @@ async function scanRoot(workRootWin: string): Promise<CategoryInfo[]> {
   return categories;
 }
 
+/** WD-ID からフォルダ名の「Doc ID 以降」＝メインタイトルを解決する（D: マスターを走査）。
+ *  見つからない / スキャン失敗時は null（呼び出し側で python の元表紙抽出にフォールバック）。 */
+export async function resolveWdTitle(wdId: string): Promise<string | null> {
+  try {
+    const categories = await scanRoot(await getWorkRootWin());
+    for (const cat of categories) {
+      const found = cat.wds.find((entry) => entry.id === wdId);
+      if (found) return found.title.trim() || null;
+    }
+  } catch (err) {
+    log.warn("workFiles.resolveWdTitle", "title resolve failed", { wdId, err });
+  }
+  return null;
+}
+
 // GET /api/work/scan
 router.get(API_ROUTES.work.scan, async (req, res) => {
   try {
@@ -1688,11 +1703,14 @@ export function validateApplyTemplateBody(body: { template?: unknown; theme?: un
   return null;
 }
 
-/** apply_template.py の CLI 引数を組み立てる（純粋）。template/theme は省略可。 */
-export function buildApplyTemplateArgs(scriptPath: string, versionDir: string, template?: string, theme?: string): string[] {
+/** apply_template.py の CLI 引数を組み立てる（純粋）。template/theme/title は省略可。 */
+export function buildApplyTemplateArgs(scriptPath: string, versionDir: string, template?: string, theme?: string, title?: string): string[] {
   const args = [scriptPath, "--version-dir", versionDir];
   if (template) args.push("--template", template);
   if (theme) args.push("--theme", theme);
+  // 表紙メインタイトル＝フォルダ名の Doc ID 以降。渡せば表紙・Thank You を元ページ非依存で
+  // 生成する（未指定時は python 側が元表紙から抽出フォールバック）。
+  if (title && title.trim()) args.push("--title", title.trim());
   return args;
 }
 
@@ -1706,7 +1724,9 @@ async function runApplyTemplate(
 ): Promise<void> {
   const versionDir = path.join(workspacePath, "data/work", wdId, version);
   const scriptPath = path.join(workspacePath, "data/work/tools/apply_template.py");
-  const args = buildApplyTemplateArgs(scriptPath, versionDir, template, theme);
+  // フォルダ名からメインタイトルを解決して渡す（表紙・Thank You を元ページ非依存で生成）。
+  const title = await resolveWdTitle(wdId);
+  const args = buildApplyTemplateArgs(scriptPath, versionDir, template, theme, title ?? undefined);
   await new Promise<void>((resolve) => {
     const proc = spawn("python3", args, { env: { ...process.env } });
     pipeToSse(proc, send, "🧩 ");

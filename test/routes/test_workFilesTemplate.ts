@@ -114,6 +114,30 @@ describe("buildApplyTemplateArgs (pure)", () => {
       "plain",
     ]);
   });
+
+  it("appends --title when provided (trimmed)", async () => {
+    const { buildApplyTemplateArgs } = await import("../../server/api/routes/workFiles.js");
+    assert.deepEqual(buildApplyTemplateArgs("/t/apply_template.py", "/w/GIT-00001/v001", "geoplan-cover", "plain", "  たまに行う ローカルリポジトリの作成  "), [
+      "/t/apply_template.py",
+      "--version-dir",
+      "/w/GIT-00001/v001",
+      "--template",
+      "geoplan-cover",
+      "--theme",
+      "plain",
+      "--title",
+      "たまに行う ローカルリポジトリの作成",
+    ]);
+  });
+
+  it("omits --title when blank or whitespace-only", async () => {
+    const { buildApplyTemplateArgs } = await import("../../server/api/routes/workFiles.js");
+    assert.deepEqual(buildApplyTemplateArgs("/t/apply_template.py", "/w/GIT-00001/v001", undefined, undefined, "   "), [
+      "/t/apply_template.py",
+      "--version-dir",
+      "/w/GIT-00001/v001",
+    ]);
+  });
 });
 
 let applyHandler: Handler;
