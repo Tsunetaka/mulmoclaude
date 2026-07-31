@@ -420,6 +420,87 @@
         </div>
       </div>
     </div>
+
+    <!-- リリースモーダル（combine（COM 結合）→ ReleasedVersion 生成 → サーバー自動 Windows push） -->
+    <div v-if="releaseModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeReleaseModal">
+      <div class="w-[34rem] max-w-[90vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
+        <div class="flex items-center gap-2 px-4 py-2.5 bg-[#0a1830] border-b border-[#1a2a44]">
+          <span class="material-icons text-sm text-[#4acc7a]">publish</span>
+          <span class="text-sm font-bold text-[#8aacd0] flex-1">リリース — {{ wdId }}（{{ version }}）</span>
+          <button
+            class="text-[#3a5a7a] hover:text-[#6a9acc] disabled:opacity-30"
+            :disabled="releasePhase === 'running'"
+            aria-label="閉じる"
+            @click="closeReleaseModal"
+          >
+            <span class="material-icons text-sm">close</span>
+          </button>
+        </div>
+
+        <!-- ① 出力ファイル名の確認 -->
+        <div v-if="releasePhase === 'choose'" class="px-4 py-3 space-y-3 text-[#8aacd0]">
+          <label class="block">
+            <span class="text-xs font-medium">リリースファイル名（ReleasedVersion/ に生成）</span>
+            <input
+              v-model="releaseFilename"
+              type="text"
+              class="mt-1 w-full bg-[#060b14] border border-[#1a2a44] rounded px-2 py-1.5 text-xs font-mono text-[#9ac0e0]"
+            />
+          </label>
+          <p class="text-[11px] text-[#6a8aaa] leading-relaxed">
+            現在のバージョンを結合（COM）して 1 つの pptx を生成し、サーバーが Windows(D:) の
+            <b class="text-[#8ab4e8]">ReleasedVersion</b> へ自動でコピー（逆同期）します。
+          </p>
+          <div v-if="dirtyCount > 0" class="flex items-start gap-2 bg-[#2a1a0a] border border-[#5a3a10] rounded px-3 py-2">
+            <span class="material-icons text-sm text-yellow-500 mt-0.5">info</span>
+            <p class="text-[11px] text-yellow-200 leading-relaxed">
+              canvas 未更新のページが {{ dirtyCount }} 枚ありますが、結合は各ページの pptx
+              を直接読むためリリース内容は最新です（プレビュー画像の再生成待ちなだけ）。
+            </p>
+          </div>
+        </div>
+
+        <!-- ② SSE ログ -->
+        <div
+          v-else
+          class="px-4 py-3 font-mono text-[11px] text-[#7aa0c0] bg-[#060b14] max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed"
+          style="scrollbar-width: thin; scrollbar-color: #1a2a3a transparent"
+        >
+          <div v-for="(line, i) in releaseLog" :key="i">{{ line }}</div>
+          <div v-if="releasePhase === 'running'" class="text-yellow-300 animate-pulse">リリース中...</div>
+          <div v-if="releasePhase === 'done' && releasePushedToWindows" class="text-green-300">リリースが完了し、Windows(D:) へも反映されました。</div>
+          <div v-if="releasePhase === 'done' && !releasePushedToWindows" class="text-green-300">
+            ReleasedVersion（WSL）を生成しました。上のログで Windows(D:) への反映（📤）をご確認ください。
+          </div>
+        </div>
+
+        <!-- フッター -->
+        <div class="flex justify-end gap-2 px-4 py-2.5 bg-[#0a1220] border-t border-[#1a2a44]">
+          <button
+            v-if="releasePhase === 'choose'"
+            class="px-3 py-1.5 rounded text-xs text-[#8aacd0] bg-[#16233c] hover:bg-[#1e2e48]"
+            @click="closeReleaseModal"
+          >
+            キャンセル
+          </button>
+          <button
+            v-if="releasePhase === 'choose'"
+            class="px-3 py-1.5 rounded text-xs text-white bg-green-700 hover:bg-green-600 disabled:opacity-40"
+            :disabled="!releaseFilename.trim()"
+            @click="runRelease"
+          >
+            リリース実行
+          </button>
+          <button
+            v-if="releasePhase === 'done' || releasePhase === 'error'"
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a]"
+            @click="closeReleaseModal"
+          >
+            閉じる
+          </button>
+        </div>
+      </div>
+    </div>
     <!-- eslint-enable @intlify/vue-i18n/no-raw-text -->
   </div>
 </template>
@@ -487,6 +568,15 @@ const templateModalOpen = ref(false);
 const templatePhase = ref<"confirm" | "running" | "done" | "error">("confirm");
 const templateLog = ref<string[]>([]);
 const pendingTemplate = ref<string>("");
+
+// ── リリースモーダル（combine（COM 結合）→ ReleasedVersion 生成 → 自動 Windows push・SSE） ─
+const releaseModalOpen = ref(false);
+const releasePhase = ref<"choose" | "running" | "done" | "error">("choose");
+const releaseLog = ref<string[]>([]);
+const releaseFilename = ref<string>("");
+/** SSE ログに「📤 D: へ push」行が出たか＝実際に Windows(D:) へコピーされたか。
+ *  完了メッセージで D: 反映を過大表示しないため（未反映なら ReleasedVersion 生成のみ表記）。 */
+const releasePushedToWindows = computed<boolean>(() => releaseLog.value.some((line) => line.includes("📤")));
 
 /** dirty（canvas 再生成待ち）ページ数。ヘッダーバッジと確認文言に使う。 */
 const dirtyCount = computed<number>(() => deck.value?.pages.filter((page) => page.dirty).length ?? 0);
@@ -828,6 +918,75 @@ async function runApplyTemplate(): Promise<void> {
   }
 }
 
+// ── リリース（リボンの「リリース」ボタン発） ──────────────────────────────────
+// 編集中バージョンの .pages を COM 結合（combine）して ReleasedVersion/<file>.pptx を生成し、
+// サーバーが .checkout-source の Windows パスへ自動 push する。作業ファイル選択画面の
+// リリースと同一の口（API_ROUTES.work.combine）・同一の命名規約を用いる。
+
+/** YYYYMMDD（ローカル日付）。リリース既定ファイル名の日付部に使う。 */
+function todayYmd(): string {
+  const now = new Date();
+  const pad = (num: number): string => String(num).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+}
+
+/** リリース既定ファイル名 `<WD> <title>_<YYYYMMDD>_<version>.pptx`。title は D: フォルダ名
+ *  由来（サーバーの resolveWdTitle）。解決失敗時は `<WD>_<YYYYMMDD>_<version>.pptx` に縮退。 */
+async function buildDefaultReleaseName(): Promise<string> {
+  const wdVal = wdId.value ?? "";
+  let title = "";
+  try {
+    const res = await apiGet<{ title: string | null }>(fillRoute(API_ROUTES.work.wdTitle, wdVal, ""));
+    if (res.ok && res.data.title) {
+      ({ title } = res.data as { title: string });
+    }
+  } catch {
+    /* タイトル解決失敗は WD-ID のみに縮退（機能は継続） */
+  }
+  const base = title ? `${wdVal} ${title}` : wdVal;
+  return `${base}_${todayYmd()}_${version.value}.pptx`;
+}
+
+/** リボンでリリースが押されたら、既定ファイル名を用意して確認モーダルを開く。 */
+async function openReleaseModal(): Promise<void> {
+  if (!wdId.value || !version.value) return;
+  releaseLog.value = [];
+  releasePhase.value = "choose";
+  releaseFilename.value = await buildDefaultReleaseName();
+  releaseModalOpen.value = true;
+}
+
+function closeReleaseModal(): void {
+  if (releasePhase.value === "running") return; // 実行中は閉じさせない
+  releaseModalOpen.value = false;
+}
+
+async function runRelease(): Promise<void> {
+  if (!wdId.value || !version.value || !releaseFilename.value.trim()) return;
+  releasePhase.value = "running";
+  releaseLog.value = [];
+  const url = fillRoute(API_ROUTES.work.combine, wdId.value, version.value);
+  try {
+    const res = await apiFetchRaw(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ outFilename: releaseFilename.value.trim() }),
+    });
+    if (!res.ok || !res.body) {
+      releaseLog.value.push(`ERROR: HTTP ${res.status}`);
+      releasePhase.value = "error";
+      return;
+    }
+    const done = await drainSse(res.body, releaseLog);
+    releasePhase.value = done ? "done" : "error";
+    // 結合時にサーバーが表紙のリリース日を更新するため、デッキを再読込して反映する。
+    if (done) await reloadDeck();
+  } catch (err) {
+    releaseLog.value.push(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    releasePhase.value = "error";
+  }
+}
+
 // ── Chat helpers ─────────────────────────────────────────────────────────────
 
 /** 現在のスライドコンテキストをメッセージの先頭に付与する文字列を返す */
@@ -975,6 +1134,7 @@ slideEditor.register({
   onApplyTheme: (themeId: string) => void runApplyTheme(themeId),
   onApplyTemplate: (templateId: string) => openTemplateModal(templateId),
   onRefresh: () => openRefreshModal(),
+  onRelease: () => void openReleaseModal(),
   onToggleChat: () => {
     showChatPane.value = !showChatPane.value;
   },

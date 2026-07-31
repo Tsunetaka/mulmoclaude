@@ -1080,6 +1080,7 @@ const zhMessages = {
     themeUnapplied: "（未应用）",
     template: "模板",
     applyTemplate: "应用模板",
+    release: "发布",
   },
   mulmoPoint: {
     title: "关于 MulmoPoint",

@@ -1125,6 +1125,7 @@ const enMessages = {
     themeUnapplied: "(Not applied)",
     template: "Template",
     applyTemplate: "Apply template",
+    release: "Release",
   },
   mulmoPoint: {
     title: "About MulmoPoint",

@@ -1112,6 +1112,7 @@ const esMessages = {
     themeUnapplied: "(Sin aplicar)",
     template: "Plantilla",
     applyTemplate: "Aplicar plantilla",
+    release: "Publicar",
   },
   mulmoPoint: {
     title: "Acerca de MulmoPoint",

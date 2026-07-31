@@ -516,6 +516,11 @@ const HOST_API_ROUTES = {
      *  `{ templates: { id, label }[] }` を返す（id＝拡張子なしファイル名）。リボンの
      *  「テンプレート適用」プルダウンの選択肢に使う。 */
     templates: "/api/work/templates",
+    /** GET — WD-ID から D: フォルダ名由来のメインタイトルを解決して返す。
+     *  `{ title: string | null }`（D: 走査失敗 / 未解決は null）。スライド編集画面の
+     *  「リリース」ボタンが既定ファイル名 `<WD> <title>_<YYYYMMDD>_<version>.pptx` を
+     *  組み立てるために使う（作業ファイル選択画面と同じ命名規約）。 */
+    wdTitle: "/api/work/:wd/title",
     /** POST — デッキ全ページを指定テンプレート（既定 geoplan-cover）の土台に作り替える
      *  （テンプレート適用・整形コピー方式）。`apply_template.py`（WSL python-pptx・COM
      *  非依存）が先頭＝表紙／他＝本文として元ページの中身を転記し、名前付き帯を付与、

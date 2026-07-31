@@ -66,6 +66,20 @@
         </button>
         <div class="ribbon-tooltip">{{ t("slides.canvasRefresh") }}</div>
       </div>
+      <!-- リリース — 編集中バージョンを combine（COM 結合）して ReleasedVersion を生成し、
+           サーバーが自動で Windows(D:) へ push する。SlideEditorView が確認モーダルで実行。 -->
+      <div class="relative group">
+        <button
+          class="ribbon-text-btn ribbon-text-btn--release"
+          data-testid="ribbon-btn-release"
+          :aria-label="t('slides.release')"
+          @click="slideEditor.triggerRelease()"
+        >
+          <span class="material-icons text-base">publish</span>
+          <span>{{ t("slides.release") }}</span>
+        </button>
+        <div class="ribbon-tooltip">{{ t("slides.release") }}</div>
+      </div>
       <div class="relative group">
         <button
           class="ribbon-icon-btn"
@@ -270,6 +284,12 @@ const visibleButtons = computed<RibbonButton[]>(() => {
 .ribbon-text-btn--dirty {
   @apply bg-yellow-700 hover:bg-yellow-600 text-yellow-50
          border-yellow-600 hover:border-yellow-500;
+}
+
+/* リリース — グリーン系（作業ファイル選択画面の「⬆ リリース」と同系色） */
+.ribbon-text-btn--release {
+  @apply bg-[#1a3a1a] hover:bg-[#2a5a2a] text-green-100
+         border-[#2a4a2a] hover:border-[#3a6a3a];
 }
 
 /* ── バルーンヘルプ（ボタン下側に表示） ── */

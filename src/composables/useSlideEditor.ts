@@ -32,6 +32,7 @@ let refreshHandler: Handler | null = null;
 let toggleChatHandler: Handler | null = null;
 let applyThemeHandler: ThemeHandler | null = null;
 let applyTemplateHandler: TemplateHandler | null = null;
+let releaseHandler: Handler | null = null;
 
 export function useSlideEditor() {
   return {
@@ -39,12 +40,13 @@ export function useSlideEditor() {
     dirtyCount,
     chatOpen,
     theme,
-    /** 編集ビューがアクション（canvas 更新・チャットトグル・テーマ／テンプレ適用）を登録する。 */
-    register(handlers: { onRefresh: Handler; onToggleChat: Handler; onApplyTheme: ThemeHandler; onApplyTemplate: TemplateHandler }): void {
+    /** 編集ビューがアクション（canvas 更新・チャットトグル・テーマ／テンプレ適用・リリース）を登録する。 */
+    register(handlers: { onRefresh: Handler; onToggleChat: Handler; onApplyTheme: ThemeHandler; onApplyTemplate: TemplateHandler; onRelease: Handler }): void {
       refreshHandler = handlers.onRefresh;
       toggleChatHandler = handlers.onToggleChat;
       applyThemeHandler = handlers.onApplyTheme;
       applyTemplateHandler = handlers.onApplyTemplate;
+      releaseHandler = handlers.onRelease;
     },
     /** 編集ビューのアンマウント時にハンドラと状態を解除する。 */
     unregister(): void {
@@ -52,6 +54,7 @@ export function useSlideEditor() {
       toggleChatHandler = null;
       applyThemeHandler = null;
       applyTemplateHandler = null;
+      releaseHandler = null;
       active.value = false;
       dirtyCount.value = 0;
       chatOpen.value = false;
@@ -72,6 +75,10 @@ export function useSlideEditor() {
     /** リボンのテンプレート選択からのテンプレート適用トリガー。 */
     triggerApplyTemplate(templateId: string): void {
       applyTemplateHandler?.(templateId);
+    },
+    /** リボンの「リリース」ボタンからのリリース（combine → ReleasedVersion → Windows push）トリガー。 */
+    triggerRelease(): void {
+      releaseHandler?.();
     },
   };
 }

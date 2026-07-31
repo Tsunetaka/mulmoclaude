@@ -1114,6 +1114,7 @@ const deMessages = {
     themeUnapplied: "(Nicht angewendet)",
     template: "Vorlage",
     applyTemplate: "Vorlage anwenden",
+    release: "Freigeben",
   },
   mulmoPoint: {
     title: "Über MulmoPoint",

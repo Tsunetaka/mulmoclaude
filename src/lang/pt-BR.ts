@@ -1100,6 +1100,7 @@ const ptBRMessages = {
     themeUnapplied: "(Não aplicado)",
     template: "Modelo",
     applyTemplate: "Aplicar modelo",
+    release: "Publicar",
   },
   mulmoPoint: {
     title: "Sobre o MulmoPoint",

@@ -1103,6 +1103,7 @@ const frMessages = {
     themeUnapplied: "(Non appliqué)",
     template: "Modèle",
     applyTemplate: "Appliquer le modèle",
+    release: "Publier",
   },
   mulmoPoint: {
     title: "À propos de MulmoPoint",

@@ -1095,6 +1095,7 @@ const koMessages = {
     themeUnapplied: "(미적용)",
     template: "템플릿",
     applyTemplate: "템플릿 적용",
+    release: "릴리스",
   },
   mulmoPoint: {
     title: "MulmoPoint 정보",

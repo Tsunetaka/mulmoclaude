@@ -1095,6 +1095,7 @@ const jaMessages = {
     themeUnapplied: "（未適用）",
     template: "テンプレート",
     applyTemplate: "テンプレート適用",
+    release: "リリース",
   },
   mulmoPoint: {
     title: "MulmoPoint について",

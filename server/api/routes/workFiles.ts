@@ -292,6 +292,22 @@ export async function resolveWdTitle(wdId: string): Promise<string | null> {
   return null;
 }
 
+/** WD-ID から D: フォルダの Windows パスを解決する（D: マスターを走査）。
+ *  リリース逆同期（D: へ push）で `.checkout-source` が無い GUI 登録 WD 向けのフォールバック。
+ *  見つからない / スキャン失敗時は null。 */
+export async function resolveWdWindowsPath(wdId: string): Promise<string | null> {
+  try {
+    const categories = await scanRoot(await getWorkRootWin());
+    for (const cat of categories) {
+      const found = cat.wds.find((entry) => entry.id === wdId);
+      if (found) return found.windowsWdPath.trim() || null;
+    }
+  } catch (err) {
+    log.warn("workFiles.resolveWdWindowsPath", "windows path resolve failed", { wdId, err });
+  }
+  return null;
+}
+
 // GET /api/work/scan
 router.get(API_ROUTES.work.scan, async (req, res) => {
   try {
@@ -1338,10 +1354,16 @@ router.post(API_ROUTES.work.combine, async (req, res) => {
   // COM 結合は .pages/*.pptx を読むため、先に表紙 pptx を書き換えておけば結合物へ反映される。
   await runUpdateCoverMeta(ctx.wd, ctx.version, COVER_META_FIELDS_RELEASE, ctx.send);
   // 結合成功後、新版 ReleasedVersion を Windows(D:) へ自動 push（L823 の注記どおり
-  // 「新版は D: へ push してからミラー」の順序を守る）。windows_path は .checkout-source から。
+  // 「新版は D: へ push してからミラー」の順序を守る）。Windows パスは .checkout-source →
+  // 無ければ D: スキャン（resolveWdWindowsPath）で解決する（GUI 登録 WD は .checkout-source が無い）。
   await runComScript(args, ctx.wd, ctx.send, async () => {
-    const { copied } = await pushReleasedToWindows(ctx.wd, await readCheckoutWindowsPath(ctx.wd));
-    if (copied.length) ctx.send(`📤 D: へ push: ${copied.join(", ")}`);
+    const winPath = (await readCheckoutWindowsPath(ctx.wd)) ?? (await resolveWdWindowsPath(ctx.wd));
+    if (!winPath) {
+      ctx.send("⚠ Windows パスを解決できず、D: への push をスキップしました（ReleasedVersion は WSL に生成済み）");
+      return;
+    }
+    const { copied } = await pushReleasedToWindows(ctx.wd, winPath);
+    ctx.send(copied.length ? `📤 D: へ push: ${copied.join(", ")}` : "ℹ D: は既に最新です（push 対象なし）");
   });
   res.end();
 });
@@ -1690,6 +1712,15 @@ router.get(API_ROUTES.work.templates, async (_req, res) => {
     log.error("workFiles.templates", "list failed", { err });
     res.status(500).json({ error: "template list failed" });
   }
+});
+
+// GET /api/work/:wd/title — D: フォルダ名由来のメインタイトルを解決して返す。
+// スライド編集画面の「リリース」ボタンが既定ファイル名を組み立てるために使う。
+// 解決失敗（D: 走査不可・未登録）は 200 + { title: null }（呼び出し側で WD-ID のみに縮退）。
+router.get(API_ROUTES.work.wdTitle, async (req, res) => {
+  const { wd } = req.params as { wd: string };
+  const title = await resolveWdTitle(wd);
+  res.json({ title });
 });
 
 /** apply-template body の純粋検証。問題があればエラーメッセージ、無ければ null。 */

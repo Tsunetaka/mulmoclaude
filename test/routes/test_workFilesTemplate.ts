@@ -140,7 +140,23 @@ describe("buildApplyTemplateArgs (pure)", () => {
   });
 });
 
+function mockJsonRes() {
+  const state: { status: number; body: { title?: string | null } | undefined } = { status: 200, body: undefined };
+  const res = {
+    status(code: number) {
+      state.status = code;
+      return res;
+    },
+    json(payload: { title?: string | null }) {
+      state.body = payload;
+      return res;
+    },
+  };
+  return { state, res: res as unknown as Response };
+}
+
 let applyHandler: Handler;
+let titleHandler: Handler;
 
 before(async () => {
   const tmpRoot = await mkdtemp(path.join(tmpdir(), "mulmo-template-"));
@@ -150,6 +166,28 @@ before(async () => {
   mkdirSync(workspacePath, { recursive: true });
   const routeMod = await import("../../server/api/routes/workFiles.js");
   applyHandler = extractRouteHandler(routeMod, "/api/work/:wd/:version/apply-template", "post");
+  titleHandler = extractRouteHandler(routeMod, "/api/work/:wd/title", "get");
+});
+
+describe("GET /api/work/:wd/title — WD title resolver", () => {
+  // The Windows work-root does not exist in the tmp workspace, so resolveWdTitle
+  // fails to scan and returns null — the route degrades to { title: null } (200),
+  // which the slide-editor release button falls back to (WD-ID-only filename).
+  it("200 + { title: null } when the title cannot be resolved", async () => {
+    const { state, res } = mockJsonRes();
+    await titleHandler(req({ wd: "GIT-09998" }, {}), res);
+    assert.equal(state.status, 200);
+    assert.deepEqual(state.body, { title: null });
+  });
+});
+
+describe("resolveWdWindowsPath (release D: push fallback)", () => {
+  // With no D: scan available (tmp workspace, no Windows work-root), the resolver
+  // returns null — combine's push then reports the skip instead of silently no-op'ing.
+  it("returns null when the WD cannot be found on the D: scan", async () => {
+    const { resolveWdWindowsPath } = await import("../../server/api/routes/workFiles.js");
+    assert.equal(await resolveWdWindowsPath("GIT-09998"), null);
+  });
 });
 
 describe("POST /api/work/:wd/:version/apply-template — guards", () => {
