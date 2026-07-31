@@ -273,20 +273,14 @@
               placeholder="スライドのメインタイトル"
             />
           </label>
-          <label class="block">
-            <span class="text-sm font-medium">サブタイトル（製品名・文脈／省略可）</span>
-            <input
-              v-model="deckSubtitle"
-              type="text"
-              class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-              placeholder="例: Google AppSheet / Smallworld with AI"
-            />
-          </label>
           <label class="flex items-center gap-2 text-sm">
             <input v-model="deckConfidential" type="checkbox" />
             [社外秘] ラベルを表示する
           </label>
-          <div class="text-xs text-gray-500">表紙には今日の日付・会社名（テンプレにプレースホルダがあれば WD-ID／バージョンも）が自動で入ります。</div>
+          <div class="text-xs text-gray-500">
+            表紙の上部には固定ヘッダー「社内資料 / Smallworld with AI」が入り、今日の日付・会社名（テンプレにプレースホルダがあれば
+            WD-ID／バージョンも）が自動で入ります。
+          </div>
         </div>
 
         <!-- ② SSE ログ -->
@@ -746,7 +740,6 @@ const NEW_DECK_VERSION = "v001";
 const newDeckModal = ref<{ wdId: string; windowsWdPath: string } | null>(null);
 const deckTheme = ref("cool");
 const deckTitle = ref("");
-const deckSubtitle = ref("");
 const deckConfidential = ref(true);
 
 // 「＋ 新規作成」：モーダルを開く（タイトル既定値は WD タイトル）。
@@ -754,7 +747,6 @@ function onCreateNew(wdInfo: WdInfo): void {
   newDeckModal.value = { wdId: wdInfo.id, windowsWdPath: wdInfo.windowsWdPath };
   deckTheme.value = "cool";
   deckTitle.value = wdInfo.title;
-  deckSubtitle.value = "";
   deckConfidential.value = true;
   modalPhase.value = "choose";
   modalLog.value = [];
@@ -772,7 +764,6 @@ async function executeNewDeck(): Promise<void> {
   const url = fillRoute(API_ROUTES.work.newDeck, modal.wdId, NEW_DECK_VERSION);
   await runModalSse(url, {
     title: deckTitle.value.trim(),
-    subtitle: deckSubtitle.value.trim() || undefined,
     theme: deckTheme.value,
     confidential: deckConfidential.value,
     // 新規作成時に D: 側の素材フォルダ構成も WSL へミラーさせる。

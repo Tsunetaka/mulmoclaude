@@ -106,13 +106,15 @@ describe("buildNewDeckArgs (pure)", () => {
     ]);
   });
 
-  it("adds --subtitle only when non-blank, --no-confidential only when false", async () => {
+  it("adds --no-confidential only when confidential is false", async () => {
     const { buildNewDeckArgs } = await import("../../server/api/routes/workFiles.js");
-    const withBoth = buildNewDeckArgs("s", "d", "GIT-00001", "v001", { title: "t", subtitle: "サブ", theme: "cool", confidential: false });
-    assert.ok(withBoth.includes("--subtitle") && withBoth.includes("サブ") && withBoth.includes("--no-confidential"));
+    // サブタイトル枠は廃止（表紙上部は固定ヘッダー "社内資料 / Smallworld with AI"）。
+    // 引数に --subtitle は一切現れない。
+    const withConf = buildNewDeckArgs("s", "d", "GIT-00001", "v001", { title: "t", theme: "cool", confidential: false });
+    assert.ok(withConf.includes("--no-confidential") && !withConf.includes("--subtitle"));
 
-    const withNeither = buildNewDeckArgs("s", "d", "GIT-00001", "v001", { title: "t", subtitle: "  ", theme: "cool", confidential: true });
-    assert.ok(!withNeither.includes("--subtitle") && !withNeither.includes("--no-confidential"));
+    const withoutConf = buildNewDeckArgs("s", "d", "GIT-00001", "v001", { title: "t", theme: "cool", confidential: true });
+    assert.ok(!withoutConf.includes("--no-confidential") && !withoutConf.includes("--subtitle"));
   });
 });
 

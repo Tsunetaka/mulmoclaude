@@ -1491,10 +1491,9 @@ export function buildNewDeckArgs(
   versionDir: string,
   wdId: string,
   version: string,
-  body: { title: string; subtitle?: string; theme: string; confidential?: boolean },
+  body: { title: string; theme: string; confidential?: boolean },
 ): string[] {
   const args = [scriptPath, "--version-dir", versionDir, "--wd", wdId, "--version", version, "--title", body.title.trim(), "--theme", body.theme];
-  if (body.subtitle?.trim()) args.push("--subtitle", body.subtitle.trim());
   if (body.confidential === false) args.push("--no-confidential");
   return args;
 }
@@ -1516,7 +1515,7 @@ async function mirrorWindowsWdFolder(wdId: string, windowsWdPath: string | null,
 async function runNewDeck(
   wdId: string,
   version: string,
-  body: { title: string; subtitle?: string; theme: string; confidential?: boolean },
+  body: { title: string; theme: string; confidential?: boolean },
   send: (line: string) => void,
 ): Promise<void> {
   const versionDir = path.join(workspacePath, "data/work", wdId, version);
@@ -1551,7 +1550,7 @@ async function runNewDeck(
 // POST /api/work/:wd/:version/new-deck — 新規デッキ作成（SSE）
 router.post(API_ROUTES.work.newDeck, async (req, res) => {
   const { wd, version } = req.params as { wd: string; version: string };
-  const body = req.body as { title?: string; subtitle?: string; theme?: string; confidential?: boolean; windowsWdPath?: string };
+  const body = req.body as { title?: string; theme?: string; confidential?: boolean; windowsWdPath?: string };
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return;
@@ -1570,7 +1569,7 @@ router.post(API_ROUTES.work.newDeck, async (req, res) => {
   if (!ctx) return;
   // 先に D: 側の WD フォルダ構成（素材・ReleasedVersion）を WSL へミラーしてから v001 を生成する。
   await mirrorWindowsWdFolder(wd, body.windowsWdPath ?? null, ctx.send);
-  await runNewDeck(wd, version, { title: body.title ?? "", subtitle: body.subtitle, theme: body.theme ?? "cool", confidential: body.confidential }, ctx.send);
+  await runNewDeck(wd, version, { title: body.title ?? "", theme: body.theme ?? "cool", confidential: body.confidential }, ctx.send);
   res.end();
 });
 

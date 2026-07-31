@@ -2,7 +2,7 @@
 //
 // Clicking the button on a WD with no released pptx and no editing
 // version subfolder opens an in-view modal (WorkFileSelectorView):
-// theme cards + title/subtitle inputs → POST work.newDeck (SSE) which
+// theme cards + title input → POST work.newDeck (SSE) which
 // runs `new_deck.py` (WSL python-pptx) then `gen_thumbs.py` (WSL
 // LibreOffice). The COM canvas is generated afterwards with the
 // editor's explicit "更新" button (PowerPoint must be closed).
