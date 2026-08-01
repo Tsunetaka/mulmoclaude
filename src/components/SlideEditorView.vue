@@ -167,21 +167,21 @@
         <div v-if="showChatPane" class="chat-pane flex-shrink-0 flex flex-col bg-[#080e18] border-l border-[#141e2e]">
           <!-- ペインヘッダー -->
           <div class="h-9 flex-shrink-0 flex items-center gap-1.5 px-3 bg-[#0a1020] border-b border-[#141e2e]">
-            <span class="material-icons text-sm text-[#3a78cc]">chat</span>
-            <span class="text-[11px] font-bold text-[#6a9acc] flex-1">Claude に指示</span>
-            <button class="text-[#2a3a5a] hover:text-[#6a9acc] transition-colors" aria-label="チャットを閉じる" @click="showChatPane = false">
+            <span class="material-icons text-sm text-[#5a95e0]">chat</span>
+            <span class="text-[11px] font-bold text-[#a9cdef] flex-1">Claude に指示</span>
+            <button class="text-[#5a7593] hover:text-[#a9cdef] transition-colors" aria-label="チャットを閉じる" @click="showChatPane = false">
               <span class="material-icons text-sm">close</span>
             </button>
           </div>
 
           <!-- コンテキスト表示 -->
-          <div v-if="currentPage" class="px-3 py-1.5 bg-[#060b14] border-b border-[#0d1628] text-[9px] text-[#2a4a6a] leading-tight">
-            <span class="text-[#3a5a7a]">WD:</span> {{ wdId }}
-            <span class="text-[#2a3a5a] mx-1">·</span>
-            <span class="text-[#3a5a7a]">p.</span>{{ currentPage.pageNo }}
+          <div v-if="currentPage" class="px-3 py-1.5 bg-[#060b14] border-b border-[#0d1628] text-[10px] text-[#7d9cbb] leading-tight">
+            <span class="text-[#93b2d0]">WD:</span> {{ wdId }}
+            <span class="text-[#556b86] mx-1">·</span>
+            <span class="text-[#93b2d0]">p.</span>{{ currentPage.pageNo }}
             <template v-if="currentPage.title">
-              <span class="text-[#2a3a5a] mx-1">·</span>
-              <span class="text-[#3a607a] overflow-hidden text-ellipsis whitespace-nowrap">{{ currentPage.title }}</span>
+              <span class="text-[#556b86] mx-1">·</span>
+              <span class="text-[#9fbdd8] overflow-hidden text-ellipsis whitespace-nowrap">{{ currentPage.title }}</span>
             </template>
           </div>
 
@@ -192,15 +192,15 @@
             style="scrollbar-width: thin; scrollbar-color: #1a2a3a transparent"
           >
             <div v-if="recentChatMessages.length === 0" class="flex flex-col items-center justify-center h-full gap-2 text-center px-3">
-              <span class="material-icons text-2xl text-[#1a2a3a]">forum</span>
-              <p class="text-[10px] text-[#2a3a5a]">スライドについて Claude に質問・指示できます</p>
+              <span class="material-icons text-2xl text-[#33445a]">forum</span>
+              <p class="text-[11px] text-[#8598ad]">スライドについて Claude に質問・指示できます</p>
             </div>
             <template v-for="msg in recentChatMessages" :key="msg.uuid">
               <div :class="msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
                 <div
                   :class="[
-                    'max-w-[90%] px-2.5 py-1.5 rounded-lg text-[11px] break-words leading-relaxed whitespace-pre-wrap',
-                    msg.role === 'user' ? 'bg-[#0f2a50] text-[#a0c4e8] border border-[#1a3a6a]' : 'bg-[#0c1620] text-[#8ab0cc] border border-[#111e2e]',
+                    'max-w-[90%] px-2.5 py-1.5 rounded-lg text-[12px] break-words leading-relaxed whitespace-pre-wrap',
+                    msg.role === 'user' ? 'bg-[#123762] text-[#e4eefa] border border-[#2c4f82]' : 'bg-[#16222f] text-[#d3e2f1] border border-[#2a3b4e]',
                   ]"
                 >
                   {{ msg.text }}
@@ -209,8 +209,8 @@
             </template>
             <!-- 実行中インジケーター -->
             <div v-if="agentRunning" class="flex justify-start">
-              <div class="bg-[#0c1620] border border-[#111e2e] px-2.5 py-1.5 rounded-lg">
-                <span class="text-[10px] text-[#3a6a8a] animate-pulse">● 考えています…</span>
+              <div class="bg-[#16222f] border border-[#2a3b4e] px-2.5 py-1.5 rounded-lg">
+                <span class="text-[11px] text-[#9fc0dd] animate-pulse">● 考えています…</span>
               </div>
             </div>
           </div>
@@ -220,7 +220,7 @@
             <button
               v-for="hint in QUICK_HINTS"
               :key="hint"
-              class="text-[9px] bg-[#0a1420] hover:bg-[#0f1e30] text-[#3a5a7a] hover:text-[#6a9acc] px-2 py-0.5 rounded border border-[#0f1e30] hover:border-[#1a2a44] transition-colors"
+              class="text-[10px] bg-[#0f1c2c] hover:bg-[#15273c] text-[#93b2d0] hover:text-[#cfe6ff] px-2 py-0.5 rounded border border-[#1c2f45] hover:border-[#2a4568] transition-colors"
               :disabled="agentRunning"
               @click="sendQuickHint(hint)"
             >
@@ -234,7 +234,7 @@
               <textarea
                 ref="chatInputEl"
                 v-model="chatInput"
-                class="flex-1 bg-[#0a1420] border border-[#0f1e30] focus:border-[#1a3a66] rounded text-[11px] text-[#a0c0dc] placeholder-[#1a2a3a] px-2 py-1.5 resize-none focus:outline-none transition-colors"
+                class="flex-1 bg-[#0d1a28] border border-[#1c2f45] focus:border-[#2f5a94] rounded text-[12px] text-[#e4eefa] placeholder-[#5f7286] px-2 py-1.5 resize-none focus:outline-none transition-colors"
                 rows="3"
                 placeholder="指示を入力… (Ctrl+Enter で送信)"
                 @keydown.ctrl.enter.prevent="sendChatMessage"
