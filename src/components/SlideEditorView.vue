@@ -345,6 +345,7 @@
           <div v-for="(line, i) in themeLog" :key="i">{{ line }}</div>
           <div v-if="themePhase === 'running'" class="text-yellow-300 animate-pulse">配色を適用中...</div>
           <div v-if="themePhase === 'done'" class="text-green-300">完了しました。高解像度の反映は「canvas 更新」で行ってください。</div>
+          <div v-if="themePhase === 'error'" class="text-red-300">適用できませんでした。上のメッセージをご確認ください。</div>
         </div>
 
         <!-- フッター -->
@@ -396,6 +397,7 @@
           <div v-for="(line, i) in templateLog" :key="i">{{ line }}</div>
           <div v-if="templatePhase === 'running'" class="text-yellow-300 animate-pulse">テンプレを適用中...</div>
           <div v-if="templatePhase === 'done'" class="text-green-300">完了しました。高解像度の反映は「canvas 更新」で行ってください。</div>
+          <div v-if="templatePhase === 'error'" class="text-red-300">適用できませんでした。上のメッセージをご確認ください。</div>
         </div>
 
         <!-- フッター -->
@@ -472,6 +474,7 @@
           <div v-if="releasePhase === 'done' && !releasePushedToWindows" class="text-green-300">
             ReleasedVersion（WSL）を生成しました。上のログで Windows(D:) への反映（📤）をご確認ください。
           </div>
+          <div v-if="releasePhase === 'error'" class="text-red-300">リリースできませんでした。上のメッセージをご確認ください。</div>
         </div>
 
         <!-- フッター -->
@@ -710,6 +713,9 @@ const router = useRouter();
 const appApi = useAppApi();
 const activeSessionRef = useActiveSession();
 const slideEditor = useSlideEditor();
+
+// チェックアウト中の一括操作ブロックでサーバーが返す HTTP ステータス（409 Conflict）。
+const HTTP_CONFLICT = 409;
 
 // Matches the server's TreeNode shape returned by /api/files/dir
 interface TreeNode {
@@ -1014,6 +1020,25 @@ async function drainSse(body: ReadableStream<Uint8Array>, log: { value: string[]
   return done;
 }
 
+/** 非 OK レスポンスから表示用のエラー行を作る。サーバーが JSON `{ error, locked }` を
+ *  返していればその文言を使い、無ければ `HTTP <status>` に縮退する。409 + locked は
+ *  「チェックアウト中の一括操作ブロック」なので、実行不可の理由が伝わる定型文にする。 */
+async function errorLineFromResponse(res: Response): Promise<string> {
+  let serverMsg = "";
+  let locked = false;
+  try {
+    const data = (await res.json()) as { error?: string; locked?: boolean };
+    if (typeof data.error === "string") serverMsg = data.error;
+    locked = data.locked === true;
+  } catch {
+    /* JSON 本文が無い / パース不能 → status への縮退にフォールバック */
+  }
+  if (res.status === HTTP_CONFLICT && locked) {
+    return `⛔ ${serverMsg || "チェックアウト中のページがあるため、この操作は実行できません。先にチェックインしてください。"}`;
+  }
+  return serverMsg ? `ERROR: ${serverMsg}` : `ERROR: HTTP ${res.status}`;
+}
+
 async function runCanvasRefresh(): Promise<void> {
   if (!wdId.value || !version.value) return;
   refreshPhase.value = "running";
@@ -1026,7 +1051,7 @@ async function runCanvasRefresh(): Promise<void> {
       body: JSON.stringify({ full: refreshFull.value }),
     });
     if (!res.ok || !res.body) {
-      refreshLog.value.push(`ERROR: HTTP ${res.status}`);
+      refreshLog.value.push(await errorLineFromResponse(res));
       refreshPhase.value = "confirm";
       return;
     }
@@ -1064,7 +1089,7 @@ async function runApplyTheme(themeId: string): Promise<void> {
       body: JSON.stringify({ theme: themeId }),
     });
     if (!res.ok || !res.body) {
-      themeLog.value.push(`ERROR: HTTP ${res.status}`);
+      themeLog.value.push(await errorLineFromResponse(res));
       themePhase.value = "error";
       return;
     }
@@ -1114,7 +1139,7 @@ async function runApplyTemplate(): Promise<void> {
       body: JSON.stringify({ template: pendingTemplate.value }),
     });
     if (!res.ok || !res.body) {
-      templateLog.value.push(`ERROR: HTTP ${res.status}`);
+      templateLog.value.push(await errorLineFromResponse(res));
       templatePhase.value = "error";
       return;
     }
@@ -1183,7 +1208,7 @@ async function runRelease(): Promise<void> {
       body: JSON.stringify({ outFilename: releaseFilename.value.trim() }),
     });
     if (!res.ok || !res.body) {
-      releaseLog.value.push(`ERROR: HTTP ${res.status}`);
+      releaseLog.value.push(await errorLineFromResponse(res));
       releasePhase.value = "error";
       return;
     }
@@ -1234,7 +1259,7 @@ async function runPageCheckout(): Promise<void> {
       body: JSON.stringify({ pageIds }),
     });
     if (!res.ok || !res.body) {
-      checkoutLog.value.push(`ERROR: HTTP ${res.status}`);
+      checkoutLog.value.push(await errorLineFromResponse(res));
       checkoutPhase.value = "error";
       return;
     }
@@ -1288,7 +1313,7 @@ async function runPageCheckin(): Promise<void> {
       body: JSON.stringify({ apply, discard }),
     });
     if (!res.ok || !res.body) {
-      checkinLog.value.push(`ERROR: HTTP ${res.status}`);
+      checkinLog.value.push(await errorLineFromResponse(res));
       checkinPhase.value = "error";
       return;
     }
