@@ -1312,8 +1312,9 @@ router.post(API_ROUTES.work.split, async (req, res) => {
   const ctx = beginComStream(req, res);
   if (!ctx) return;
   // split 前の安全網: D: を正として ReleasedVersion を同期（stale 名の自己回復）。
-  // windowsWdPath は body に無いため .checkout-source（windows_path）から解決する。
-  const synced = await syncReleasedFromWindows(ctx.wd, await readCheckoutWindowsPath(ctx.wd));
+  // windowsWdPath は body に無いため .checkout-source → 無ければ D: スキャンで解決する
+  // （combine と同型の二段。GUI 登録 WD は .checkout-source が無いため後段が要る）。
+  const synced = await syncReleasedFromWindows(ctx.wd, await resolveCheckoutWinPath(ctx.wd));
   if (synced.copied.length || synced.deleted.length) {
     ctx.send(`🔄 ReleasedVersion を D: に同期（+${synced.copied.length}/-${synced.deleted.length}）`);
   }
@@ -1361,7 +1362,7 @@ router.post(API_ROUTES.work.combine, async (req, res) => {
   // 「新版は D: へ push してからミラー」の順序を守る）。Windows パスは .checkout-source →
   // 無ければ D: スキャン（resolveWdWindowsPath）で解決する（GUI 登録 WD は .checkout-source が無い）。
   await runComScript(args, ctx.wd, ctx.send, async () => {
-    const winPath = (await readCheckoutWindowsPath(ctx.wd)) ?? (await resolveWdWindowsPath(ctx.wd));
+    const winPath = await resolveCheckoutWinPath(ctx.wd);
     if (!winPath) {
       ctx.send("⚠ Windows パスを解決できず、D: への push をスキップしました（ReleasedVersion は WSL に生成済み）");
       return;
