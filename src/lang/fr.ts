@@ -1108,6 +1108,13 @@ const frMessages = {
     pageCheckoutHint: "Envoyer les pages sélectionnées vers Windows pour édition",
     pageCheckin: "Archiver",
     pageCheckinHint: "Réintégrer ou abandonner les pages extraites",
+    pageEdit: "Modifier les pages",
+    pageEditHint: "Supprimer, déplacer ou ajouter des pages (couverture / Thank You fixes)",
+    pageMoveUp: "Monter",
+    pageMoveDown: "Descendre",
+    pageDelete: "Supprimer",
+    pageAdd: "Ajouter une page",
+    pageFixed: "Fixe",
   },
   mulmoPoint: {
     title: "À propos de MulmoPoint",

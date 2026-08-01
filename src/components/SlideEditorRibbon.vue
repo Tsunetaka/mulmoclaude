@@ -43,6 +43,23 @@
             <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">{{ tpl.label }}</option>
           </select>
         </template>
+
+        <!-- 頁編集トグル — ON で各サムネに操作ボタン（↑↓移動・🗑削除）と編集可能
+             セクション末尾の「＋頁追加」を表示する（誤操作防止のトグル）。表紙／
+             Thank You は固定で ON でも錠前を出すのみ。状態は useSlideEditor 共有。 -->
+        <div class="relative group">
+          <button
+            class="ribbon-text-btn"
+            :class="{ 'ribbon-text-btn--pageedit': pageEditMode }"
+            data-testid="ribbon-btn-page-edit"
+            :aria-label="t('slides.pageEdit')"
+            @click="pageEditMode = !pageEditMode"
+          >
+            <span class="material-icons text-base">low_priority</span>
+            <span>{{ t("slides.pageEdit") }}</span>
+          </button>
+          <div class="ribbon-tooltip">{{ t("slides.pageEditHint") }}</div>
+        </div>
       </template>
     </div>
 
@@ -178,7 +195,7 @@ const router = useRouter();
 
 // 編集ビュー（SlideEditorView）と共有するコントロール状態・アクション。
 const slideEditor = useSlideEditor();
-const { active, dirtyCount, lockedCount, chatOpen, theme } = slideEditor;
+const { active, dirtyCount, lockedCount, chatOpen, pageEditMode, theme } = slideEditor;
 
 // 作業ファイル選択（ピッカー）と共有する再スキャン状態・アクション。
 const workFileSelector = useWorkFileSelector();
@@ -317,6 +334,12 @@ const visibleButtons = computed<RibbonButton[]>(() => {
 .ribbon-text-btn--dirty {
   @apply bg-yellow-700 hover:bg-yellow-600 text-yellow-50
          border-yellow-600 hover:border-yellow-500;
+}
+
+/* 頁編集トグル ON — 青系アクセント（編集モード中を示す） */
+.ribbon-text-btn--pageedit {
+  @apply bg-[#1a3a66] hover:bg-[#2a4a76] text-[#cfe2ff]
+         border-[#3a5a8a] hover:border-[#4a6a9a];
 }
 
 /* リリース — グリーン系（作業ファイル選択画面の「⬆ リリース」と同系色） */

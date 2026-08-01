@@ -18,6 +18,13 @@ const lockedCount = ref(0);
 /** チャットペインが開いているか（リボンのチャットトグル状態用）。 */
 const chatOpen = ref(false);
 /**
+ * 「頁編集」モード（削除・移動・新規追加）。リボンのトグルで切り替え、
+ * 編集ビューがサイドバー各サムネの操作ボタン（↑↓移動・🗑削除）と編集可能
+ * セクション末尾の「＋頁追加」の表示可否に使う。表紙／Thank You は固定なので
+ * ON でも操作ボタンを出さず錠前を表示する。
+ */
+const pageEditMode = ref(false);
+/**
  * 「テーマ未適用」を表すセンチネル値。
  * structure.theme が無い（外部から ReleasedVersion にコピーされた pptx 等・
  * どのテーマにも属さない）デッキは、プルダウンで「（未適用）」を選択状態にする。
@@ -72,6 +79,7 @@ function unregister(): void {
   dirtyCount.value = 0;
   lockedCount.value = 0;
   chatOpen.value = false;
+  pageEditMode.value = false;
   theme.value = UNAPPLIED_THEME;
 }
 
@@ -81,6 +89,7 @@ export function useSlideEditor() {
     dirtyCount,
     lockedCount,
     chatOpen,
+    pageEditMode,
     theme,
     register,
     unregister,

@@ -2198,4 +2198,141 @@ async function cleanWindowsCheckedout(ctx: PageOpCtx, winPath: string | null, fi
   if (del.length) ctx.send(`${label}: ${del.join(", ")}`);
 }
 
+// ── 頁編集（削除・移動・新規追加）— COM 非依存・WSL のみ（page_ops.py）─────────
+// 表紙（先頭セクション）／Thank You セクションは固定＝これらの頁は編集不可（python 側で拒否）。
+// チェックアウト中は blockIfLockedForBulk で 409（構造編集はチェックイン後）。
+
+// 構造編集コンテキスト（3 ルート共通）。
+interface StructEditCtx {
+  wd: string;
+  version: string;
+  versionDir: string;
+  send: (line: string) => void;
+}
+
+// セクション名の検証（任意の日本語可・改行/過長は不可）。
+function isValidSectionName(name: unknown): name is string {
+  return typeof name === "string" && name.length >= 1 && name.length <= 100 && !/[\r\n]/.test(name);
+}
+
+export interface PageMoveBody {
+  pageId: string;
+  toSection: string;
+  toIndex: number;
+}
+// page-move body の検証。不正なら null。
+export function validatePageMoveBody(body: unknown): PageMoveBody | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { pageId, toSection, toIndex } = body as Record<string, unknown>;
+  if (typeof pageId !== "string" || !PAGE_ID_RE.test(pageId)) return null;
+  if (!isValidSectionName(toSection)) return null;
+  if (typeof toIndex !== "number" || !Number.isInteger(toIndex) || toIndex < 0) return null;
+  return { pageId, toSection, toIndex };
+}
+
+export interface PageAddBody {
+  section: string;
+  toIndex: number;
+  template?: string;
+}
+// page-add body の検証。不正なら null。
+export function validatePageAddBody(body: unknown): PageAddBody | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { section, toIndex, template } = body as Record<string, unknown>;
+  if (!isValidSectionName(section)) return null;
+  if (typeof toIndex !== "number" || !Number.isInteger(toIndex) || toIndex < 0) return null;
+  if (template !== undefined && (typeof template !== "string" || template.length > 200)) return null;
+  return { section, toIndex, template: template as string | undefined };
+}
+
+// page_ops.py を spawn し SSE に流す。終了コードを返す（spawn 失敗は 1）。
+async function runPageOps(args: string[], send: (line: string) => void): Promise<number> {
+  const scriptPath = path.join(workspacePath, "data/work/tools/page_ops.py");
+  return new Promise<number>((resolve) => {
+    const proc = spawn("python3", [scriptPath, ...args], { env: { ...process.env } });
+    pipeToSse(proc, send, "📄 ");
+    proc.on("close", (code) => resolve(code ?? 1));
+    proc.on("error", (err) => {
+      send(`⚠ ${err.message}`);
+      resolve(1);
+    });
+  });
+}
+
+// wd/version 検証 → ロックゲート（409）→ SSE 開始。失敗時は res へ返して null。
+async function beginStructEdit(req: Request, res: Response): Promise<StructEditCtx | null> {
+  const { wd, version } = req.params as { wd: string; version: string };
+  if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return null;
+  }
+  if (await blockIfLockedForBulk(wd, version, res)) return null;
+  const stream = beginComStream(req, res);
+  if (!stream) return null;
+  const versionDir = path.join(workspacePath, "data/work", wd, version);
+  return { wd, version, versionDir, send: stream.send };
+}
+
+// page_ops 実行後の共通後処理：成功ならサムネ再生成＋DONE、失敗なら ERROR。
+async function finishStructEdit(ctx: StructEditCtx, code: number, label: string): Promise<void> {
+  if (code !== 0) {
+    ctx.send(`ERROR: ${label}に失敗しました（exit ${String(code)}）`);
+    return;
+  }
+  ctx.send("🖼 サムネイル再生成中...");
+  await runGenThumbs(ctx.wd, ctx.version, ctx.send, false); // 欠落＋dirty のみ差分再生成
+  ctx.send(`DONE:${ctx.wd}`);
+}
+
+// POST /api/work/:wd/:version/page-delete — 頁を削除する（SSE）
+router.post(API_ROUTES.work.pageDelete, async (req, res) => {
+  const pageIds = validateRequiredPageIds((req.body as { pageIds?: unknown }).pageIds);
+  if (!pageIds) {
+    res.status(400).json({ error: "pageIds（p-XXXXXXXX の配列）が必要です" });
+    return;
+  }
+  const ctx = await beginStructEdit(req, res);
+  if (!ctx) return;
+  let code = 0;
+  for (const pageId of pageIds) {
+    code = await runPageOps(["delete", "--version-dir", ctx.versionDir, "--page", pageId], ctx.send);
+    if (code !== 0) break;
+  }
+  await finishStructEdit(ctx, code, "頁の削除");
+  res.end();
+});
+
+// POST /api/work/:wd/:version/page-move — 頁を移動／並べ替えする（SSE）
+router.post(API_ROUTES.work.pageMove, async (req, res) => {
+  const body = validatePageMoveBody(req.body);
+  if (!body) {
+    res.status(400).json({ error: "pageId（p-XXXXXXXX）/ toSection / toIndex（0 以上の整数）が必要です" });
+    return;
+  }
+  const ctx = await beginStructEdit(req, res);
+  if (!ctx) return;
+  const code = await runPageOps(
+    ["move", "--version-dir", ctx.versionDir, "--page", body.pageId, "--to-section", body.toSection, "--to-index", String(body.toIndex)],
+    ctx.send,
+  );
+  await finishStructEdit(ctx, code, "頁の移動");
+  res.end();
+});
+
+// POST /api/work/:wd/:version/page-add — 空の本文ページを追加する（SSE）
+router.post(API_ROUTES.work.pageAdd, async (req, res) => {
+  const body = validatePageAddBody(req.body);
+  if (!body) {
+    res.status(400).json({ error: "section / toIndex（0 以上の整数）が必要です" });
+    return;
+  }
+  const ctx = await beginStructEdit(req, res);
+  if (!ctx) return;
+  const args = ["add", "--version-dir", ctx.versionDir, "--section", body.section, "--to-index", String(body.toIndex)];
+  if (body.template) args.push("--template", body.template);
+  const code = await runPageOps(args, ctx.send);
+  await finishStructEdit(ctx, code, "頁の追加");
+  res.end();
+});
+
 export default router;

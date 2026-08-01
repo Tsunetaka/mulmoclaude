@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import {
   parseVersionDirs,
   buildDeck,
+  isFixedSection,
+  isEditableSection,
+  computeMoveTarget,
   type SlideStructure,
   type SlideManifest,
   type DirEntry,
@@ -174,5 +177,93 @@ describe("buildDeck — merge", () => {
       last.pages.map((page) => page.id),
       ["p-zzz"],
     );
+  });
+});
+
+// ── 頁編集（固定セクション判定・移動先計算）─────────────────────────────────────
+
+describe("isFixedSection / isEditableSection", () => {
+  it("treats the first section (index 0) as fixed regardless of name", () => {
+    assert.equal(isFixedSection(0, "タイトル"), true);
+    assert.equal(isFixedSection(0, "本文"), true);
+  });
+
+  it("treats Thank You family names (any position) as fixed", () => {
+    for (const name of ["Thank You", "thankyou", "おわりに", "まとめ", "結び", " THANK YOU "]) {
+      assert.equal(isFixedSection(2, name), true, name);
+    }
+  });
+
+  it("treats the orphan 未分類 section as fixed", () => {
+    assert.equal(isFixedSection(3, "未分類"), true);
+  });
+
+  it("treats ordinary middle sections as editable", () => {
+    assert.equal(isFixedSection(1, "概要"), false);
+    assert.equal(isFixedSection(2, "本文"), false);
+    assert.equal(isEditableSection(1, "概要"), true);
+    assert.equal(isEditableSection(0, "概要"), false); // index 0 always fixed
+  });
+});
+
+// タイトル(cover) / 概要[b1,b2] / 本文[b3,b4] / Thank You(ty) の 4 セクション deck。
+function makeMoveDeck(): DeckModel {
+  const struct: SlideStructure = {
+    schema_version: 1,
+    wd: "GIT-00003",
+    version: "v001",
+    sections: [
+      { name: "タイトル", page_ids: ["p-cover0"] },
+      { name: "概要", page_ids: ["p-b1", "p-b2"] },
+      { name: "本文", page_ids: ["p-b3", "p-b4"] },
+      { name: "Thank You", page_ids: ["p-ty0000"] },
+    ],
+    pages: {
+      "p-cover0": { file: "p-cover0.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+      "p-b1": { file: "p-b1.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+      "p-b2": { file: "p-b2.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+      "p-b3": { file: "p-b3.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+      "p-b4": { file: "p-b4.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+      "p-ty0000": { file: "p-ty0000.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+    },
+  };
+  return buildDeck(struct, null);
+}
+
+describe("computeMoveTarget", () => {
+  const deck = makeMoveDeck();
+  // 編集可能フラット順序: [概要 p-b1, 概要 p-b2, 本文 p-b3, 本文 p-b4]
+
+  it("moves within a section (down): 概要 p-b1 ↓ → 概要[1]", () => {
+    assert.deepEqual(computeMoveTarget(deck, "p-b1", 1), { toSection: "概要", toIndex: 1 });
+  });
+
+  it("moves within a section (up): 本文 p-b4 ↑ → 本文[0]", () => {
+    assert.deepEqual(computeMoveTarget(deck, "p-b4", -1), { toSection: "本文", toIndex: 0 });
+  });
+
+  it("crosses into the next section (down): 概要 p-b2 ↓ → 本文[0]", () => {
+    assert.deepEqual(computeMoveTarget(deck, "p-b2", 1), { toSection: "本文", toIndex: 0 });
+  });
+
+  it("crosses into the previous section (up): 本文 p-b3 ↑ → 概要[1]", () => {
+    assert.deepEqual(computeMoveTarget(deck, "p-b3", -1), { toSection: "概要", toIndex: 1 });
+  });
+
+  it("returns null at the top of the editable range (概要 p-b1 ↑)", () => {
+    assert.equal(computeMoveTarget(deck, "p-b1", -1), null);
+  });
+
+  it("returns null at the bottom of the editable range (本文 p-b4 ↓)", () => {
+    assert.equal(computeMoveTarget(deck, "p-b4", 1), null);
+  });
+
+  it("returns null for fixed (cover / Thank You) pages", () => {
+    assert.equal(computeMoveTarget(deck, "p-cover0", 1), null);
+    assert.equal(computeMoveTarget(deck, "p-ty0000", -1), null);
+  });
+
+  it("returns null for an unknown page id", () => {
+    assert.equal(computeMoveTarget(deck, "p-nope", 1), null);
   });
 });

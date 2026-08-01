@@ -93,6 +93,61 @@ export interface DirEntry {
   type: "file" | "dir";
 }
 
+// ── 頁編集（削除・移動・追加）の固定セクション判定・移動先計算 ────────────────────
+// 表紙（先頭セクション）／Thank You 系セクションは固定＝頁の削除/移動/追加/並べ替え
+// 不可（サーバー page_ops.py と同一ルール）。orphan（未分類）も構造編集の対象外。
+
+/** buildDeck が孤児ページをまとめる末尾セクション名。構造編集の対象外。 */
+export const ORPHAN_SECTION_NAME = "未分類";
+
+// Thank You（締め）系セクション名（サーバー page_ops.py / apply_theme と一致）。
+const THANKYOU_SECTION_NAMES = new Set(["thank you", "thankyou", "おわりに", "まとめ", "結び"]);
+
+/** 先頭（表紙）／Thank You／未分類セクションは固定＝頁編集不可。 */
+export function isFixedSection(sectionIndex: number, sectionName: string): boolean {
+  if (sectionIndex === 0) return true;
+  if (sectionName === ORPHAN_SECTION_NAME) return true;
+  return THANKYOU_SECTION_NAMES.has(sectionName.trim().toLowerCase());
+}
+
+/** 頁の削除・移動・追加を許すセクションか（固定でない）。 */
+export function isEditableSection(sectionIndex: number, sectionName: string): boolean {
+  return !isFixedSection(sectionIndex, sectionName);
+}
+
+/** 移動 API に渡す移動先（セクション名＋そのセクション内 0 始まり位置）。 */
+export interface MoveTarget {
+  toSection: string;
+  toIndex: number;
+}
+
+/**
+ * 「↑（-1）／↓（+1）」1 ステップ移動の移動先を求める純関数。
+ *
+ * 編集可能セクションを跨いだフラット順序の中で pageId を direction 分だけ
+ * ずらした最終位置を求め、それを (toSection, toIndex) に写像する。toIndex は
+ * サーバー契約に合わせ「移動対象を取り除いた後の」移動先セクション内位置。
+ * 端（編集可能範囲の先頭/末尾）を越える移動、固定/未分類ページ、存在しない
+ * ページは null（＝移動不可）。
+ */
+export function computeMoveTarget(deck: DeckModel, pageId: string, direction: -1 | 1): MoveTarget | null {
+  // 編集可能セクションの頁を順に並べ、各頁に「自セクション名＋セクション内位置」を持たせる。
+  const editable: { sec: string; localIndex: number; id: string }[] = [];
+  deck.sections.forEach((sec, sectionIndex) => {
+    if (isEditableSection(sectionIndex, sec.name)) {
+      sec.pages.forEach((page, localIndex) => editable.push({ sec: sec.name, localIndex, id: page.id }));
+    }
+  });
+  const from = editable.findIndex((entry) => entry.id === pageId);
+  if (from < 0) return null;
+  const dest = from + direction;
+  if (dest < 0 || dest >= editable.length) return null; // 編集可能範囲の端を越える
+  // 隣接頁と入れ替える＝移動対象は隣接頁のスロット（セクション＋セクション内位置）へ。
+  // toIndex は隣接頁の元のセクション内位置（移動対象を取り除いた後の挿入位置と一致する）。
+  const neighbor = editable[dest];
+  return { toSection: neighbor.sec, toIndex: neighbor.localIndex };
+}
+
 // Version folder names: `v001`, `v012`, `v002-001`, `v003-001-002`, …
 // Validated segment-wise (not one regex) to avoid a nested-quantifier
 // ReDoS pattern — each sub-regex is anchored and linear.
@@ -191,7 +246,7 @@ export function buildDeck(structure: SlideStructure, manifest: SlideManifest | n
 
   const orphans = collectOrphanIds(structure);
   if (orphans.length > 0) {
-    sections.push({ name: "未分類", pages: orphans.map((pageId) => makeDeckPage(pageId, ++pageNo, structure, manifest)) });
+    sections.push({ name: ORPHAN_SECTION_NAME, pages: orphans.map((pageId) => makeDeckPage(pageId, ++pageNo, structure, manifest)) });
   }
 
   const pages = sections.flatMap((sec) => sec.pages);

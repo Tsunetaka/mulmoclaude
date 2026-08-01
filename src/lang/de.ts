@@ -1119,6 +1119,13 @@ const deMessages = {
     pageCheckoutHint: "Ausgewählte Seiten zur Bearbeitung an Windows senden",
     pageCheckin: "Einchecken",
     pageCheckinHint: "Ausgecheckte Seiten zurückgeben oder verwerfen",
+    pageEdit: "Seiten bearbeiten",
+    pageEditHint: "Seiten löschen, verschieben oder hinzufügen (Titel / Thank You fest)",
+    pageMoveUp: "Nach oben",
+    pageMoveDown: "Nach unten",
+    pageDelete: "Löschen",
+    pageAdd: "Seite hinzufügen",
+    pageFixed: "Fest",
   },
   mulmoPoint: {
     title: "Über MulmoPoint",

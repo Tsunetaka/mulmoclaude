@@ -74,36 +74,95 @@
               <span class="text-[10px] font-bold text-[#8aacd0] flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
                 {{ sec.name }}
               </span>
+              <span
+                v-if="pageEditMode && !isEditableSection(si, sec.name)"
+                class="material-icons text-[11px] text-[#5a7593] flex-shrink-0"
+                :title="t('slides.pageFixed')"
+                >lock</span
+              >
               <span class="text-[9px] text-[#2a3a5a] flex-shrink-0">{{ sec.pages.length }}p</span>
             </button>
 
             <!-- スライド一覧 -->
             <div v-if="!collapsedSections.has(si)" class="flex flex-col gap-1 p-1.5">
-              <button
-                v-for="page in sec.pages"
-                :key="page.id"
-                class="rounded overflow-hidden border transition-all text-left w-full"
-                :class="
-                  currentId === page.id ? 'border-[#3a78cc] bg-[#0d2040] shadow-[0_0_0_1px_#3a78cc40]' : 'border-[#1e2e48] bg-[#0a1220] hover:border-[#3a5a88]'
-                "
-                @click="selectId(page.id)"
-              >
-                <div class="relative">
-                  <img :src="thumbUrl(page)" :alt="`p.${page.pageNo}`" class="w-full object-cover bg-[#141e2e]" loading="lazy" />
-                  <!-- eslint-disable @intlify/vue-i18n/no-raw-text -- compact status badge; slides tool is an internal workspace feature -->
-                  <div v-if="page.checkedOut" class="absolute inset-0 bg-red-900/60 flex items-center justify-center">
-                    <span class="text-[9px] font-bold text-red-200">CO中</span>
+              <div v-for="page in sec.pages" :key="page.id" class="flex flex-col">
+                <button
+                  class="rounded overflow-hidden border transition-all text-left w-full"
+                  :class="
+                    currentId === page.id
+                      ? 'border-[#3a78cc] bg-[#0d2040] shadow-[0_0_0_1px_#3a78cc40]'
+                      : 'border-[#1e2e48] bg-[#0a1220] hover:border-[#3a5a88]'
+                  "
+                  @click="selectId(page.id)"
+                >
+                  <div class="relative">
+                    <img :src="thumbUrl(page)" :alt="`p.${page.pageNo}`" class="w-full object-cover bg-[#141e2e]" loading="lazy" />
+                    <!-- eslint-disable @intlify/vue-i18n/no-raw-text -- compact status badge; slides tool is an internal workspace feature -->
+                    <div v-if="page.checkedOut" class="absolute inset-0 bg-red-900/60 flex items-center justify-center">
+                      <span class="text-[9px] font-bold text-red-200">CO中</span>
+                    </div>
+                    <!-- dirty ドット（編集済み・キャンバス再生成待ち） -->
+                    <div v-if="page.dirty" class="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full bg-yellow-400 shadow" />
+                    <!-- eslint-enable @intlify/vue-i18n/no-raw-text -->
                   </div>
-                  <!-- dirty ドット（編集済み・キャンバス再生成待ち） -->
-                  <div v-if="page.dirty" class="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full bg-yellow-400 shadow" />
-                  <!-- eslint-enable @intlify/vue-i18n/no-raw-text -->
+                  <div class="px-1.5 py-1 flex items-baseline gap-1">
+                    <span class="text-[9px] font-bold text-[#4a6a8a] flex-shrink-0">{{ page.pageNo }}</span>
+                    <span class="text-[9px] text-[#3a5a7a] overflow-hidden text-ellipsis whitespace-nowrap flex-1">
+                      {{ page.title }}
+                    </span>
+                  </div>
+                </button>
+
+                <!-- 頁編集コントロール（トグル ON 時）。編集可能セクションは ↑↓/🗑、
+                     表紙／Thank You は錠前のみ（固定）。 -->
+                <div v-if="pageEditMode" class="flex items-center gap-0.5 px-0.5 pt-0.5 pb-1">
+                  <template v-if="isEditableSection(si, sec.name)">
+                    <button
+                      class="pe-btn"
+                      :disabled="peBusy || !canMovePage(page, -1)"
+                      :title="t('slides.pageMoveUp')"
+                      :aria-label="t('slides.pageMoveUp')"
+                      @click.stop="movePage(page, -1)"
+                    >
+                      <span class="material-icons text-[13px]">arrow_upward</span>
+                    </button>
+                    <button
+                      class="pe-btn"
+                      :disabled="peBusy || !canMovePage(page, 1)"
+                      :title="t('slides.pageMoveDown')"
+                      :aria-label="t('slides.pageMoveDown')"
+                      @click.stop="movePage(page, 1)"
+                    >
+                      <span class="material-icons text-[13px]">arrow_downward</span>
+                    </button>
+                    <span class="flex-1"></span>
+                    <button
+                      class="pe-btn pe-btn--danger"
+                      :disabled="peBusy"
+                      :title="t('slides.pageDelete')"
+                      :aria-label="t('slides.pageDelete')"
+                      @click.stop="askDeletePage(page)"
+                    >
+                      <span class="material-icons text-[13px]">delete</span>
+                    </button>
+                  </template>
+                  <div v-else class="flex items-center gap-1 text-[9px] text-[#5a7593] px-1 py-0.5">
+                    <span class="material-icons text-[12px]">lock</span>
+                    <span>{{ t("slides.pageFixed") }}</span>
+                  </div>
                 </div>
-                <div class="px-1.5 py-1 flex items-baseline gap-1">
-                  <span class="text-[9px] font-bold text-[#4a6a8a] flex-shrink-0">{{ page.pageNo }}</span>
-                  <span class="text-[9px] text-[#3a5a7a] overflow-hidden text-ellipsis whitespace-nowrap flex-1">
-                    {{ page.title }}
-                  </span>
-                </div>
+              </div>
+
+              <!-- ＋頁追加（編集可能セクションのみ）。空のテーマ適用済み本文ページを末尾へ挿入。 -->
+              <button
+                v-if="pageEditMode && isEditableSection(si, sec.name)"
+                class="pe-add-btn"
+                :disabled="peBusy"
+                :aria-label="t('slides.pageAdd')"
+                @click="addPage(sec.name, sec.pages.length)"
+              >
+                <span class="material-icons text-[13px]">add</span>
+                <span>{{ t("slides.pageAdd") }}</span>
               </button>
             </div>
           </template>
@@ -690,6 +749,69 @@
         </div>
       </div>
     </div>
+
+    <!-- ── 頁編集モーダル（削除確認 + 削除/移動/追加の SSE 進捗） ── -->
+    <div v-if="pageEditModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closePageEditModal">
+      <div class="w-[32rem] max-w-[90vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
+        <div class="flex items-center gap-2 px-4 py-2.5 bg-[#0a1830] border-b border-[#1a2a44]">
+          <span class="material-icons text-sm text-[#4a8acc]">low_priority</span>
+          <span class="text-sm font-bold text-[#8aacd0] flex-1">{{ pageEditTitle }} — {{ wdId }}（{{ version }}）</span>
+          <button
+            class="text-[#3a5a7a] hover:text-[#6a9acc] disabled:opacity-30"
+            :disabled="pageEditPhase === 'running'"
+            aria-label="閉じる"
+            @click="closePageEditModal"
+          >
+            <span class="material-icons text-sm">close</span>
+          </button>
+        </div>
+
+        <!-- ① 削除の確認 -->
+        <div v-if="pageEditPhase === 'confirm'" class="px-4 py-3 space-y-2 text-[#8aacd0]">
+          <p class="text-xs leading-relaxed">
+            この頁を削除します。ページ pptx とプレビュー画像は削除され、後続ページの 通し番号（フッター）は自動で振り直されます。<b class="text-red-300"
+              >元に戻せません</b
+            >。
+          </p>
+          <p v-if="pendingDelete" class="text-[11px] text-[#6a8aaa]">
+            対象: p.{{ pendingDelete.pageNo }}<span v-if="pendingDelete.title">（{{ pendingDelete.title }}）</span>
+          </p>
+        </div>
+
+        <!-- ② SSE ログ -->
+        <div
+          v-else
+          class="px-4 py-3 font-mono text-[11px] text-[#7aa0c0] bg-[#060b14] max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed"
+          style="scrollbar-width: thin; scrollbar-color: #1a2a3a transparent"
+        >
+          <div v-for="(line, i) in pageEditLog" :key="i">{{ line }}</div>
+          <div v-if="pageEditPhase === 'running'" class="text-yellow-300 animate-pulse">処理中...</div>
+          <div v-if="pageEditPhase === 'done'" class="text-green-300">完了しました。canvas は「更新」ボタンで高解像度化できます。</div>
+          <div v-if="pageEditPhase === 'error'" class="text-red-300">実行できませんでした。上のメッセージをご確認ください。</div>
+        </div>
+
+        <!-- フッター -->
+        <div class="flex justify-end gap-2 px-4 py-2.5 bg-[#0a1220] border-t border-[#1a2a44]">
+          <button
+            v-if="pageEditPhase === 'confirm'"
+            class="px-3 py-1.5 rounded text-xs text-[#8aacd0] bg-[#16233c] hover:bg-[#1e2e48]"
+            @click="closePageEditModal"
+          >
+            キャンセル
+          </button>
+          <button v-if="pageEditPhase === 'confirm'" class="px-3 py-1.5 rounded text-xs text-white bg-red-700 hover:bg-red-600" @click="confirmDeletePage">
+            削除する
+          </button>
+          <button
+            v-if="pageEditPhase === 'done' || pageEditPhase === 'error'"
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a]"
+            @click="closePageEditModal"
+          >
+            閉じる
+          </button>
+        </div>
+      </div>
+    </div>
     <!-- eslint-enable @intlify/vue-i18n/no-raw-text -->
   </div>
 </template>
@@ -704,7 +826,17 @@ import { API_ROUTES } from "../config/apiRoutes";
 import { useAppApi } from "../composables/useAppApi";
 import { useActiveSession } from "../composables/useActiveSession";
 import { useSlideEditor, UNAPPLIED_THEME } from "../composables/useSlideEditor";
-import { parseVersionDirs, isVersionName, buildDeck, type SlideStructure, type SlideManifest, type DeckModel, type DeckPage } from "../utils/slides/slideDeck";
+import {
+  parseVersionDirs,
+  isVersionName,
+  buildDeck,
+  isEditableSection,
+  computeMoveTarget,
+  type SlideStructure,
+  type SlideManifest,
+  type DeckModel,
+  type DeckPage,
+} from "../utils/slides/slideDeck";
 import { SLIDE_ROLE_ID } from "../utils/slides/newDeck";
 
 const { t } = useI18n();
@@ -883,6 +1015,110 @@ const requestedVersion = computed<string | null>(() => {
   const value = Array.isArray(query) ? query[0] : query;
   return typeof value === "string" && isVersionName(value) ? value : null;
 });
+
+// ── 頁編集（削除・移動・新規追加・SSE）──────────────────────────────────────────
+// リボンの「頁編集」トグル ON でサイドバー各サムネに操作ボタン、編集可能セクション
+// 末尾に「＋頁追加」を出す。表紙／Thank You は固定（page_ops.py が拒否・UI も錠前表示）。
+const { pageEditMode } = slideEditor; // template auto-unwrap 用に top-level 参照
+const peBusy = ref(false); // 頁編集の実行中（多重実行防止）
+const pageEditModalOpen = ref(false);
+const pageEditPhase = ref<"confirm" | "running" | "done" | "error">("running");
+const pageEditLog = ref<string[]>([]);
+const pageEditTitle = ref<string>(""); // モーダル見出し（削除/移動/追加）
+const pendingDelete = ref<DeckPage | null>(null); // 削除確認中のページ
+const pageAddSelectId = ref<string>(""); // 追加完了後に選択する新規ページ ID（PAGE_ID: 行から）
+
+/** ↑↓ 移動が可能か（編集可能範囲の端では false）。 */
+function canMovePage(page: DeckPage, direction: -1 | 1): boolean {
+  return deck.value !== null && computeMoveTarget(deck.value, page.id, direction) !== null;
+}
+
+/** 削除確認モーダルを開く（破壊的操作なので確認フェーズを挟む）。 */
+function askDeletePage(page: DeckPage): void {
+  if (peBusy.value) return;
+  pendingDelete.value = page;
+  pageEditTitle.value = "頁の削除";
+  pageEditLog.value = [];
+  pageEditPhase.value = "confirm";
+  pageEditModalOpen.value = true;
+}
+
+/** 削除の確定（確認モーダルの「削除する」）。 */
+async function confirmDeletePage(): Promise<void> {
+  const page = pendingDelete.value;
+  if (!page) return;
+  await runPageEdit(API_ROUTES.work.pageDelete, { pageIds: [page.id] }, "頁の削除");
+  pendingDelete.value = null;
+}
+
+/** ↑↓ 移動を即実行（確認なし・進捗モーダル）。 */
+async function movePage(page: DeckPage, direction: -1 | 1): Promise<void> {
+  if (peBusy.value || !deck.value) return;
+  const target = computeMoveTarget(deck.value, page.id, direction);
+  if (!target) return;
+  await runPageEdit(API_ROUTES.work.pageMove, { pageId: page.id, toSection: target.toSection, toIndex: target.toIndex }, "頁の移動");
+}
+
+/** ＋頁追加を即実行（編集可能セクション末尾へ空の本文ページを挿入）。 */
+async function addPage(section: string, toIndex: number): Promise<void> {
+  if (peBusy.value) return;
+  pageAddSelectId.value = "";
+  await runPageEdit(API_ROUTES.work.pageAdd, { section, toIndex }, "頁の追加");
+}
+
+/** SSE ログの `PAGE_ID:<id>` 行から新規ページ ID を拾う（頁追加時のみ）。 */
+function pickAddedPageId(log: string[]): string {
+  const marker = "PAGE_ID:";
+  const line = log.find((entry) => entry.includes(marker));
+  return line ? line.slice(line.indexOf(marker) + marker.length).trim() : "";
+}
+
+/** 頁編集後にデッキを再読込し、追加した新規ページがあれば選択する。 */
+async function reloadDeckAfterEdit(): Promise<void> {
+  await reloadDeck();
+  if (pageAddSelectId.value && deck.value?.pages.some((page) => page.id === pageAddSelectId.value)) {
+    currentId.value = pageAddSelectId.value;
+  }
+}
+
+/** 頁編集 SSE の共通実行。成功で deck 再読込（追加時は新規ページを選択）。 */
+async function runPageEdit(routePattern: string, body: Record<string, unknown>, label: string): Promise<void> {
+  if (!wdId.value || !version.value) return;
+  peBusy.value = true;
+  pageEditTitle.value = label;
+  pageEditModalOpen.value = true;
+  pageEditPhase.value = "running";
+  pageEditLog.value = [];
+  const url = fillRoute(routePattern, wdId.value, version.value);
+  try {
+    const res = await apiFetchRaw(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok || !res.body) {
+      pageEditLog.value.push(await errorLineFromResponse(res));
+      pageEditPhase.value = "error";
+      return;
+    }
+    const done = await drainSse(res.body, pageEditLog);
+    pageAddSelectId.value = pickAddedPageId(pageEditLog.value);
+    pageEditPhase.value = done ? "done" : "error";
+    if (done) await reloadDeckAfterEdit();
+  } catch (err) {
+    pageEditLog.value.push(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    pageEditPhase.value = "error";
+  } finally {
+    peBusy.value = false;
+  }
+}
+
+/** 頁編集モーダルを閉じる（実行中は閉じない）。 */
+function closePageEditModal(): void {
+  if (peBusy.value) return;
+  pageEditModalOpen.value = false;
+  pendingDelete.value = null;
+}
 
 const pptxBasename = computed(() => sourcePptx.value.replace(/\.pptx$/i, ""));
 
@@ -1505,6 +1741,22 @@ onUnmounted(() => {
 /* ── ナビボタン ── */
 .nav-btn {
   @apply text-[11px] bg-[#1a2a44] hover:bg-[#2a3a66] text-[#6a9acc] px-2.5 py-1 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed;
+}
+
+/* ── 頁編集コントロール（サイドバー・トグル ON 時） ── */
+.pe-btn {
+  @apply flex items-center justify-center w-5 h-5 rounded text-[#7aa0c0]
+         bg-[#12203a] hover:bg-[#1e3252] border border-[#22304c]
+         transition-colors disabled:opacity-25 disabled:cursor-not-allowed;
+}
+.pe-btn--danger {
+  @apply text-red-300 hover:text-red-100 hover:bg-red-900/50 border-[#3a2030];
+}
+.pe-add-btn {
+  @apply flex items-center justify-center gap-1 w-full py-1 rounded text-[9px] font-medium
+         text-[#6aaade] bg-[#0e2036] hover:bg-[#16304e]
+         border border-dashed border-[#2a4060] hover:border-[#3a5a8a]
+         transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
 }
 
 /* ── Claude チャットペイン ── */

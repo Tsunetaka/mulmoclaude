@@ -556,6 +556,18 @@ const HOST_API_ROUTES = {
      *  discard 群＝取り込まずロック解除のみ（`--mode discard`）＋Windows 側掃除。
      *  body `{ apply?: string[], discard?: string[] }`（両省略＝全ロック中ページを apply）。 */
     pageCheckin: "/api/work/:wd/:version/page-checkin",
+    /** POST — 頁を削除する「頁編集」（SSE）。`page_ops.py delete` で structure から外し
+     *  `.pages/<id>.pptx` とレンダ済み画像を削除→フッター通し番号を振り直し→gen_thumbs。
+     *  表紙（先頭セクション）／Thank You セクションの頁は 422 相当のエラーで拒否。
+     *  チェックアウト中は 409（blockIfLockedForBulk）。body `{ pageIds: string[] }`。 */
+    pageDelete: "/api/work/:wd/:version/page-delete",
+    /** POST — 頁を移動／並べ替えする「頁編集」（SSE）。`page_ops.py move`。表紙・Thank You
+     *  セクションは移動元・移動先とも不可。toIndex は移動対象を取り除いた後の移動先
+     *  セクション内 0 始まり位置。body `{ pageId, toSection, toIndex }`。 */
+    pageMove: "/api/work/:wd/:version/page-move",
+    /** POST — テーマ適用済みの空の本文ページを挿入する「頁編集」（SSE）。`page_ops.py add`。
+     *  表紙・Thank You セクションには追加不可。body `{ section, toIndex, template? }`。 */
+    pageAdd: "/api/work/:wd/:version/page-add",
   },
 
   wiki: {

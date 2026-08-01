@@ -1105,6 +1105,13 @@ const ptBRMessages = {
     pageCheckoutHint: "Enviar as páginas selecionadas para o Windows para edição",
     pageCheckin: "Check-in",
     pageCheckinHint: "Devolver ou descartar as páginas em check-out",
+    pageEdit: "Editar páginas",
+    pageEditHint: "Excluir, mover ou adicionar páginas (capa / Thank You fixas)",
+    pageMoveUp: "Mover para cima",
+    pageMoveDown: "Mover para baixo",
+    pageDelete: "Excluir",
+    pageAdd: "Adicionar página",
+    pageFixed: "Fixa",
   },
   mulmoPoint: {
     title: "Sobre o MulmoPoint",

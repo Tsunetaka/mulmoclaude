@@ -1085,6 +1085,13 @@ const zhMessages = {
     pageCheckoutHint: "将所选页面导出到 Windows 手动编辑",
     pageCheckin: "签入",
     pageCheckinHint: "将检出的页面归还或丢弃",
+    pageEdit: "页面编辑",
+    pageEditHint: "删除、移动或添加页面（封面 / Thank You 固定）",
+    pageMoveUp: "上移",
+    pageMoveDown: "下移",
+    pageDelete: "删除",
+    pageAdd: "添加页面",
+    pageFixed: "固定",
   },
   mulmoPoint: {
     title: "关于 MulmoPoint",

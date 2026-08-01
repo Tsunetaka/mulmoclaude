@@ -1100,6 +1100,13 @@ const koMessages = {
     pageCheckoutHint: "선택한 페이지를 Windows로 내보내 직접 편집",
     pageCheckin: "체크인",
     pageCheckinHint: "체크아웃한 페이지를 되돌리거나 폐기",
+    pageEdit: "페이지 편집",
+    pageEditHint: "페이지 삭제·이동·추가 (표지 / Thank You 고정)",
+    pageMoveUp: "위로 이동",
+    pageMoveDown: "아래로 이동",
+    pageDelete: "삭제",
+    pageAdd: "페이지 추가",
+    pageFixed: "고정",
   },
   mulmoPoint: {
     title: "MulmoPoint 정보",

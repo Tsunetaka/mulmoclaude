@@ -1117,6 +1117,13 @@ const esMessages = {
     pageCheckoutHint: "Enviar las páginas seleccionadas a Windows para editarlas",
     pageCheckin: "Devolver",
     pageCheckinHint: "Devolver o descartar las páginas extraídas",
+    pageEdit: "Editar páginas",
+    pageEditHint: "Eliminar, mover o añadir páginas (portada / Thank You fijas)",
+    pageMoveUp: "Subir",
+    pageMoveDown: "Bajar",
+    pageDelete: "Eliminar",
+    pageAdd: "Añadir página",
+    pageFixed: "Fija",
   },
   mulmoPoint: {
     title: "Acerca de MulmoPoint",

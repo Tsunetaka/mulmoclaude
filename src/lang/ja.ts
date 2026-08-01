@@ -1100,6 +1100,13 @@ const jaMessages = {
     pageCheckoutHint: "選んだページを Windows へ出して手編集する",
     pageCheckin: "チェックイン",
     pageCheckinHint: "チェックアウト中のページを戻す／破棄する",
+    pageEdit: "頁編集",
+    pageEditHint: "頁の削除・移動・追加（表紙／Thank You は固定）",
+    pageMoveUp: "上へ移動",
+    pageMoveDown: "下へ移動",
+    pageDelete: "削除",
+    pageAdd: "頁追加",
+    pageFixed: "固定",
   },
   mulmoPoint: {
     title: "MulmoPoint について",

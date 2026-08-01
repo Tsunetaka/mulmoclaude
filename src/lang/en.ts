@@ -1130,6 +1130,13 @@ const enMessages = {
     pageCheckoutHint: "Send selected pages to Windows for manual editing",
     pageCheckin: "Check In",
     pageCheckinHint: "Return or discard checked-out pages",
+    pageEdit: "Edit Pages",
+    pageEditHint: "Delete, move, or add pages (cover / Thank You are fixed)",
+    pageMoveUp: "Move up",
+    pageMoveDown: "Move down",
+    pageDelete: "Delete",
+    pageAdd: "Add page",
+    pageFixed: "Fixed",
   },
   mulmoPoint: {
     title: "About MulmoPoint",
