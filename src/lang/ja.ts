@@ -1096,6 +1096,10 @@ const jaMessages = {
     template: "テンプレート",
     applyTemplate: "テンプレート適用",
     release: "リリース",
+    pageCheckout: "チェックアウト",
+    pageCheckoutHint: "選んだページを Windows へ出して手編集する",
+    pageCheckin: "チェックイン",
+    pageCheckinHint: "チェックアウト中のページを戻す／破棄する",
   },
   mulmoPoint: {
     title: "MulmoPoint について",

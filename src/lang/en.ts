@@ -1126,6 +1126,10 @@ const enMessages = {
     template: "Template",
     applyTemplate: "Apply template",
     release: "Release",
+    pageCheckout: "Check Out",
+    pageCheckoutHint: "Send selected pages to Windows for manual editing",
+    pageCheckin: "Check In",
+    pageCheckinHint: "Return or discard checked-out pages",
   },
   mulmoPoint: {
     title: "About MulmoPoint",

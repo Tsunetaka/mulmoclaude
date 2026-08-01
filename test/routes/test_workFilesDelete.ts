@@ -46,6 +46,7 @@ function extractRouteHandler(mod: RouteModule, routePath: string, method: string
 interface ResultBody {
   ok?: boolean;
   error?: string;
+  locked?: boolean;
   wsl?: { path: string; deleted: boolean };
   windows?: { path: string | null; deleted: boolean };
 }
@@ -65,8 +66,8 @@ function mockRes() {
   return { state, res: res as unknown as Response };
 }
 
-function req(params: Record<string, string>): Request {
-  return { params } as unknown as Request;
+function req(params: Record<string, string>, query: Record<string, string> = {}): Request {
+  return { params, query } as unknown as Request;
 }
 
 // ── 1. Pure guards ────────────────────────────────────────────────
@@ -229,8 +230,19 @@ describe("DELETE /api/work/:wd/:version — subfolder-limited deletion", () => {
     const { state, res } = mockRes();
     await deleteHandler(req({ wd: WD_ID, version: VERSION }), res);
     assert.equal(state.status, 409);
+    assert.equal(state.body?.locked, true, "409 carries locked:true so the UI can offer force");
     assert.ok(existsSync(path.join(wdDir(), VERSION)), "version dir preserved on 409");
     assert.ok(existsSync(path.join(fakeWinRoot, VERSION)), "Windows version dir preserved on 409");
+  });
+
+  it("with ?force=1 deletes a locked version regardless (confirm+force per §5-F)", async () => {
+    seedWd({ lockedPage: true });
+    const { state, res } = mockRes();
+    await deleteHandler(req({ wd: WD_ID, version: VERSION }, { force: "1" }), res);
+    assert.equal(state.status, 200, JSON.stringify(state.body));
+    assert.equal(state.body?.wsl?.deleted, true);
+    assert.equal(existsSync(path.join(wdDir(), VERSION)), false, "locked version force-deleted on WSL");
+    assert.ok(existsSync(path.join(fakeWinRoot, VERSION)), "Windows (D:) copy still untouched even with force");
   });
 
   it("removes the WSL side regardless of any .checkout-source (Windows never consulted)", async () => {

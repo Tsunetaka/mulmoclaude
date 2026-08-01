@@ -1081,6 +1081,10 @@ const zhMessages = {
     template: "模板",
     applyTemplate: "应用模板",
     release: "发布",
+    pageCheckout: "检出",
+    pageCheckoutHint: "将所选页面导出到 Windows 手动编辑",
+    pageCheckin: "签入",
+    pageCheckinHint: "将检出的页面归还或丢弃",
   },
   mulmoPoint: {
     title: "关于 MulmoPoint",

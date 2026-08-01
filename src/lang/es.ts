@@ -1113,6 +1113,10 @@ const esMessages = {
     template: "Plantilla",
     applyTemplate: "Aplicar plantilla",
     release: "Publicar",
+    pageCheckout: "Extraer",
+    pageCheckoutHint: "Enviar las páginas seleccionadas a Windows para editarlas",
+    pageCheckin: "Devolver",
+    pageCheckinHint: "Devolver o descartar las páginas extraídas",
   },
   mulmoPoint: {
     title: "Acerca de MulmoPoint",

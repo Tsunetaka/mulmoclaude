@@ -542,6 +542,20 @@ const HOST_API_ROUTES = {
      *  2 つのガードで 409 拒否する：① `checked_out:true` ページが残る（要チェックイン）、
      *  ② 枝番（子孫）バージョンが他に存在する（親を消すと孤立するため）。 */
     version: "/api/work/:wd/:version",
+    /** POST — 選択ページを Windows へ出す「頁単位チェックアウト」（SSE）。
+     *  `slide_struct.py checkout` で `<version>/.pages/<id>.pptx` を `.checkedoutpages/`
+     *  へコピー＋structure ロック（checked_out）し、Windows(D:) の `.checkedoutpages/` へ
+     *  rsync push する。Windows パスは `.checkout-source` → 無ければ D: スキャン
+     *  （resolveWdWindowsPath）で解決。既にロック中のページは除外し SSE に明示。
+     *  body `{ pageIds: string[] }`。 */
+    pageCheckout: "/api/work/:wd/:version/page-checkout",
+    /** POST — チェックアウト中ページを戻す／破棄する「頁単位チェックイン」（SSE）。
+     *  apply 群＝Windows `.checkedoutpages/` から pull → 編集済み pptx 存在検証（欠落は
+     *  スキップ＋警告）→ `slide_struct.py checkin --mode apply` で `.pages/` 上書き・
+     *  ロック解除・manifest dirty 化 → Windows 側掃除 → gen_thumbs（dirty のみ）。
+     *  discard 群＝取り込まずロック解除のみ（`--mode discard`）＋Windows 側掃除。
+     *  body `{ apply?: string[], discard?: string[] }`（両省略＝全ロック中ページを apply）。 */
+    pageCheckin: "/api/work/:wd/:version/page-checkin",
   },
 
   wiki: {

@@ -80,6 +80,39 @@
         </button>
         <div class="ribbon-tooltip">{{ t("slides.release") }}</div>
       </div>
+      <!-- チェックアウト — 選んだページだけを Windows へ出して手編集する（往復）。
+           SlideEditorView が頁選択モーダル → SSE で実行。 -->
+      <div class="relative group">
+        <button
+          class="ribbon-text-btn"
+          data-testid="ribbon-btn-page-checkout"
+          :aria-label="t('slides.pageCheckout')"
+          @click="slideEditor.triggerPageCheckout()"
+        >
+          <span class="material-icons text-base">file_download</span>
+          <span>{{ t("slides.pageCheckout") }}</span>
+        </button>
+        <div class="ribbon-tooltip">{{ t("slides.pageCheckoutHint") }}</div>
+      </div>
+      <!-- チェックイン — チェックアウト中ページを戻す(apply)/破棄(discard)。
+           ロック中ページが 0 のときは無効。件数をバッジ表示。 -->
+      <div class="relative group">
+        <button
+          class="ribbon-text-btn"
+          :class="{ 'ribbon-text-btn--checkin': lockedCount > 0 }"
+          data-testid="ribbon-btn-page-checkin"
+          :disabled="lockedCount === 0"
+          :aria-label="t('slides.pageCheckin')"
+          @click="slideEditor.triggerPageCheckin()"
+        >
+          <span class="material-icons text-base">file_upload</span>
+          <!-- eslint-disable-next-line @intlify/vue-i18n/no-raw-text -- count suffix appended to the i18n label -->
+          <span
+            >{{ t("slides.pageCheckin") }}<template v-if="lockedCount > 0"> ({{ lockedCount }})</template></span
+          >
+        </button>
+        <div class="ribbon-tooltip">{{ t("slides.pageCheckinHint") }}</div>
+      </div>
       <div class="relative group">
         <button
           class="ribbon-icon-btn"
@@ -145,7 +178,7 @@ const router = useRouter();
 
 // 編集ビュー（SlideEditorView）と共有するコントロール状態・アクション。
 const slideEditor = useSlideEditor();
-const { active, dirtyCount, chatOpen, theme } = slideEditor;
+const { active, dirtyCount, lockedCount, chatOpen, theme } = slideEditor;
 
 // 作業ファイル選択（ピッカー）と共有する再スキャン状態・アクション。
 const workFileSelector = useWorkFileSelector();
@@ -290,6 +323,12 @@ const visibleButtons = computed<RibbonButton[]>(() => {
 .ribbon-text-btn--release {
   @apply bg-[#1a3a1a] hover:bg-[#2a5a2a] text-green-100
          border-[#2a4a2a] hover:border-[#3a6a3a];
+}
+
+/* チェックイン待ち（lockedCount>0）— ロック中サムネの赤帯と同系色で「戻し待ち」を示す */
+.ribbon-text-btn--checkin {
+  @apply bg-red-900 hover:bg-red-800 text-red-50
+         border-red-700 hover:border-red-600;
 }
 
 /* ── バルーンヘルプ（ボタン下側に表示） ── */

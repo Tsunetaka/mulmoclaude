@@ -1115,6 +1115,10 @@ const deMessages = {
     template: "Vorlage",
     applyTemplate: "Vorlage anwenden",
     release: "Freigeben",
+    pageCheckout: "Auschecken",
+    pageCheckoutHint: "Ausgewählte Seiten zur Bearbeitung an Windows senden",
+    pageCheckin: "Einchecken",
+    pageCheckinHint: "Ausgecheckte Seiten zurückgeben oder verwerfen",
   },
   mulmoPoint: {
     title: "Über MulmoPoint",

@@ -1096,6 +1096,10 @@ const koMessages = {
     template: "템플릿",
     applyTemplate: "템플릿 적용",
     release: "릴리스",
+    pageCheckout: "체크아웃",
+    pageCheckoutHint: "선택한 페이지를 Windows로 내보내 직접 편집",
+    pageCheckin: "체크인",
+    pageCheckinHint: "체크아웃한 페이지를 되돌리거나 폐기",
   },
   mulmoPoint: {
     title: "MulmoPoint 정보",

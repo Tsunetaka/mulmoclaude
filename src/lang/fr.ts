@@ -1104,6 +1104,10 @@ const frMessages = {
     template: "Modèle",
     applyTemplate: "Appliquer le modèle",
     release: "Publier",
+    pageCheckout: "Extraire",
+    pageCheckoutHint: "Envoyer les pages sélectionnées vers Windows pour édition",
+    pageCheckin: "Archiver",
+    pageCheckinHint: "Réintégrer ou abandonner les pages extraites",
   },
   mulmoPoint: {
     title: "À propos de MulmoPoint",

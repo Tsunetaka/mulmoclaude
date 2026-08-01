@@ -501,6 +501,192 @@
         </div>
       </div>
     </div>
+
+    <!-- 頁チェックアウトモーダル（選択ページを Windows へ出す・複数可・SSE） -->
+    <div v-if="checkoutModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeCheckoutModal">
+      <div class="w-[42rem] max-w-[92vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
+        <div class="flex items-center gap-2 px-4 py-2.5 bg-[#0a1830] border-b border-[#1a2a44]">
+          <span class="material-icons text-sm text-[#4a8acc]">file_download</span>
+          <span class="text-sm font-bold text-[#8aacd0] flex-1">ページをチェックアウト — {{ wdId }}（{{ version }}）</span>
+          <button
+            class="text-[#3a5a7a] hover:text-[#6a9acc] disabled:opacity-30"
+            :disabled="checkoutPhase === 'running'"
+            aria-label="閉じる"
+            @click="closeCheckoutModal"
+          >
+            <span class="material-icons text-sm">close</span>
+          </button>
+        </div>
+
+        <!-- 選択フェーズ：サムネ一覧＋チェックボックス（ロック済みは選択不可） -->
+        <div v-if="checkoutPhase === 'choose'" class="px-4 py-3 space-y-3">
+          <p class="text-[11px] text-[#8aacd0] leading-relaxed">
+            Windows(D:) で手編集するページを選んでください（複数可）。チェックアウト中のページは Claude
+            編集・一括操作（テーマ／テンプレ適用）・リリースがブロックされます。
+          </p>
+          <div class="grid grid-cols-4 gap-2 max-h-[22rem] overflow-y-auto pr-1" style="scrollbar-width: thin; scrollbar-color: #1a2a3a transparent">
+            <label
+              v-for="page in allPages"
+              :key="page.id"
+              class="relative flex flex-col items-center gap-1 p-1.5 rounded border cursor-pointer"
+              :class="
+                page.checkedOut
+                  ? 'border-red-800 opacity-60 cursor-not-allowed'
+                  : checkoutSelected.has(page.id)
+                    ? 'border-[#4a8acc] bg-[#0a1830]'
+                    : 'border-[#1a2a44] hover:border-[#2a3a60]'
+              "
+            >
+              <img :src="thumbUrl(page)" class="w-full aspect-video object-contain bg-[#060b14] rounded" alt="" />
+              <div class="flex items-center gap-1 text-[10px] text-[#8aacd0]">
+                <input
+                  type="checkbox"
+                  class="accent-[#4a8acc]"
+                  :disabled="page.checkedOut"
+                  :checked="checkoutSelected.has(page.id)"
+                  @change="toggleCheckoutPage(page.id)"
+                />
+                <span>p.{{ page.pageNo }}</span>
+                <span v-if="page.checkedOut" class="text-red-300 font-bold">CO中</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- SSE ログ -->
+        <div
+          v-else
+          class="px-4 py-3 font-mono text-[11px] text-[#7aa0c0] bg-[#060b14] max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed"
+          style="scrollbar-width: thin; scrollbar-color: #1a2a3a transparent"
+        >
+          <div v-for="(line, i) in checkoutLog" :key="i">{{ line }}</div>
+          <div v-if="checkoutPhase === 'running'" class="text-yellow-300 animate-pulse">チェックアウト中...</div>
+          <div v-if="checkoutPhase === 'done'" class="text-green-300">
+            完了しました。Windows の .checkedoutpages で編集し、「チェックイン」で戻してください。
+          </div>
+        </div>
+
+        <!-- フッター -->
+        <div class="flex justify-end gap-2 px-4 py-2.5 bg-[#0a1220] border-t border-[#1a2a44]">
+          <button
+            v-if="checkoutPhase === 'choose'"
+            class="px-3 py-1.5 rounded text-xs text-[#8aacd0] bg-[#16233c] hover:bg-[#1e2e48]"
+            @click="closeCheckoutModal"
+          >
+            キャンセル
+          </button>
+          <button
+            v-if="checkoutPhase === 'choose'"
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a] disabled:opacity-40"
+            :disabled="checkoutSelected.size === 0"
+            @click="runPageCheckout"
+          >
+            チェックアウト実行（{{ checkoutSelected.size }}）
+          </button>
+          <button
+            v-if="checkoutPhase === 'done' || checkoutPhase === 'error'"
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a]"
+            @click="closeCheckoutModal"
+          >
+            閉じる
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 頁チェックインモーダル（戻す(apply)/破棄(discard) を各行で選ぶ・SSE） -->
+    <div v-if="checkinModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeCheckinModal">
+      <div class="w-[42rem] max-w-[92vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
+        <div class="flex items-center gap-2 px-4 py-2.5 bg-[#0a1830] border-b border-[#1a2a44]">
+          <span class="material-icons text-sm text-[#4a8acc]">file_upload</span>
+          <span class="text-sm font-bold text-[#8aacd0] flex-1">ページをチェックイン — {{ wdId }}（{{ version }}）</span>
+          <button
+            class="text-[#3a5a7a] hover:text-[#6a9acc] disabled:opacity-30"
+            :disabled="checkinPhase === 'running'"
+            aria-label="閉じる"
+            @click="closeCheckinModal"
+          >
+            <span class="material-icons text-sm">close</span>
+          </button>
+        </div>
+
+        <!-- 選択フェーズ：ロック中ページ一覧＋各行 apply/discard -->
+        <div v-if="checkinPhase === 'choose'" class="px-4 py-3 space-y-3">
+          <p class="text-[11px] text-[#8aacd0] leading-relaxed">
+            チェックアウト中のページを戻します。各ページで「戻す」（Windows の編集を取り込む）か「破棄」（取り込まずロックだけ解除）を選べます。
+          </p>
+          <div class="space-y-2 max-h-[22rem] overflow-y-auto pr-1" style="scrollbar-width: thin; scrollbar-color: #1a2a3a transparent">
+            <div v-for="page in lockedPages" :key="page.id" class="flex items-center gap-3 p-2 rounded border border-[#1a2a44] bg-[#0a1220]">
+              <img :src="thumbUrl(page)" class="w-20 aspect-video object-contain bg-[#060b14] rounded flex-shrink-0" alt="" />
+              <div class="flex-1 min-w-0">
+                <div class="text-xs text-[#8aacd0] truncate">p.{{ page.pageNo }} {{ page.title }}</div>
+                <div class="text-[10px] text-red-300">
+                  CO中<template v-if="page.checkoutBy">（{{ page.checkoutBy }}）</template>
+                </div>
+              </div>
+              <label class="flex items-center gap-1 text-[11px] text-[#8aacd0] cursor-pointer">
+                <input
+                  type="radio"
+                  class="accent-[#4a8acc]"
+                  :name="`ci-${page.id}`"
+                  :checked="checkinModes[page.id] !== 'discard'"
+                  @change="setCheckinMode(page.id, 'apply')"
+                />
+                戻す
+              </label>
+              <label class="flex items-center gap-1 text-[11px] text-yellow-300 cursor-pointer">
+                <input
+                  type="radio"
+                  class="accent-yellow-500"
+                  :name="`ci-${page.id}`"
+                  :checked="checkinModes[page.id] === 'discard'"
+                  @change="setCheckinMode(page.id, 'discard')"
+                />
+                破棄
+              </label>
+            </div>
+          </div>
+          <div v-if="lockedPages.length === 0" class="text-[11px] text-[#6a8aaa]">チェックアウト中のページはありません。</div>
+        </div>
+
+        <!-- SSE ログ -->
+        <div
+          v-else
+          class="px-4 py-3 font-mono text-[11px] text-[#7aa0c0] bg-[#060b14] max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed"
+          style="scrollbar-width: thin; scrollbar-color: #1a2a3a transparent"
+        >
+          <div v-for="(line, i) in checkinLog" :key="i">{{ line }}</div>
+          <div v-if="checkinPhase === 'running'" class="text-yellow-300 animate-pulse">チェックイン中...</div>
+          <div v-if="checkinPhase === 'done'" class="text-green-300">完了しました。高解像度の反映は「canvas 更新」で行ってください。</div>
+        </div>
+
+        <!-- フッター -->
+        <div class="flex justify-end gap-2 px-4 py-2.5 bg-[#0a1220] border-t border-[#1a2a44]">
+          <button
+            v-if="checkinPhase === 'choose'"
+            class="px-3 py-1.5 rounded text-xs text-[#8aacd0] bg-[#16233c] hover:bg-[#1e2e48]"
+            @click="closeCheckinModal"
+          >
+            キャンセル
+          </button>
+          <button
+            v-if="checkinPhase === 'choose'"
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a] disabled:opacity-40"
+            :disabled="lockedPages.length === 0"
+            @click="runPageCheckin"
+          >
+            チェックイン実行
+          </button>
+          <button
+            v-if="checkinPhase === 'done' || checkinPhase === 'error'"
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a]"
+            @click="closeCheckinModal"
+          >
+            閉じる
+          </button>
+        </div>
+      </div>
+    </div>
     <!-- eslint-enable @intlify/vue-i18n/no-raw-text -->
   </div>
 </template>
@@ -580,6 +766,30 @@ const releasePushedToWindows = computed<boolean>(() => releaseLog.value.some((li
 
 /** dirty（canvas 再生成待ち）ページ数。ヘッダーバッジと確認文言に使う。 */
 const dirtyCount = computed<number>(() => deck.value?.pages.filter((page) => page.dirty).length ?? 0);
+
+// ── 頁チェックアウト／チェックインモーダル（選択ページを Windows へ往復・SSE） ─────
+/** モーダルの状態遷移（選択 → 実行中 → 完了/エラー）。 */
+type ModalPhase = "choose" | "running" | "done" | "error";
+/** チェックイン各行の扱い（apply＝戻す／discard＝破棄）。 */
+type CheckinMode = "apply" | "discard";
+
+const checkoutModalOpen = ref(false);
+const checkoutPhase = ref<ModalPhase>("choose");
+const checkoutLog = ref<string[]>([]);
+const checkoutSelected = ref<Set<string>>(new Set());
+
+const checkinModalOpen = ref(false);
+const checkinPhase = ref<ModalPhase>("choose");
+const checkinLog = ref<string[]>([]);
+/** ページ ID → "apply"（戻す）| "discard"（破棄）。チェックイン各行の選択（既定 apply）。 */
+const checkinModes = ref<Record<string, CheckinMode>>({});
+
+/** 全ページ（チェックアウトモーダルの一覧用）。 */
+const allPages = computed<DeckPage[]>(() => deck.value?.pages ?? []);
+/** チェックアウト中（ロック中）ページ（チェックインモーダルの一覧用）。 */
+const lockedPages = computed<DeckPage[]>(() => deck.value?.pages.filter((page) => page.checkedOut) ?? []);
+/** チェックアウト中ページ数（リボンの「チェックイン」ボタン活性/バッジ用）。 */
+const lockedCount = computed<number>(() => lockedPages.value.length);
 
 // ── Chat pane state ──────────────────────────────────────────────────────────
 
@@ -987,6 +1197,110 @@ async function runRelease(): Promise<void> {
   }
 }
 
+// ── 頁チェックアウト（リボンの「チェックアウト」ボタン発） ────────────────────
+// 選んだページだけを .checkedoutpages へ出し Windows(D:) へ push（往復）。ロック中は
+// Claude 編集・一括操作・リリースがブロックされる。完了後はデッキ再読込でバッジ反映。
+
+function openCheckoutModal(): void {
+  checkoutLog.value = [];
+  checkoutPhase.value = "choose";
+  checkoutSelected.value = new Set();
+  checkoutModalOpen.value = true;
+}
+
+function closeCheckoutModal(): void {
+  if (checkoutPhase.value === "running") return; // 実行中は閉じさせない
+  checkoutModalOpen.value = false;
+}
+
+function toggleCheckoutPage(pageId: string): void {
+  const next = new Set(checkoutSelected.value);
+  if (next.has(pageId)) next.delete(pageId);
+  else next.add(pageId);
+  checkoutSelected.value = next;
+}
+
+async function runPageCheckout(): Promise<void> {
+  if (!wdId.value || !version.value) return;
+  const pageIds = [...checkoutSelected.value];
+  if (pageIds.length === 0) return;
+  checkoutPhase.value = "running";
+  checkoutLog.value = [];
+  const url = fillRoute(API_ROUTES.work.pageCheckout, wdId.value, version.value);
+  try {
+    const res = await apiFetchRaw(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageIds }),
+    });
+    if (!res.ok || !res.body) {
+      checkoutLog.value.push(`ERROR: HTTP ${res.status}`);
+      checkoutPhase.value = "error";
+      return;
+    }
+    const done = await drainSse(res.body, checkoutLog);
+    checkoutPhase.value = done ? "done" : "error";
+    if (done) await reloadDeck();
+  } catch (err) {
+    checkoutLog.value.push(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    checkoutPhase.value = "error";
+  }
+}
+
+// ── 頁チェックイン（リボンの「チェックイン」ボタン発） ────────────────────────
+// チェックアウト中ページを戻す（apply＝編集を取り込む）／破棄（discard＝取り込まず
+// ロック解除）。各行で選べる。apply があれば完了後にサムネが自動再生成される。
+
+function openCheckinModal(): void {
+  checkinLog.value = [];
+  checkinPhase.value = "choose";
+  const modes: Record<string, CheckinMode> = {};
+  for (const page of lockedPages.value) modes[page.id] = "apply"; // 既定は「戻す」
+  checkinModes.value = modes;
+  checkinModalOpen.value = true;
+}
+
+function closeCheckinModal(): void {
+  if (checkinPhase.value === "running") return; // 実行中は閉じさせない
+  checkinModalOpen.value = false;
+}
+
+function setCheckinMode(pageId: string, mode: CheckinMode): void {
+  checkinModes.value = { ...checkinModes.value, [pageId]: mode };
+}
+
+async function runPageCheckin(): Promise<void> {
+  if (!wdId.value || !version.value) return;
+  const apply: string[] = [];
+  const discard: string[] = [];
+  for (const page of lockedPages.value) {
+    if (checkinModes.value[page.id] === "discard") discard.push(page.id);
+    else apply.push(page.id);
+  }
+  if (apply.length === 0 && discard.length === 0) return;
+  checkinPhase.value = "running";
+  checkinLog.value = [];
+  const url = fillRoute(API_ROUTES.work.pageCheckin, wdId.value, version.value);
+  try {
+    const res = await apiFetchRaw(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apply, discard }),
+    });
+    if (!res.ok || !res.body) {
+      checkinLog.value.push(`ERROR: HTTP ${res.status}`);
+      checkinPhase.value = "error";
+      return;
+    }
+    const done = await drainSse(res.body, checkinLog);
+    checkinPhase.value = done ? "done" : "error";
+    if (done) await reloadDeck();
+  } catch (err) {
+    checkinLog.value.push(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    checkinPhase.value = "error";
+  }
+}
+
 // ── Chat helpers ─────────────────────────────────────────────────────────────
 
 /** 現在のスライドコンテキストをメッセージの先頭に付与する文字列を返す */
@@ -1135,12 +1449,15 @@ slideEditor.register({
   onApplyTemplate: (templateId: string) => openTemplateModal(templateId),
   onRefresh: () => openRefreshModal(),
   onRelease: () => void openReleaseModal(),
+  onPageCheckout: () => openCheckoutModal(),
+  onPageCheckin: () => openCheckinModal(),
   onToggleChat: () => {
     showChatPane.value = !showChatPane.value;
   },
 });
 watch(deck, (value) => (slideEditor.active.value = Boolean(value)), { immediate: true });
 watch(dirtyCount, (value) => (slideEditor.dirtyCount.value = value), { immediate: true });
+watch(lockedCount, (value) => (slideEditor.lockedCount.value = value), { immediate: true });
 watch(showChatPane, (value) => (slideEditor.chatOpen.value = value), { immediate: true });
 
 onUnmounted(() => {

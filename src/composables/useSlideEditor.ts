@@ -13,6 +13,8 @@ import { ref } from "vue";
 const active = ref(false);
 /** canvas 再生成待ちページ数（リボンの「canvas 更新」バッジ用）。 */
 const dirtyCount = ref(0);
+/** チェックアウト中（ロック中）ページ数（リボンの「チェックイン」ボタン活性/バッジ用）。 */
+const lockedCount = ref(0);
 /** チャットペインが開いているか（リボンのチャットトグル状態用）。 */
 const chatOpen = ref(false);
 /**
@@ -33,52 +35,68 @@ let toggleChatHandler: Handler | null = null;
 let applyThemeHandler: ThemeHandler | null = null;
 let applyTemplateHandler: TemplateHandler | null = null;
 let releaseHandler: Handler | null = null;
+let pageCheckoutHandler: Handler | null = null;
+let pageCheckinHandler: Handler | null = null;
+
+interface SlideEditorHandlers {
+  onRefresh: Handler;
+  onToggleChat: Handler;
+  onApplyTheme: ThemeHandler;
+  onApplyTemplate: TemplateHandler;
+  onRelease: Handler;
+  onPageCheckout: Handler;
+  onPageCheckin: Handler;
+}
+
+/** 編集ビューがアクション（canvas 更新・チャットトグル・テーマ／テンプレ適用・リリース・頁チェックアウト／チェックイン）を登録する。 */
+function register(handlers: SlideEditorHandlers): void {
+  refreshHandler = handlers.onRefresh;
+  toggleChatHandler = handlers.onToggleChat;
+  applyThemeHandler = handlers.onApplyTheme;
+  applyTemplateHandler = handlers.onApplyTemplate;
+  releaseHandler = handlers.onRelease;
+  pageCheckoutHandler = handlers.onPageCheckout;
+  pageCheckinHandler = handlers.onPageCheckin;
+}
+
+/** 編集ビューのアンマウント時にハンドラと状態を解除する。 */
+function unregister(): void {
+  refreshHandler = null;
+  toggleChatHandler = null;
+  applyThemeHandler = null;
+  applyTemplateHandler = null;
+  releaseHandler = null;
+  pageCheckoutHandler = null;
+  pageCheckinHandler = null;
+  active.value = false;
+  dirtyCount.value = 0;
+  lockedCount.value = 0;
+  chatOpen.value = false;
+  theme.value = UNAPPLIED_THEME;
+}
 
 export function useSlideEditor() {
   return {
     active,
     dirtyCount,
+    lockedCount,
     chatOpen,
     theme,
-    /** 編集ビューがアクション（canvas 更新・チャットトグル・テーマ／テンプレ適用・リリース）を登録する。 */
-    register(handlers: { onRefresh: Handler; onToggleChat: Handler; onApplyTheme: ThemeHandler; onApplyTemplate: TemplateHandler; onRelease: Handler }): void {
-      refreshHandler = handlers.onRefresh;
-      toggleChatHandler = handlers.onToggleChat;
-      applyThemeHandler = handlers.onApplyTheme;
-      applyTemplateHandler = handlers.onApplyTemplate;
-      releaseHandler = handlers.onRelease;
-    },
-    /** 編集ビューのアンマウント時にハンドラと状態を解除する。 */
-    unregister(): void {
-      refreshHandler = null;
-      toggleChatHandler = null;
-      applyThemeHandler = null;
-      applyTemplateHandler = null;
-      releaseHandler = null;
-      active.value = false;
-      dirtyCount.value = 0;
-      chatOpen.value = false;
-      theme.value = UNAPPLIED_THEME;
-    },
+    register,
+    unregister,
     /** リボンからの canvas 更新トリガー。 */
-    triggerRefresh(): void {
-      refreshHandler?.();
-    },
+    triggerRefresh: (): void => refreshHandler?.(),
     /** リボンからのチャット表示トグル。 */
-    triggerToggleChat(): void {
-      toggleChatHandler?.();
-    },
+    triggerToggleChat: (): void => toggleChatHandler?.(),
     /** リボンのテーマプルダウンからのテーマ適用トリガー。 */
-    triggerApplyTheme(themeId: string): void {
-      applyThemeHandler?.(themeId);
-    },
+    triggerApplyTheme: (themeId: string): void => applyThemeHandler?.(themeId),
     /** リボンのテンプレート選択からのテンプレート適用トリガー。 */
-    triggerApplyTemplate(templateId: string): void {
-      applyTemplateHandler?.(templateId);
-    },
+    triggerApplyTemplate: (templateId: string): void => applyTemplateHandler?.(templateId),
     /** リボンの「リリース」ボタンからのリリース（combine → ReleasedVersion → Windows push）トリガー。 */
-    triggerRelease(): void {
-      releaseHandler?.();
-    },
+    triggerRelease: (): void => releaseHandler?.(),
+    /** リボンの「チェックアウト」ボタンから、頁選択モーダルを開くトリガー。 */
+    triggerPageCheckout: (): void => pageCheckoutHandler?.(),
+    /** リボンの「チェックイン」ボタンから、チェックイン（戻す/破棄）モーダルを開くトリガー。 */
+    triggerPageCheckin: (): void => pageCheckinHandler?.(),
   };
 }

@@ -1346,6 +1346,10 @@ router.post(API_ROUTES.work.combine, async (req, res) => {
     res.status(400).json({ error: "valid outFilename (*.pptx) required" });
     return;
   }
+  {
+    const { wd, version } = req.params as { wd: string; version: string };
+    if (isValidWorkWdId(wd) && isValidWorkVersion(version) && (await blockIfLockedForBulk(wd, version, res))) return;
+  }
   const ctx = beginComStream(req, res);
   if (!ctx) return;
   const args = ["combine", ctx.wd, ctx.version, outFilename];
@@ -1677,6 +1681,8 @@ router.post(API_ROUTES.work.theme, async (req, res) => {
     res.status(404).json({ error: "対象バージョンに structure.json がありません" });
     return;
   }
+  // 一括操作ゲート：ロック中ページがあればブロック（先にチェックイン）。
+  if (await blockIfLockedForBulk(wd, version, res)) return;
   const ctx = beginComStream(req, res);
   if (!ctx) return;
   await runApplyTheme(wd, version, body.theme ?? "cool", ctx.send);
@@ -1806,6 +1812,8 @@ router.post(API_ROUTES.work.applyTemplate, async (req, res) => {
     res.status(404).json({ error: "対象バージョンに structure.json がありません" });
     return;
   }
+  // 一括操作ゲート：ロック中ページがあればブロック（先にチェックイン）。
+  if (await blockIfLockedForBulk(wd, version, res)) return;
   const ctx = beginComStream(req, res);
   if (!ctx) return;
   await runApplyTemplate(wd, version, body.template, body.theme, ctx.send);
@@ -1882,19 +1890,21 @@ interface DeleteSide {
   path: string | null;
   deleted: boolean;
 }
-type DeleteVersionResult = { ok: true; wd: string; version: string; wsl: DeleteSide } | { ok: false; status: number; error: string };
+type DeleteVersionResult = { ok: true; wd: string; version: string; wsl: DeleteSide } | { ok: false; status: number; error: string; locked?: boolean };
 
 // 編集中バージョンの後始末削除：WSL 側の作業サブフォルダ *だけ* を削除する（N1 本体）。
 // Windows(D:) には一切触れない（編集中版は WSL のみに存在する運用のため）。
 // 2 つのガードで拒否する：
 //   ① チェックアウト中ページが残っている → 409（先にチェックイン）。
 //   ② 枝番（子孫）バージョンが他に存在する → 409（親を消すと枝番が孤立するため）。
-async function deleteVersionSubfolder(wdId: string, version: string): Promise<DeleteVersionResult> {
+async function deleteVersionSubfolder(wdId: string, version: string, force = false): Promise<DeleteVersionResult> {
   const wdDir = path.join(workspacePath, "data/work", wdId);
   const wslVersionDir = path.join(wdDir, version);
 
-  if (await hasLockedPages(wslVersionDir)) {
-    return { ok: false, status: 409, error: "チェックアウト中のページが残っています。先にページをチェックインしてください。" };
+  // ロック中ページがあれば既定はブロック。force=true（UI の確認ダイアログ経由）で強行可
+  // （Windows 側 .checkedoutpages の編集は失われる旨は UI が明示する）。
+  if (!force && (await hasLockedPages(wslVersionDir))) {
+    return { ok: false, status: 409, locked: true, error: "チェックアウト中のページが残っています。先にページをチェックインしてください。" };
   }
 
   // 子孫（枝番）ガード：WSL 上の編集中バージョン名で判定する。
@@ -1922,10 +1932,13 @@ router.delete(API_ROUTES.work.version, async (req, res) => {
     return;
   }
 
+  // ?force=1（UI の確認ダイアログ経由）でロック中でも強行削除する。
+  const query = (req.query ?? {}) as { force?: string };
+  const force = query.force === "1" || query.force === "true";
   try {
-    const result = await deleteVersionSubfolder(wdId, version);
+    const result = await deleteVersionSubfolder(wdId, version, force);
     if (!result.ok) {
-      res.status(result.status).json({ error: result.error });
+      res.status(result.status).json({ error: result.error, locked: result.locked });
       return;
     }
     res.json(result);
@@ -1935,5 +1948,253 @@ router.delete(API_ROUTES.work.version, async (req, res) => {
     res.status(500).json({ error: msg });
   }
 });
+
+// ── 頁単位チェックアウト／チェックイン ───────────────────────────────────────
+// 選んだページだけを Windows へ出して手編集する往復機能。slide_struct.py の
+// checkout/checkin CLI（COM 非依存・WSL 完結）を spawn し、`.checkedoutpages/` を
+// Windows(D:) とミラーする。Windows パスは combine と同じ二段構えで解決する。
+
+// ページ ID（例 p-1a2b3c4d）。structure.json のキーと同じ厳格パターン。
+const PAGE_ID_RE = /^p-[0-9a-f]{8}$/;
+
+interface StructPageEntry {
+  file: string;
+  checked_out?: boolean;
+}
+
+// 頁単位操作の共通コンテキスト（各ヘルパの引数数を抑えるためにまとめる）。
+interface PageOpCtx {
+  wdId: string;
+  version: string;
+  versionDir: string;
+  pages: Record<string, StructPageEntry>;
+  send: (line: string) => void;
+}
+
+// structure.json の pages マップを読む（ページ ID → {file, checked_out}）。無ければ null。
+async function readStructurePagesMap(versionDir: string): Promise<Record<string, StructPageEntry> | null> {
+  try {
+    const raw = await fsp.readFile(path.join(versionDir, ".pages", "structure.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { pages?: Record<string, StructPageEntry> };
+    return parsed.pages ?? {};
+  } catch {
+    return null;
+  }
+}
+
+// 必須ページ ID 配列の検証。空/型不正/パターン不一致は null。
+export function validateRequiredPageIds(ids: unknown): string[] | null {
+  if (!Array.isArray(ids) || ids.length === 0) return null;
+  const out: string[] = [];
+  for (const pageId of ids) {
+    if (typeof pageId !== "string" || !PAGE_ID_RE.test(pageId)) return null;
+    out.push(pageId);
+  }
+  return out;
+}
+
+// 任意ページ ID 配列の検証。undefined は []（未指定）、型/パターン不正は null。
+export function validateOptionalPageIds(ids: unknown): string[] | null {
+  if (ids === undefined) return [];
+  return Array.isArray(ids) && ids.length === 0 ? [] : validateRequiredPageIds(ids);
+}
+
+// Windows パス解決（combine と同型の二段）：.checkout-source → 無ければ D: スキャン。
+async function resolveCheckoutWinPath(wdId: string): Promise<string | null> {
+  return (await readCheckoutWindowsPath(wdId)) ?? (await resolveWdWindowsPath(wdId));
+}
+
+// 往復用 .checkedoutpages ディレクトリ（WSL 側 / Windows 側）。
+function localCheckedoutDir(wdId: string, version: string): string {
+  return path.join(workspacePath, "data/work", wdId, version, ".checkedoutpages");
+}
+function winCheckedoutDir(winPath: string, version: string): string {
+  return path.join(windowsToWsl(winPath), version, ".checkedoutpages");
+}
+
+// ページ ID 群 → structure 上のファイル名群（未掲載は除外）。
+function filesForPages(pages: Record<string, StructPageEntry>, pageIds: string[]): string[] {
+  return pageIds.map((pageId) => pages[pageId]?.file).filter((name): name is string => Boolean(name));
+}
+
+// slide_struct.py を spawn し SSE に流す。終了コードを返す（spawn 失敗は 1）。
+async function runSlideStruct(args: string[], send: (line: string) => void, prefix = "🔖 "): Promise<number> {
+  const scriptPath = path.join(workspacePath, "data/work/tools/slide_struct.py");
+  return new Promise<number>((resolve) => {
+    const proc = spawn("python3", [scriptPath, ...args], { env: { ...process.env } });
+    pipeToSse(proc, send, prefix);
+    proc.on("close", (code) => resolve(code ?? 1));
+    proc.on("error", (err) => {
+      send(`⚠ ${err.message}`);
+      resolve(1);
+    });
+  });
+}
+
+// 一括操作（リリース/テーマ/テンプレ適用）のロックゲート。ロック中なら 409 を返し true。
+async function blockIfLockedForBulk(wdId: string, version: string, res: Response): Promise<boolean> {
+  const versionDir = path.join(workspacePath, "data/work", wdId, version);
+  if (await hasLockedPages(versionDir)) {
+    res.status(409).json({ error: "チェックアウト中のページがあります。先にページをチェックインしてください。", locked: true });
+    return true;
+  }
+  return false;
+}
+
+// リクエストからページ操作コンテキストを組み立てる。検証失敗時は res にエラーを返して null。
+async function buildPageOpCtx(req: Request, res: Response): Promise<PageOpCtx | null> {
+  const { wd, version } = req.params as { wd: string; version: string };
+  if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return null;
+  }
+  const versionDir = path.join(workspacePath, "data/work", wd, version);
+  const pages = await readStructurePagesMap(versionDir);
+  if (!pages) {
+    res.status(404).json({ error: "対象バージョンに structure.json がありません" });
+    return null;
+  }
+  const stream = beginComStream(req, res);
+  if (!stream) return null;
+  return { wdId: wd, version, versionDir, pages, send: stream.send };
+}
+
+// POST /api/work/:wd/:version/page-checkout — 選択ページを Windows へ出す（SSE）
+router.post(API_ROUTES.work.pageCheckout, async (req, res) => {
+  const pageIds = validateRequiredPageIds((req.body as { pageIds?: unknown }).pageIds);
+  if (!pageIds) {
+    res.status(400).json({ error: "pageIds（p-XXXXXXXX の配列）が必要です" });
+    return;
+  }
+  const ctx = await buildPageOpCtx(req, res);
+  if (!ctx) return;
+  await runPageCheckout(ctx, pageIds);
+  res.end();
+});
+
+// checkout 本体：存在しない/既ロックは除外→slide_struct checkout→Windows へ push。
+async function runPageCheckout(ctx: PageOpCtx, pageIds: string[]): Promise<void> {
+  const eligible: string[] = [];
+  for (const pageId of pageIds) {
+    if (!ctx.pages[pageId]) ctx.send(`ℹ スキップ（存在しないページ）: ${pageId}`);
+    else if (ctx.pages[pageId].checked_out) ctx.send(`ℹ スキップ（既にチェックアウト中）: ${pageId}`);
+    else eligible.push(pageId);
+  }
+  if (eligible.length === 0) {
+    ctx.send("⚠ チェックアウト対象のページがありません");
+    ctx.send(`DONE:${ctx.wdId}`);
+    return;
+  }
+  const args = ["checkout", "--version-dir", ctx.versionDir, "--by", "windows"];
+  eligible.forEach((pageId) => args.push("--page", pageId));
+  const code = await runSlideStruct(args, ctx.send);
+  if (code !== 0) {
+    ctx.send(`ERROR: checkout に失敗しました（exit ${String(code)}）`);
+    return;
+  }
+  await pushCheckedoutToWindows(ctx, filesForPages(ctx.pages, eligible));
+  ctx.send(`DONE:${ctx.wdId}`);
+}
+
+// .checkedoutpages（WSL）→ Windows(D:) へ pptx を push。
+async function pushCheckedoutToWindows(ctx: PageOpCtx, files: string[]): Promise<void> {
+  const winPath = await resolveCheckoutWinPath(ctx.wdId);
+  if (!winPath) {
+    ctx.send("⚠ Windows パスを解決できず、D: への push をスキップしました（.checkedoutpages は WSL に生成済み）");
+    return;
+  }
+  const winDir = winCheckedoutDir(winPath, ctx.version);
+  await fsp.mkdir(winDir, { recursive: true });
+  const copied = await mirrorCopy(localCheckedoutDir(ctx.wdId, ctx.version), winDir, files);
+  ctx.send(copied.length ? `📤 Windows へ push: ${copied.join(", ")}` : "ℹ Windows へ push する対象がありません");
+}
+
+// POST /api/work/:wd/:version/page-checkin — チェックアウト中ページを戻す/破棄する（SSE）
+router.post(API_ROUTES.work.pageCheckin, async (req, res) => {
+  const body = req.body as { apply?: unknown; discard?: unknown };
+  const apply = validateOptionalPageIds(body.apply);
+  const discard = validateOptionalPageIds(body.discard);
+  if (apply === null || discard === null) {
+    res.status(400).json({ error: "apply / discard は p-XXXXXXXX の配列で指定してください" });
+    return;
+  }
+  const ctx = await buildPageOpCtx(req, res);
+  if (!ctx) return;
+  await runPageCheckin(ctx, apply, discard);
+  res.end();
+});
+
+// checkin 本体：apply 群（pull→存在検証→取り込み→掃除）と discard 群（ロック解除のみ）。
+async function runPageCheckin(ctx: PageOpCtx, apply: string[], discard: string[]): Promise<void> {
+  // apply/discard 両省略時は、現在ロック中の全ページを apply とみなす。
+  const applyIds = apply.length === 0 && discard.length === 0 ? Object.keys(ctx.pages).filter((pageId) => ctx.pages[pageId].checked_out) : apply;
+  const winPath = await resolveCheckoutWinPath(ctx.wdId);
+  try {
+    const appliedAny = await checkinApplyGroup(ctx, applyIds, winPath);
+    await checkinDiscardGroup(ctx, discard, winPath);
+    if (appliedAny) {
+      ctx.send("🖼 サムネイル再生成中...");
+      await runGenThumbs(ctx.wdId, ctx.version, ctx.send, false); // dirty のみ差分再生成
+    }
+    ctx.send(`DONE:${ctx.wdId}`);
+  } catch (err) {
+    ctx.send(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// apply 群の pull と安全弁：Windows から pull → 編集済み pptx が存在するページだけ返す。
+async function pullAndVerifyApply(ctx: PageOpCtx, applyIds: string[], winPath: string | null): Promise<string[]> {
+  const localDir = localCheckedoutDir(ctx.wdId, ctx.version);
+  await fsp.mkdir(localDir, { recursive: true });
+  if (winPath) {
+    const pulled = await mirrorCopy(winCheckedoutDir(winPath, ctx.version), localDir, filesForPages(ctx.pages, applyIds));
+    ctx.send(pulled.length ? `📥 Windows から pull: ${pulled.join(", ")}` : "ℹ Windows から pull する対象がありません");
+  } else {
+    ctx.send("⚠ Windows パスを解決できず、pull をスキップしました（WSL の .checkedoutpages を使用）");
+  }
+  const present: string[] = [];
+  for (const pageId of applyIds) {
+    const fileName = ctx.pages[pageId]?.file;
+    if (fileName && (await pathExists(path.join(localDir, fileName)))) present.push(pageId);
+    else ctx.send(`⚠ 編集済み pptx が見つからないためスキップ（ロック維持）: ${pageId}`);
+  }
+  return present;
+}
+
+// apply 群：pull＋存在検証 → 取り込み（--mode apply）→ Windows 掃除。取り込んだら true。
+async function checkinApplyGroup(ctx: PageOpCtx, applyIds: string[], winPath: string | null): Promise<boolean> {
+  if (applyIds.length === 0) return false;
+  const present = await pullAndVerifyApply(ctx, applyIds, winPath);
+  if (present.length === 0) return false;
+  const args = ["checkin", "--version-dir", ctx.versionDir, "--mode", "apply"];
+  present.forEach((pageId) => args.push("--page", pageId));
+  const code = await runSlideStruct(args, ctx.send);
+  if (code !== 0) {
+    ctx.send(`ERROR: checkin（取り込み）に失敗しました（exit ${String(code)}）`);
+    return false;
+  }
+  await cleanWindowsCheckedout(ctx, winPath, filesForPages(ctx.pages, present), "🧹 Windows 側を掃除");
+  return true;
+}
+
+// discard 群：取り込まずロック解除のみ（--mode discard）＋ Windows 側掃除。
+async function checkinDiscardGroup(ctx: PageOpCtx, discard: string[], winPath: string | null): Promise<void> {
+  if (discard.length === 0) return;
+  const args = ["checkin", "--version-dir", ctx.versionDir, "--mode", "discard"];
+  discard.forEach((pageId) => args.push("--page", pageId));
+  const code = await runSlideStruct(args, ctx.send);
+  if (code !== 0) {
+    ctx.send(`ERROR: checkin（破棄）に失敗しました（exit ${String(code)}）`);
+    return;
+  }
+  await cleanWindowsCheckedout(ctx, winPath, filesForPages(ctx.pages, discard), "🧹 Windows 側を掃除（破棄）");
+}
+
+// Windows(D:) 側 .checkedoutpages から指定 pptx を削除する（掃除）。winPath 未解決なら no-op。
+async function cleanWindowsCheckedout(ctx: PageOpCtx, winPath: string | null, files: string[], label: string): Promise<void> {
+  if (!winPath || files.length === 0) return;
+  const del = await mirrorDelete(winCheckedoutDir(winPath, ctx.version), files);
+  if (del.length) ctx.send(`${label}: ${del.join(", ")}`);
+}
 
 export default router;

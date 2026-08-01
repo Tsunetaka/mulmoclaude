@@ -1101,6 +1101,10 @@ const ptBRMessages = {
     template: "Modelo",
     applyTemplate: "Aplicar modelo",
     release: "Publicar",
+    pageCheckout: "Check-out",
+    pageCheckoutHint: "Enviar as páginas selecionadas para o Windows para edição",
+    pageCheckin: "Check-in",
+    pageCheckinHint: "Devolver ou descartar as páginas em check-out",
   },
   mulmoPoint: {
     title: "Sobre o MulmoPoint",
