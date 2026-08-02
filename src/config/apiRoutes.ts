@@ -454,7 +454,6 @@ const HOST_API_ROUTES = {
 
   work: {
     scan: "/api/work/scan",
-    checkout: "/api/work/checkout",
     /** Thumbnail-only generation for a WD already present on disk. SSE stream. */
     thumbnails: "/api/work/thumbnails",
     /** POST — リリース選択前プレビュー（N5）。body `{ wdId, windowsWdPath }`。
