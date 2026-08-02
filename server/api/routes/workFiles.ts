@@ -1497,8 +1497,8 @@ async function performFork(wdId: string, targetVersion: string, sourceVersion: s
 // new_deck.py（WSL python-pptx・COM 非依存）で表紙 1 枚＋structure.json を生成し、
 // 続けて gen_thumbs でサムネまで作る。canvas は明示「更新」ボタンで後追い。
 
-/** new_deck.py の --theme に渡せるテーマ ID（純粋定数・フロントの 10 択と一致）。 */
-export const NEW_DECK_THEME_IDS = ["cool", "warm", "vivid", "dark", "plain", "earth", "neutral", "soft", "forest", "premium"] as const;
+/** new_deck.py の --theme に渡せるテーマ ID（純粋定数・フロントの 12 択と一致）。 */
+export const NEW_DECK_THEME_IDS = ["cool", "warm", "vivid", "dark", "plain", "earth", "neutral", "soft", "forest", "premium", "tropical", "marine"] as const;
 
 /** new-deck body の純粋検証。問題があればエラーメッセージ、無ければ null。 */
 export function validateNewDeckBody(body: { title?: unknown; theme?: unknown }): string | null {

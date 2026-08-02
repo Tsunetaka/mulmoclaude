@@ -42,4 +42,6 @@ export const NEW_DECK_THEMES: NewDeckTheme[] = [
   { id: "soft", label: "🌸 ソフト", tagline: "親しみやすい・教育・入門向け", swatch: grad("2A4080", "7050A0", "B06080"), swatchText: "#fff" },
   { id: "forest", label: "🌲 フォレスト", tagline: "環境・自然・誠実", swatch: grad("0C280C", "1A5A1A", "0C7850"), swatchText: "#fff" },
   { id: "premium", label: "🏆 プレミアム", tagline: "高級感・提案書・経営層向け", swatch: grad("050D22", "0E1C44", "8A7820"), swatchText: "#fff" },
+  { id: "tropical", label: "🌴 トロピカル", tagline: "南国・熱帯・明るく開放的", swatch: grad("006D6F", "12A594", "FF7A45"), swatchText: "#fff" },
+  { id: "marine", label: "🌊 マリーン", tagline: "海・爽やか・清涼感", swatch: grad("00223E", "025E8C", "00B4D8"), swatchText: "#fff" },
 ];
