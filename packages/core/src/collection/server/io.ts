@@ -10,6 +10,7 @@ import { getWorkspaceRoot, log, publishCollectionChange } from "./host";
 import { writeFileAtomic } from "../../files/atomic.js";
 import { isContainedInRoot, itemFilePath, safeRecordId } from "./paths";
 import type { CollectionItem, CollectionSchema } from "../core/schema";
+import { isErrorWithCode, isRecord } from "@mulmoclaude/common";
 
 export interface IoOptions {
   /** Override the workspace root for containment checks. Default:
@@ -17,13 +18,13 @@ export interface IoOptions {
    *  tree so the realpath-based escape detection can be exercised
    *  without touching `~/mulmoclaude/`. Same pattern as
    *  `server/workspace/skills/catalog.ts#CatalogOptions`. */
-  workspaceRoot?: string;
+  workspaceRoot?: string | undefined;
   /** Collection slug this write/delete belongs to. When provided, a
    *  successful write/delete publishes a record-change event (see
    *  `publishCollectionChange`) so live views refetch. `writeItem` has no
    *  slug of its own (it's keyed by `dataDir`), so callers thread it through;
    *  omitting it just means no event is published (internal / test writes). */
-  slug?: string;
+  slug?: string | undefined;
 }
 
 /** True iff `filePath` exists and is a regular file (NOT a symlink).
@@ -52,10 +53,7 @@ export async function isRegularFile(filePath: string): Promise<boolean> {
  *  null when it isn't a JSON object (array / scalar / null). */
 function parseRecordJson(raw: string): CollectionItem | null {
   const parsed: unknown = JSON.parse(raw);
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed as CollectionItem;
-  }
-  return null;
+  return isRecord(parsed) ? parsed : null;
 }
 
 async function tryReadRecord(filePath: string): Promise<CollectionItem | null> {
@@ -83,8 +81,7 @@ export async function listItems(dataDir: string, opts: IoOptions = {}): Promise<
   try {
     entries = await readdir(dataDir);
   } catch (err) {
-    const error = err as { code?: string };
-    if (error.code === "ENOENT") return [];
+    if (isErrorWithCode(err) && err.code === "ENOENT") return [];
     throw err;
   }
   const results: CollectionItem[] = [];
@@ -116,8 +113,7 @@ export async function readItem(dataDir: string, itemId: string, opts: IoOptions 
   try {
     return parseRecordJson(await readFile(filePath, "utf-8"));
   } catch (err) {
-    const error = err as { code?: string };
-    if (error.code === "ENOENT") return null;
+    if (isErrorWithCode(err) && err.code === "ENOENT") return null;
     throw err;
   }
 }
@@ -125,7 +121,7 @@ export async function readItem(dataDir: string, itemId: string, opts: IoOptions 
 export interface WriteItemOptions extends IoOptions {
   /** When true (POST/create), refuse to overwrite an existing file
    *  and return `kind: "conflict"`. Update flow (PUT) leaves it false. */
-  refuseOverwrite?: boolean;
+  refuseOverwrite?: boolean | undefined;
 }
 
 export type WriteItemResult =
@@ -195,8 +191,7 @@ export async function writeItem(dataDir: string, itemId: string, item: Collectio
     try {
       handle = await open(filePath, "wx");
     } catch (err) {
-      const error = err as { code?: string };
-      if (error.code === "EEXIST") return { kind: "conflict", itemId: safeId };
+      if (isErrorWithCode(err) && err.code === "EEXIST") return { kind: "conflict", itemId: safeId };
       throw err;
     }
     try {
@@ -227,8 +222,7 @@ export async function deleteItem(dataDir: string, itemId: string, opts: IoOption
     if (opts.slug) publishCollectionChange({ slug: opts.slug, ids: [safeId], op: "delete" });
     return { kind: "ok", itemId: safeId };
   } catch (err) {
-    const error = err as { code?: string };
-    if (error.code === "ENOENT") return { kind: "not-found", itemId: safeId };
+    if (isErrorWithCode(err) && err.code === "ENOENT") return { kind: "not-found", itemId: safeId };
     throw err;
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@mulmoclaude/chart-plugin",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "ECharts visualization plugin (presentChart) — shared gui-chat-protocol plugin for MulmoClaude and MulmoTerminal. Server-side write goes through the generic files.artifacts runtime capability.",
   "type": "module",
   "main": "./dist/index.js",
@@ -35,7 +35,7 @@
     "test": "echo 'no in-package tests; presentChart logic is covered by host integration tests'"
   },
   "dependencies": {
-    "@mulmoclaude/core": "^1.10.0"
+    "@mulmoclaude/core": "^1.14.0"
   },
   "peerDependencies": {
     "echarts": "^6.0.0",
@@ -59,7 +59,7 @@
     "vite": "^8.1.5",
     "vue": "^3.5.40",
     "vue-eslint-parser": "^10.4.0",
-    "vue-tsc": "^3.3.8"
+    "vue-tsc": "^3.3.9"
   },
   "license": "MIT",
   "homepage": "https://github.com/receptron/mulmoclaude/tree/main/packages/plugins/chart-plugin#readme",

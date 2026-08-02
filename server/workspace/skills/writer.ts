@@ -17,6 +17,7 @@ import { projectSkillDir, projectSkillPath } from "./paths.js";
 import { isValidSlug } from "../../utils/slug.js";
 import { log } from "../../system/logger/index.js";
 import { writeFileAtomic } from "../../utils/files/index.js";
+import { isErrorWithCode } from "../../utils/types.js";
 
 export interface SaveSkillInput {
   /** Workspace root (typically `~/mulmoclaude`). */
@@ -126,7 +127,7 @@ export interface DeleteSkillInput {
    *  guard consults. Real callers omit this and get the default
    *  `USER_SKILLS_DIR`; unit tests pass a temp dir to exercise the
    *  refusal path without touching the caller's home. */
-  userDir?: string;
+  userDir?: string | undefined;
 }
 
 export type DeleteResult =
@@ -159,8 +160,7 @@ export async function deleteProjectSkill(input: DeleteSkillInput): Promise<Delet
   } catch (err) {
     // ENOENT is fine — discovery may be stale. Anything else is
     // surfaced so the caller knows the delete didn't fully work.
-    const error = err as { code?: string };
-    if (error.code !== "ENOENT") throw err;
+    if (!isErrorWithCode(err) || err.code !== "ENOENT") throw err;
   }
   await rmdir(dir).catch(() => {
     // Dir may contain user-added files (e.g. the user dropped a

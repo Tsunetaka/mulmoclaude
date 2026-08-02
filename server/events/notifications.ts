@@ -42,26 +42,27 @@ import { publish as notifierPublish } from "../notifier/engine.js";
 import type { NotifierSeverity } from "../notifier/types.js";
 import { log } from "../system/logger/index.js";
 import { makeUuid } from "../utils/id.js";
+import { isRecord } from "../utils/types.js";
 
 // ── Public types ────────────────────────────────────────────────
 
 export interface PublishNotificationOpts {
   kind: NotificationKind;
   title: string;
-  body?: string;
-  action?: NotificationAction;
-  priority?: NotificationPriority;
-  sessionId?: string;
+  body?: string | undefined;
+  action?: NotificationAction | undefined;
+  priority?: NotificationPriority | undefined;
+  sessionId?: string | undefined;
   /** Override the auto-generated UUID with a caller-supplied stable
    *  id. Used by the plugin-meta diagnostics: the same diagnostic
    *  id is returned from `/api/plugins/diagnostics`, and `pluginData`
    *  carries it so `announcePluginMetaDiagnostics` can dedupe across
    *  reboots without piling identical entries into `active.json`. */
-  id?: string;
+  id?: string | undefined;
   /** vue-i18n keys + params for clients to localize the title/body.
    *  Server-side `title` / `body` stay set as English fallbacks for
    *  logs and the macOS Reminder push. */
-  i18n?: NotificationI18n;
+  i18n?: NotificationI18n | undefined;
 }
 
 /** Discriminated marker on `NotifierEntry.pluginData` for entries
@@ -78,14 +79,13 @@ export interface LegacyNotifierPluginData {
   kind: NotificationKind;
   priority: NotificationPriority;
   action: NotificationAction;
-  i18n?: NotificationI18n;
-  sessionId?: string;
+  i18n?: NotificationI18n | undefined;
+  sessionId?: string | undefined;
 }
 
 export function isLegacyNotifierPluginData(value: unknown): value is LegacyNotifierPluginData {
-  if (value === null || typeof value !== "object") return false;
-  const rec = value as Record<string, unknown>;
-  return rec.legacy === true && typeof rec.legacyId === "string" && typeof rec.kind === "string";
+  if (!isRecord(value)) return false;
+  return value.legacy === true && typeof value.legacyId === "string" && typeof value.kind === "string";
 }
 
 // ── Mapping helpers ─────────────────────────────────────────────

@@ -22,7 +22,7 @@ import { notifyTaskFinished } from "../../agent/webPush.js";
 import { buildTranscriptPreamble } from "../../agent/resumeFailover.js";
 import { abortableSleep, BROKER_RECONNECT_WAIT_MS, detectRecovery, type RecoveryKind, type RetryBudgets } from "../../agent/retryPolicy.js";
 import { splitSkillAndReply, updatePendingSkillOnToolCall, updatePendingSkillOnToolCallResult, type PendingSkill } from "../../agent/skillEvents.js";
-import { decorateMessageForCli } from "../../agent/messageDecorate.js";
+import { decorateMessageForCli, sanitiseOriginalFilename, type AttachedFile } from "../../agent/messageDecorate.js";
 import { getOrCreateSession, beginRun, endRun, cancelRun, pushSessionEvent, pushToolResult, getActiveSessionIds } from "../../events/session-store/index.js";
 import { workspacePath } from "../../workspace/workspace.js";
 import { discoverSkills } from "../../workspace/skills/discovery.js";
@@ -115,7 +115,7 @@ export interface StartChatParams extends ChatServiceStartChatParams {
   /** IANA timezone the user's browser resolved (e.g. "Asia/Tokyo").
    *  Validated server-side before it reaches the system prompt — an
    *  invalid or missing value falls back to server-local time. */
-  userTimezone?: string;
+  userTimezone?: string | undefined;
 }
 
 export type StartChatResult = { kind: "started"; chatSessionId: string } | { kind: "error"; error: string; status?: number };
@@ -140,8 +140,8 @@ export async function spawnSystemWorker(args: {
   /** Path-bearing attachments to hand the spawned chat (e.g. files the mobile
    *  remote attached, ingested into the workspace). Forwarded to `startChat`,
    *  which loads their bytes for the model like any other attachment. */
-  attachments?: Attachment[];
-  onComplete?: CompletionHook;
+  attachments?: Attachment[] | undefined;
+  onComplete?: CompletionHook | undefined;
 }): Promise<SpawnSystemWorkerResult> {
   const chatId = randomUUID();
   const origin: SessionOrigin = args.hidden ? SESSION_ORIGINS.system : SESSION_ORIGINS.skill;
@@ -237,11 +237,11 @@ export async function startChat(params: StartChatParams): Promise<StartChatResul
   // filesystem I/O failure is logged and converted to a 400 here;
   // beginRun is rolled back so subsequent turns aren't rejected with
   // 409 forever.
-  let attachedPaths: string[];
+  let attachedFiles: AttachedFile[];
   let extras: RequestExtras;
   try {
     const persistedAttachments = await persistInlineBytesAsPaths(normalisedAttachments);
-    attachedPaths = collectAttachedPaths(persistedAttachments);
+    attachedFiles = collectAttachedFiles(persistedAttachments);
     extras = await prepareRequestExtras(persistedAttachments);
   } catch (err) {
     log.warn("agent", "attachment processing failed — rolling back run", { chatSessionId, error: errorMessage(err) });
@@ -250,7 +250,7 @@ export async function startChat(params: StartChatParams): Promise<StartChatResul
     return { kind: "error", error: "Invalid attachments payload", status: 400 };
   }
 
-  const validOrigin = await persistUserTurn(params, { isFirstTurn, attachedPaths });
+  const validOrigin = await persistUserTurn(params, { isFirstTurn, attachedFiles });
   await dispatchAgentRun(params, { extras, resultsFilePath, abortController, validOrigin });
 
   return { kind: "started", chatSessionId };
@@ -262,9 +262,9 @@ export async function startChat(params: StartChatParams): Promise<StartChatResul
 // append the user message to the jsonl, and broadcast it to other
 // tabs viewing this session. Returns the validated origin so the
 // dispatch phase can reuse it.
-async function persistUserTurn(params: StartChatParams, ctx: { isFirstTurn: boolean; attachedPaths: string[] }): Promise<SessionOrigin | undefined> {
+async function persistUserTurn(params: StartChatParams, ctx: { isFirstTurn: boolean; attachedFiles: AttachedFile[] }): Promise<SessionOrigin | undefined> {
   const { message, roleId, chatSessionId } = params;
-  const { isFirstTurn, attachedPaths } = ctx;
+  const { isFirstTurn, attachedFiles } = ctx;
 
   // Now persist the user message so callers (and other tabs) see the
   // turn. Metadata first — it powers the sidebar title cache; the
@@ -284,11 +284,12 @@ async function persistUserTurn(params: StartChatParams, ctx: { isFirstTurn: bool
   // a long conversation.
   await incrementUserQueryCount(chatSessionId);
 
-  // Append user message for this turn
-  await appendSessionLine(
-    chatSessionId,
-    JSON.stringify({ source: "user", type: EVENT_TYPES.text, message, ...(attachedPaths.length > 0 ? { attachments: attachedPaths } : {}) }),
-  );
+  // Append user message for this turn. `attachments` holds objects since
+  // #2308; a session written before that holds bare path strings, which is
+  // why every reader goes through `normalizeAttachments` rather than
+  // indexing the array.
+  const attachmentsField = attachedFiles.length > 0 ? { attachments: attachedFiles } : {};
+  await appendSessionLine(chatSessionId, JSON.stringify({ source: "user", type: EVENT_TYPES.text, message, ...attachmentsField }));
 
   // Broadcast the user message so other tabs viewing this session
   // see the input in real time. Runs AFTER beginRun so a 409 never
@@ -297,7 +298,7 @@ async function persistUserTurn(params: StartChatParams, ctx: { isFirstTurn: bool
     type: EVENT_TYPES.text,
     source: "user",
     message,
-    ...(attachedPaths.length > 0 ? { attachments: attachedPaths } : {}),
+    ...attachmentsField,
   });
 
   return validOrigin;
@@ -328,7 +329,7 @@ async function dispatchAgentRun(
   const decoratedMessage = decorateMessageForCli({
     message,
     workspaceDir: workspacePath,
-    attachedFilePaths: extras.attachedFilePaths,
+    attachedFiles: extras.attachedFiles,
     resumed: Boolean(claudeSessionId),
   });
 
@@ -362,21 +363,26 @@ async function dispatchAgentRun(
 
 interface RequestExtras {
   attachments: Attachment[] | undefined;
-  /** Workspace-relative paths of every file the user attached or
-   *  selected for this turn, in declaration order. Surfaced to the
-   *  LLM via one `[Attached file: <path>]` line per entry, prepended
-   *  to the user message so path-passing tools (e.g. `editImages`)
-   *  and the LLM itself can reference each file by path.
+  /** Every file the user attached or selected for this turn, in
+   *  declaration order. Surfaced to the LLM via one
+   *  `[Attached file: <path>]` line per entry, prepended to the user
+   *  message so path-passing tools (e.g. `editImages`) and the LLM
+   *  itself can reference each file by path. Entries that carry the
+   *  name the file had on the user's machine also announce it, so the
+   *  model can save a result back under that name (#2308).
    *  `persistInlineBytesAsPaths` ensures every well-formed attachment
    *  carries a path before this runs, so this is empty only when the
    *  request had no attachments at all (or every entry was malformed
    *  and dropped). */
-  attachedFilePaths: string[];
+  attachedFiles: AttachedFile[];
 }
 
-/** Pluck workspace-relative paths out of `attachments[]`. Used for
+/** Pluck the attached files out of `attachments[]`. Used for
  *  persistence + broadcast of the user message: the Vue UI renders
- *  these as attachment chips next to the chat bubble.
+ *  these as attachment chips next to the chat bubble, labelled with
+ *  `filename` when the upload carried one — the stored basename is a
+ *  hex id, so without it the history shows `b458a5d0.csv` for a file
+ *  the user knows as `商品カタログ_v2.csv` (#2308).
  *  `persistInlineBytesAsPaths` runs first, so by the time we get
  *  here every well-formed entry already carries a `path` and chips
  *  round-trip for bridge attachments too — not just Vue uploads.
@@ -393,15 +399,19 @@ interface RequestExtras {
  *  where `attachments` is a truthy non-array. Without it `for...of`
  *  would throw and bypass the rollback path that calls `endRun`,
  *  leaving the session locked as running (#1052 review). */
-export function collectAttachedPaths(attachments: Attachment[] | undefined): string[] {
+export function collectAttachedFiles(attachments: Attachment[] | undefined): AttachedFile[] {
   if (!Array.isArray(attachments) || attachments.length === 0) return [];
-  const paths: string[] = [];
+  const files: AttachedFile[] = [];
   for (const att of attachments) {
     if (typeof att.path !== "string" || att.path.length === 0) continue;
     if (!isAttachmentPath(att.path) && !isImagePath(att.path)) continue;
-    paths.push(att.path);
+    // Same gate as the LLM marker, deliberately: a name we refuse to tell
+    // the model must not be what the chip claims the file is called, or
+    // the user and the agent end up discussing different filenames.
+    const filename = sanitiseOriginalFilename(att.filename);
+    files.push({ path: att.path, ...(filename ? { filename } : {}) });
   }
-  return paths;
+  return files;
 }
 
 /** Bridge-only compat: external bridge clients may still ship a
@@ -472,7 +482,11 @@ async function persistInlineBytesAsPaths(attachments: Attachment[] | undefined):
     }
     if (typeof att.data === "string" && att.data.length > 0 && typeof att.mimeType === "string" && att.mimeType.length > 0) {
       const saved = await saveAttachment(att.data, att.mimeType);
-      result.push({ path: saved.relativePath, mimeType: saved.mimeType });
+      // Carry `filename` across the rewrite. Bridges that know the
+      // sender's filename already send it (Telegram documents pass
+      // `doc.file_name`), and dropping it here is what kept the name
+      // from ever reaching the model (#2308).
+      result.push({ path: saved.relativePath, mimeType: saved.mimeType, ...(att.filename ? { filename: att.filename } : {}) });
       continue;
     }
     log.warn("agent", "attachment has neither path nor inline bytes — dropping");
@@ -506,10 +520,10 @@ async function persistInlineBytesAsPaths(attachments: Attachment[] | undefined):
  *  before this runs. */
 export async function prepareRequestExtras(attachments: Attachment[] | undefined): Promise<RequestExtras> {
   if (!Array.isArray(attachments) || attachments.length === 0) {
-    return { attachments: undefined, attachedFilePaths: [] };
+    return { attachments: undefined, attachedFiles: [] };
   }
   const result: Attachment[] = [];
-  const attachedFilePaths: string[] = [];
+  const attachedFiles: AttachedFile[] = [];
   for (const att of attachments) {
     if (typeof att.path !== "string" || att.path.length === 0) {
       log.warn("agent", "attachment has no path after normalisation — dropping");
@@ -521,11 +535,11 @@ export async function prepareRequestExtras(attachments: Attachment[] | undefined
     // actually loaded — otherwise the LLM gets told a bogus path
     // exists (Codex review on PR #1084 follow-up to #1052).
     result.push(resolved);
-    attachedFilePaths.push(att.path);
+    attachedFiles.push({ path: att.path, ...(att.filename ? { filename: att.filename } : {}) });
   }
   return {
     attachments: result.length > 0 ? result : undefined,
-    attachedFilePaths,
+    attachedFiles,
   };
 }
 
@@ -659,7 +673,7 @@ async function handleAgentEvent(event: Awaited<ReturnType<typeof runAgent>> exte
     await setClaudeId(ctx.chatSessionId, event.id);
     return;
   }
-  pushSessionEvent(ctx.chatSessionId, event as Record<string, unknown>);
+  pushSessionEvent(ctx.chatSessionId, event);
 
   if (event.type === EVENT_TYPES.text) {
     // Accumulate text chunks instead of writing each one to jsonl.
@@ -788,12 +802,12 @@ async function writeSkillEntry(ctx: EventContext, skillName: string, body: strin
     skillDescription: resolved.description,
     message: skillPart,
   };
-  pushSessionEvent(ctx.chatSessionId, skillPayload as Record<string, unknown>);
+  pushSessionEvent(ctx.chatSessionId, skillPayload);
   await appendSessionLine(ctx.chatSessionId, JSON.stringify(skillPayload));
 
   if (replyPart) {
     const textPayload = { source: "assistant", type: EVENT_TYPES.text, message: replyPart };
-    pushSessionEvent(ctx.chatSessionId, textPayload as Record<string, unknown>);
+    pushSessionEvent(ctx.chatSessionId, textPayload);
     await appendSessionLine(ctx.chatSessionId, JSON.stringify(textPayload));
   }
 }
@@ -1120,7 +1134,7 @@ function runPostTurnSideEffects(chatSessionId: string, requestStartedAt: number)
 // Read claudeSessionId from meta (primary) or jsonl (legacy fallback).
 async function readClaudeSessionIdFromSession(chatSessionId: string): Promise<string | undefined> {
   const meta = await readSessionMeta(chatSessionId);
-  if (meta?.claudeSessionId) return meta.claudeSessionId as string;
+  if (meta?.claudeSessionId) return meta.claudeSessionId;
   // Legacy scan: search jsonl lines backwards for a claudeSessionId event
   const jsonl = await readSessionJsonl(chatSessionId);
   if (!jsonl) return undefined;

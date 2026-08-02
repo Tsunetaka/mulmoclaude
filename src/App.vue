@@ -406,12 +406,12 @@ import { CollectionView, CollectionsIndexView, FeedsView } from "@mulmoclaude/co
 import PluginScopedRoot from "./components/PluginScopedRoot.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import { PAGE_ROUTES, type PageRouteName } from "./router";
-import type { SseEvent } from "./types/sse";
 import type { ActiveSession } from "./types/session";
 import { EVENT_TYPES } from "./types/events";
 import { buildAgentRequestBody, postAgentRun } from "./utils/agent/request";
-import { resolvePastedAttachment } from "./utils/agent/pastedAttachment";
+import { resolvePastedAttachment, type ResolvedAttachment } from "./utils/agent/pastedAttachment";
 import { applyAgentEvent, type AgentEventContext } from "./utils/agent/eventDispatch";
+import { parseSseEvent } from "./utils/agent/parseSseEvent";
 import { pushErrorMessage, beginUserTurn, updateResult, applyToolResultToSession } from "./utils/session/sessionHelpers";
 import { createEmptySession } from "./utils/session/sessionFactory";
 import { v4 as uuidv4 } from "uuid";
@@ -752,7 +752,7 @@ function onPluginNavigate(target: { key: string }): void {
 }
 
 function isPageRouteName(value: string): value is PageRouteName {
-  return Object.values(PAGE_ROUTES).includes(value as PageRouteName);
+  return Object.values(PAGE_ROUTES).some((routeName) => routeName === value);
 }
 
 // A pinned shortcut reuses the existing collection / feed routes — the
@@ -1058,8 +1058,8 @@ onScopeDispose(() => {
 
 function createSessionEventHandler(session: ActiveSession, ctx: AgentEventContext): (data: unknown) => void {
   return (data: unknown) => {
-    const event = data as SseEvent;
-    if (!event || typeof event !== "object") return;
+    const event = parseSseEvent(data);
+    if (!event) return;
     if (event.type === EVENT_TYPES.sessionFinished) {
       handleSessionFinished(session.id);
       return;
@@ -1086,15 +1086,15 @@ function unsubscribeSession(chatSessionId: string): void {
   }
 }
 
-type AttachmentResult = { paths: string[] } | { error: string } | null;
+type AttachmentResult = { attachments: ResolvedAttachment[] } | { error: string } | null;
 
-async function resolveAttachmentPaths(files: PastedFile[]): Promise<AttachmentResult> {
+async function resolveAttachments(files: PastedFile[]): Promise<AttachmentResult> {
   if (files.length === 0) return null;
   const results = await Promise.all(files.map((file) => resolvePastedAttachment(file)));
   const firstFailure = results.find((res) => !res.ok);
   if (firstFailure && !firstFailure.ok) return { error: firstFailure.error };
-  const paths = results.filter((res): res is { ok: true; value: string } => res.ok).map((res) => res.value);
-  return paths.length > 0 ? { paths } : null;
+  const attachments = results.filter((res): res is { ok: true; value: ResolvedAttachment } => res.ok).map((res) => res.value);
+  return attachments.length > 0 ? { attachments } : null;
 }
 
 async function sendMessage(text?: string) {
@@ -1112,7 +1112,7 @@ async function sendMessage(text?: string) {
   const filesSnapshot = [...pastedFiles.value];
   pastedFiles.value = [];
 
-  const resolved = await resolveAttachmentPaths(filesSnapshot);
+  const resolved = await resolveAttachments(filesSnapshot);
   if (resolved !== null && "error" in resolved) {
     userInput.value = message;
     pastedFiles.value = filesSnapshot;
@@ -1120,12 +1120,12 @@ async function sendMessage(text?: string) {
     if (recoverySession) pushErrorMessage(recoverySession, t("chatInput.attachImageFailed", { error: resolved.error }));
     return;
   }
-  const attachmentPaths = resolved?.paths;
+  const attachments = resolved?.attachments;
 
   const session = sessionMap.get(currentSessionId.value);
   if (!session) return;
 
-  beginUserTurn(session, message, attachmentPaths);
+  beginUserTurn(session, message, attachments);
   ensureSessionSubscription(session);
 
   const result = await postAgentRun(
@@ -1133,7 +1133,7 @@ async function sendMessage(text?: string) {
       message,
       role: sessionRole.value,
       chatSessionId: session.id,
-      attachmentPaths,
+      attachments,
     }),
   );
   if (!result.ok) {

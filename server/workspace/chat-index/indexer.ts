@@ -44,14 +44,14 @@ export interface IndexerDeps {
   // even when the summariser is unchanged — e.g. the summariser
   // prompt was edited and existing summaries are stale by design,
   // not by content.
-  force?: boolean;
+  force?: boolean | undefined;
   // Chat-index mode from `AppSettings.chatIndex` (default "off"). "off"
   // short-circuits `indexSession` before any I/O; "haiku"/"sonnet"
   // selects the model passed to the summariser. Injected from the
   // callers (turn-finish hook, backfill scheduler, manual rebuild,
   // startup force) so a single settings load happens at trigger time
   // rather than N times inside the indexer.
-  mode?: "off" | "haiku" | "sonnet";
+  mode?: "off" | "haiku" | "sonnet" | undefined;
 }
 
 // --- manifest I/O ---------------------------------------------------
@@ -69,8 +69,7 @@ export async function readManifest(workspaceRoot: string): Promise<ChatIndexMani
 
 function isManifest(raw: unknown): raw is ChatIndexManifest {
   if (!isRecord(raw)) return false;
-  const manifestRecord = raw as Record<string, unknown>;
-  return manifestRecord.version === 1 && Array.isArray(manifestRecord.entries);
+  return raw.version === 1 && Array.isArray(raw.entries);
 }
 
 // In-process mutex serializing the read-modify-write sequence on
@@ -152,7 +151,7 @@ export async function readIndexedAtMs(workspaceRoot: string, sessionId: string):
     const raw = await readFile(indexEntryPathFor(workspaceRoot, safeId), "utf-8");
     const entry: unknown = JSON.parse(raw);
     if (!isRecord(entry)) return null;
-    const { indexedAt } = entry as Record<string, unknown>;
+    const { indexedAt } = entry;
     if (typeof indexedAt !== "string") return null;
     const parsed = Date.parse(indexedAt);
     return Number.isNaN(parsed) ? null : parsed;
@@ -230,9 +229,9 @@ export function safeSessionIdOrNull(sessionId: string): string | null {
 // --- session metadata ----------------------------------------------
 
 interface SessionMeta {
-  roleId?: string;
-  startedAt?: string;
-  origin?: string;
+  roleId?: string | undefined;
+  startedAt?: string | undefined;
+  origin?: string | undefined;
 }
 
 // Origins the chat-index summarizer intentionally skips (#1944). `system`
@@ -255,11 +254,10 @@ async function readSessionMeta(workspaceRoot: string, sessionId: string): Promis
     const raw = await readFile(sessionMetaPathFor(workspaceRoot, safeId), "utf-8");
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed)) return {};
-    const metaRecord = parsed as Record<string, unknown>;
     return {
-      roleId: typeof metaRecord.roleId === "string" ? metaRecord.roleId : undefined,
-      startedAt: typeof metaRecord.startedAt === "string" ? metaRecord.startedAt : undefined,
-      origin: typeof metaRecord.origin === "string" ? metaRecord.origin : undefined,
+      roleId: typeof parsed.roleId === "string" ? parsed.roleId : undefined,
+      startedAt: typeof parsed.startedAt === "string" ? parsed.startedAt : undefined,
+      origin: typeof parsed.origin === "string" ? parsed.origin : undefined,
     };
   } catch {
     return {};

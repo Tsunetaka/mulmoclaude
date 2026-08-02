@@ -10,7 +10,7 @@
   <div v-else class="p-2">
     <div class="preview-text text-sm leading-snug" :class="textColorClass">{{ previewText }}</div>
     <div v-if="attachments.length > 0" class="flex flex-wrap gap-1 mt-1.5" data-testid="text-response-preview-attachments">
-      <SentAttachmentChip v-for="path in attachments" :key="path" :path="path" variant="thumb" />
+      <SentAttachmentChip v-for="file in attachments" :key="file.path" :path="file.path" :filename="file.filename" variant="thumb" />
     </div>
   </div>
 </template>
@@ -21,6 +21,7 @@ import { useI18n } from "vue-i18n";
 import { marked } from "marked";
 import type { ToolResultComplete } from "gui-chat-protocol/vue";
 import type { TextResponseData } from "./types";
+import type { AttachmentEntry } from "../../types/attachment";
 import SentAttachmentChip from "../../components/SentAttachmentChip.vue";
 
 const { t } = useI18n();
@@ -46,10 +47,13 @@ const textColorClass = computed(() => {
 
 const previewText = computed(() => markdownToPlainText(props.result.data?.text ?? ""));
 
-const attachments = computed<string[]>(() => props.result.data?.attachments ?? []);
+const attachments = computed<AttachmentEntry[]>(() => props.result.data?.attachments ?? []);
 
 function markdownToPlainText(markdown: string): string {
-  const html = marked(markdown, { breaks: true, gfm: true }) as string;
+  const rendered = marked(markdown, { breaks: true, gfm: true });
+  // An async marked extension would hand back a Promise; the preview has no
+  // await point, so it degrades to empty text rather than "[object Promise]".
+  const html = typeof rendered === "string" ? rendered : "";
   const spaced = html
     .replace(/<\/(td|th)>/gi, " ")
     .replace(/<\/(p|h[1-6]|li|tr|blockquote|pre|div)>/gi, "$&\n")

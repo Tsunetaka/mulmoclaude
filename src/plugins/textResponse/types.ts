@@ -2,15 +2,18 @@
  * Text Response Plugin - Type Definitions
  */
 
+import type { AttachmentEntry } from "../../types/attachment";
+
 export interface TextResponseData {
   text: string;
-  role?: "assistant" | "system" | "user";
-  transportKind?: string;
-  // Workspace-relative paths of files the user attached when sending
-  // this turn (paste/drop/file-picker). Persisted on the user message
-  // so the chat history can render an icon / thumbnail chip alongside
-  // the bubble. Empty / undefined for assistant and system turns.
-  attachments?: string[];
+  role?: "assistant" | "system" | "user" | undefined;
+  transportKind?: string | undefined;
+  // Files the user attached when sending this turn (paste/drop/
+  // file-picker). Persisted on the user message so the chat history can
+  // render an icon / thumbnail chip alongside the bubble. Empty /
+  // undefined for assistant and system turns. Already normalised by
+  // `makeTextResult` — the pre-#2308 bare-string shape never reaches here.
+  attachments?: AttachmentEntry[] | undefined;
   /** Original (un-rewritten) markdown source for PDF generation.
    *  When present, `downloadPdf` sends this to the server instead of
    *  the displayed `text` (which may have already been rewritten with

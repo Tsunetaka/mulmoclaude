@@ -38,11 +38,12 @@ export {
   listCalendarEvents,
   listCalendars,
   syncCalendarEvents,
+  toCalendarMeta,
   toCalendarSummary,
   toEventSummary,
   updateCalendarEvent,
-  getCalendar,
   getCalendarEvent,
+  getCalendarMeta,
   resolveEventSpan,
   CANCELLED_EVENT_STATUS,
   HTTP_CONFLICT,
@@ -54,6 +55,7 @@ export {
   type CalendarEventSummary,
   type CalendarEventTime,
   type CalendarListPage,
+  type CalendarMeta,
   type CalendarSummary,
   type CalendarSyncResult,
   type DeleteCalendarEventInput,
@@ -62,7 +64,17 @@ export {
   type SyncEventsInput,
   type UpdateCalendarEventInput,
 } from "./calendar.js";
-export { calendarSyncStatePath, clearCalendarSyncToken, loadCalendarSyncToken, saveCalendarSyncToken } from "./calendarSyncStore.js";
+export {
+  calendarSyncStatePath,
+  claimCalendarSyncIfDue,
+  clearCalendarLastSyncedAt,
+  clearCalendarSyncToken,
+  loadCalendarLastSyncedAt,
+  loadCalendarSyncToken,
+  saveCalendarSyncToken,
+} from "./calendarSyncStore.js";
+export { calendarSyncDueWindowMs, isCalendarSyncDue } from "./calendarSyncDue.js";
+export { stateLockPath, withCalendarStateLock, liveLockClock, type LockClock } from "./calendarStateLock.js";
 export {
   calendarPushStatePath,
   clearCalendarShadow,
@@ -74,7 +86,13 @@ export {
 } from "./calendarPushState.js";
 export {
   isDeniedAccessRole,
+  isUnpushed,
+  locallyEditedIds,
   pushCalendarForCollection,
+  pushCollectionNow,
+  reportedAccessRole,
+  unsentLocalEdits,
+  type PushOutcomeKind,
   type CalendarCollectionPushResult,
   type CalendarPushDeps,
   type CalendarPushOutcome,
@@ -97,23 +115,37 @@ export {
   type RecordPlan,
 } from "./pushPlan.js";
 export { toCollectionDateTime } from "./collectionDateTime.js";
+export { withCalendarLock, withKeyedLock } from "./calendarLock.js";
+export { toCollectionRecord, type GoogleCalendarSourceField } from "./collectionProjection.js";
+// Re-homed to `collection/core` when the feeds ingest turned out to need the
+// same merge (#2696). Kept on this subpath so the published surface is unchanged.
+export { mergeIntoExisting } from "../collection/core/project.js";
 export {
   googleCalendarSyncTaskDef,
   classifyDelete,
   classifyWrite,
   anySyncedCollectionSurvives,
+  applyPlanFor,
   groupByCalendar,
+  allUnpushed,
+  unsentEditGuard,
+  heldBack,
   orphanedCalendarId,
+  pullableEvents,
+  pullProtectionFor,
+  pushAndProtect,
   releaseOrphanedCalendarToken,
+  unpushedFor,
+  PROTECTION_UNKNOWN,
+  type ClaimGuard,
+  type PullProtectionDeps,
+  type UnpushedBySlug,
   syncCalendarForCollection,
   syncCalendarGroup,
   syncDueCalendarCollections,
   syncNewCalendarCollections,
   shadowUpdates,
-  toCollectionRecord,
   unsyncedGroups,
-  withCalendarLock,
-  withKeyedLock,
   GOOGLE_CALENDAR_SYNC_TASK_ID,
   type CalendarCollectionSyncResult,
   type CalendarDeclaring,

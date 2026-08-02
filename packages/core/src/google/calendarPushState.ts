@@ -17,12 +17,13 @@ import path from "node:path";
 import { getWorkspaceRoot } from "../collection/server/host.js";
 import { readJsonOrNull, writeJsonAtomicWithMode } from "./fsJson.js";
 import { canonicalCalendarId, type CalendarEventSummary } from "./calendar.js";
+import { stateLockPath, withCalendarStateLock } from "./calendarStateLock.js";
 
 const PUSH_STATE_MODE = 0o600;
 
 /** The pushable subset of an event. `htmlLink` and `status` are read-only on
  *  Google's side, so a baseline for them could never be acted on. */
-export type ShadowEvent = Pick<CalendarEventSummary, "summary" | "start" | "end" | "colorId">;
+export type ShadowEvent = Pick<CalendarEventSummary, "summary" | "start" | "end" | "colorId" | "description" | "location">;
 
 /** calendarId → eventId → what Google last said. */
 interface PushState {
@@ -34,11 +35,17 @@ export function calendarPushStatePath(workspaceRoot?: string): string {
   return path.join(workspaceRoot ?? getWorkspaceRoot(), "data", "calendar", ".push-state.json");
 }
 
+// A state file written before `description` / `location` joined the pushable set
+// simply lacks those keys. That needs no migration: `fieldText(undefined)` and
+// the `""` Google reports for an unset field both compare as empty, so an
+// upgraded host does not read every record as locally edited.
 export const toShadowEvent = (event: CalendarEventSummary): ShadowEvent => ({
   summary: event.summary,
   start: event.start,
   end: event.end,
   colorId: event.colorId,
+  description: event.description,
+  location: event.location,
 });
 
 async function readState(workspaceRoot?: string): Promise<PushState> {
@@ -52,10 +59,16 @@ async function readState(workspaceRoot?: string): Promise<PushState> {
 const writeQueue: { tail: Promise<unknown> } = { tail: Promise.resolve() };
 
 async function updateState(mutate: (events: PushState["events"]) => PushState["events"], workspaceRoot?: string): Promise<void> {
-  const run = writeQueue.tail.then(async () => {
-    const state = await readState(workspaceRoot);
-    await writeJsonAtomicWithMode(calendarPushStatePath(workspaceRoot), { events: mutate(state.events) }, PUSH_STATE_MODE);
-  });
+  const statePath = calendarPushStatePath(workspaceRoot);
+  // Same pairing as `calendarSyncStore.ts`: the queue orders this process, the
+  // file lock orders the others (#2679).
+  const run = writeQueue.tail.then(
+    async () =>
+      await withCalendarStateLock(stateLockPath(statePath), async () => {
+        const state = await readState(workspaceRoot);
+        await writeJsonAtomicWithMode(statePath, { events: mutate(state.events) }, PUSH_STATE_MODE);
+      }),
+  );
   // Swallow on the queue only — the caller still sees the original rejection.
   writeQueue.tail = run.catch(() => undefined);
   return await run;

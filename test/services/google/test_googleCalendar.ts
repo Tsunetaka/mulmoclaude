@@ -3,9 +3,17 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildEventPatch, calendarApiError, collectCalendarPages, toCalendarSummary, toEventSummary, type CalendarListPage } from "@mulmoclaude/core/google";
+import {
+  buildEventPatch,
+  calendarApiError,
+  collectCalendarPages,
+  toCalendarMeta,
+  toCalendarSummary,
+  toEventSummary,
+  type CalendarListPage,
+} from "@mulmoclaude/core/google";
 
-const emptyEvent = { id: "", summary: "", start: "", end: "", htmlLink: "", status: "", colorId: "" };
+const emptyEvent = { id: "", summary: "", start: "", end: "", htmlLink: "", status: "", colorId: "", description: "", location: "" };
 
 describe("toEventSummary", () => {
   it("maps a timed event (dateTime) with its colour", () => {
@@ -26,7 +34,18 @@ describe("toEventSummary", () => {
       htmlLink: "https://calendar.google.com/event?eid=ev1",
       status: "confirmed",
       colorId: "7",
+      description: "",
+      location: "",
     });
+  });
+
+  // The body is Google's own limited HTML. Storing it verbatim is what lets a
+  // mirrored event survive the round trip back to Google (#2620).
+  it("keeps the description's markup byte-for-byte", () => {
+    const body = '<b>Agenda</b><br><a href="https://example.test">notes</a>';
+    const summary = toEventSummary({ id: "ev3", description: body, location: "Room 4" });
+    assert.equal(summary.description, body);
+    assert.equal(summary.location, "Room 4");
   });
 
   it("leaves colorId empty when the event inherits the calendar colour", () => {
@@ -97,6 +116,33 @@ describe("toCalendarSummary", () => {
   });
 });
 
+describe("toCalendarMeta", () => {
+  // What an unlisted calendar is judged on: the events.list envelope, since
+  // `calendars.get` takes scopes this app never requests (#2735).
+  it("reads the zone and the role off an events.list envelope", () => {
+    const meta = toCalendarMeta({
+      kind: "calendar#events",
+      summary: "Shared",
+      timeZone: "Asia/Tokyo",
+      accessRole: "writer",
+      items: [{ id: "ev1" }],
+    });
+    assert.deepEqual(meta, { timeZone: "Asia/Tokyo", accessRole: "writer" });
+  });
+
+  // `""` must stay distinguishable from a role Google DID report: the push
+  // turns it into `null` (unknown) and falls through, where a wrong non-empty
+  // value would refuse a calendar the user can write to.
+  it("fills empty strings for missing fields and tolerates a non-object payload", () => {
+    assert.deepEqual(toCalendarMeta({ items: [] }), { timeZone: "", accessRole: "" });
+    assert.deepEqual(toCalendarMeta(null), { timeZone: "", accessRole: "" });
+  });
+
+  it("ignores non-string field values", () => {
+    assert.deepEqual(toCalendarMeta({ timeZone: 9, accessRole: ["writer"] }), { timeZone: "", accessRole: "" });
+  });
+});
+
 describe("collectCalendarPages", () => {
   it("returns a single page when there is no nextPageToken", async () => {
     const calendars = await collectCalendarPages(async () => ({ items: [{ id: "a" }, { id: "b" }] }));
@@ -144,6 +190,14 @@ describe("buildEventPatch (#2569)", () => {
   // empty the body, and dropping it would silently ignore the edit.
   it('keeps description: "" — it clears the body', () => {
     assert.deepEqual(buildEventPatch({ eventId: "e1", description: "" }), { description: "" });
+  });
+
+  it('keeps location: "" for the same reason', () => {
+    assert.deepEqual(buildEventPatch({ eventId: "e1", location: "" }), { location: "" });
+  });
+
+  it("leaves location alone when the caller never mentioned it", () => {
+    assert.deepEqual(buildEventPatch({ eventId: "e1", summary: "x" }), { summary: "x" });
   });
 
   // Deliberate asymmetry with `description`: Calendar rejects colorId "" as a

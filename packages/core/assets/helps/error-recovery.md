@@ -225,6 +225,91 @@ shipped registry repo's README. Common rejections:
 - `name` reuses the reserved value `official`.
 - `name` doesn't match `[A-Za-z0-9][A-Za-z0-9_-]{0,31}`.
 
+## A hand-placed custom role never appears in the list
+
+### Symptoms
+
+- The user put a file in `config/roles/` themselves (not via Settings →
+  Roles / `manageRoles`) and the role is absent from the role list.
+- Nothing failed in tool output — `manageRoles` with `action: "list"`
+  simply doesn't include it.
+
+### Cause + fix
+
+The loader reads **`config/roles/<id>.json` only**, and a file it cannot
+use is skipped rather than fatal — so one broken file can't take the
+whole list down. The reason is in the server log as a `[roles]` warning
+naming the file:
+
+- `role file is not valid JSON, skipping` — trailing comma, single
+  quotes, unquoted key.
+- `role file does not match the role schema, skipping` — the `issues`
+  field names each field, e.g. `icon: Invalid input: expected string,
+  received undefined`. All of `id`, `name`, `icon`, `prompt`,
+  `availablePlugins` are required; `availablePlugins` must be an array
+  even for one entry.
+- `role file is empty, skipping` — zero-length or whitespace only.
+- `role file could not be read, skipping` — permissions, or the path is
+  a directory.
+- `role file disappeared while loading, skipping` — the file was renamed
+  or deleted while the list was being read, or it is a broken symlink.
+  Re-running the load is enough if the file is there now.
+- `ignoring entries that are not .json files` — a `.md` / `.jsonc` /
+  `.json.txt` file is never read as a role.
+
+Ask the user for that warning line (or the file's contents) rather than
+guessing which of the six it is. Writing the role through
+`manageRoles` instead sidesteps all of them — it serializes the role, so
+the file is always valid.
+
+## A custom role is in the list but delete / update says it doesn't exist
+
+### Symptoms
+
+- `manageRoles` with `action: "list"` includes the role, but `delete` or
+  `update` on that same id returns `Role '<id>' not found.`
+- Or: `Cannot delete built-in roles.` for a role the user created.
+- Or: the user edited a role and the change had no effect, because
+  another file with the same id is the one that id resolves to.
+
+### Cause + fix
+
+The list shows the `id` from **inside** the file, while delete / update
+address the role by its **file name** — so `config/roles/designer.json`
+containing `"id": "myrole"` is listed as `myrole` but delete / update
+only accept `designer`. Two `[roles]` warnings in the server log name
+it:
+
+- `role id does not match its file name` — `fileName` and `id` are both in
+  the warning. Which repair is safe depends on which side is malformed:
+  role ids must match `[a-zA-Z0-9_-]+`, and nothing enforces that on a
+  hand-placed file. **Follow the variant the warning gives you** rather
+  than picking a repair yourself — the wrong one can leave the role
+  reachable under no name at all:
+  - no extra clause — both names are usable. Rename the file to
+    `<id>.json`, or change the `id` to the file's own name. Until then the
+    **file name** is a working handle: `delete <file name>` removes it.
+  - `… the file name is not a usable role id either` — e.g.
+    `my role.json`, rejected as `Invalid role id 'my role'.` Neither name
+    reaches the role. Renaming is the only fix.
+  - `… the id is not a usable role id` — the reverse, e.g. `"id": "my
+    role"` in `designer.json`. `delete designer` still works, and renaming
+    to `my role.json` would take that away. Change the `id`.
+  - `… neither is a usable role id` — pick one id that matches the pattern
+    and use it for the file name and the `id` together.
+  - an inner `id` equal to a built-in role's id — the file also shadows
+    that built-in, and `delete` on the listed id refuses it as built-in.
+    Renaming is the way out.
+- `more than one role file declares the same id` — both files load and
+  both appear in the list; `used` is the one that id resolves to
+  (readdir order, not a choice the user made) and `ignored` lists the
+  rest. Give each role a distinct id, or remove the extra file.
+
+Ask the user for the warning line rather than guessing which of the two
+it is. Both only happen to hand-placed or hand-renamed files:
+`manageRoles` writes `config/roles/<role.id>.json`, so file name and
+`id` always agree.
+
 ## Marp slide PDF — empty / image / font issues
 
 ### Symptoms
@@ -415,6 +500,104 @@ Repair pass reports schema violations by record id, but has no
 "malformed file" classification), and the completion/spawn watcher
 reconciles the WHOLE collection per db change (no per-record events).
 
+## A record the user edited came back with the source's value
+
+### Symptoms
+
+Nothing fails — the user reports it. Any of:
+
+- A Google Calendar collection record they edited shows Google's value
+  again after a sync.
+- A feed record lost the column they had added beside it, or the whole
+  record disappeared once the item aged past `ingest.maxItems`.
+- The edit is simply gone, and no conflict was ever reported.
+
+### Cause
+
+Records are written WHOLE (`writeItem`), so anything that mirrors a
+remote source into a collection has to lay its values OVER the stored
+record rather than replace it — and has to refuse when the record holds
+an edit the source has not seen. Four separate places got that wrong:
+
+- `#2683` — a calendar collection without `autoPush` was never in the
+  pull's protected set at all.
+- `#2684` — the protected set was a snapshot taken when the push
+  finished, so an edit made while the window was in flight (minutes of
+  it, on a full re-walk) was invisible to it.
+- `#2688` — a cancellation in Google deleted the record without asking
+  whether it held an unsent edit.
+- `#2696` — the feeds ingest replaced the record whole, and the
+  `maxItems` prune deleted annotated records once they aged out.
+
+### Fix
+
+All four are fixed as of `@mulmoclaude/core` 1.13.0. **Check the host's
+version first** — if it is older, that is the whole answer.
+
+If it happens on 1.13.0 or later, it is a new bug, not one of these:
+capture which collection, whether it declares `googleCalendar` or
+`ingest`, and what the record looked like before and after. Do NOT
+suggest re-editing and hoping — the point of these fixes is that the
+loss is no longer silent.
+
+## A calendar conflict is reported on every Push and will not clear
+
+### Symptoms
+
+Push reports a conflict for a record that already matches Google. It
+comes back on every attempt; nothing the user does in the record clears
+it.
+
+### Cause
+
+The conflict check compares Google against the BASELINE in
+`<workspace>/data/calendar/.push-state.json`, not against the record.
+A baseline older than both sides reports a conflict forever.
+
+Before `#2679` that happened whenever two hosts pointed at the same
+workspace: both read the same snapshot and the later write dropped the
+earlier one's entry. The state files are now serialised across
+processes with a lock file.
+
+**It can still happen when the workspace lives in a sync folder**
+(Dropbox, iCloud, Google Drive). Exclusive file creation gives no
+exclusion there — the file is replicated after the fact, so both hosts
+believe they hold the lock. No mechanism in the app can fix that.
+
+### Fix
+
+Move the workspace onto a real filesystem. A network mount is fine
+(`O_EXCL` is atomic on NFSv3+); a consumer sync folder is not.
+
+Nothing is lost while it persists: the push REFUSES rather than
+overwrites, which is exactly what the conflict report means. If the
+workspace is already on a real filesystem and a conflict still will not
+clear, that is a new bug — report it with the calendar id and the
+record.
+
+## `proceeding without the calendar state lock` in the logs
+
+### Symptoms
+
+A `google` warning naming a `.lock` path, during a calendar sync.
+
+### Cause
+
+The lock guards one read-modify-write of a calendar state file, and it
+fails OPEN: a host that cannot take it does its work anyway, because
+the lock removes a race rather than being a precondition for syncing
+correctly.
+
+A single occurrence is normal — another host held the file for the few
+milliseconds the mutation takes.
+
+### Fix
+
+Nothing, if it is occasional. If it is constant, either another host is
+hammering the same workspace, or the lock file cannot be created at all
+(a read-only mount, a missing `data/calendar` directory, a full disk) —
+check those before treating it as a calendar problem.
+
 ## Fallback
 
 If none of the above matches the failing tool output:
@@ -594,6 +777,8 @@ matters to you — the check above is the way to rule it in or out.
 - **"Google sign-in service unreachable"** or **"Google sign-in service returned HTTP …"**.
 - **"multiple client_secret_*.json files found"**.
 - **"Google Calendar API: HTTP 403"** with a hint about enabling the API.
+- **"Google Calendar API: HTTP 403 — Request had insufficient authentication scopes"** when pushing
+  a collection to a calendar that is NOT in the account's own calendar list.
 - **"could not obtain a Google access token"** (grant revoked).
 - `calendarListCalendars` / non-primary calendar lookups fail with **HTTP 401/403 / insufficient scope**, or the list comes back empty even though the user has other calendars.
 
@@ -627,7 +812,16 @@ Two ways the link can be minted, and the tool picks automatically:
 - **Multiple client secrets** — the user has several `client_secret_*.json` in `~/.secrets/`;
   a stored refresh token pairs with exactly one OAuth client, so the choice is refused rather
   than guessed at. Ask them to keep one — or remove all of them to use the default flow.
-- **HTTP 403 from a Google API** — the API is not enabled for the Cloud project behind the
+- **403 "insufficient authentication scopes" pushing to a calendar not in the user's list** —
+  read the 403's BODY before the bullet below, which does not apply here: this one is about the
+  grant, not the Cloud project, so enabling an API changes nothing. On hosts predating the #2735
+  fix (`@mulmoclaude/core` 1.13.0 and earlier) the push asked `calendars.get` for that calendar's
+  timezone, and NONE of the four scopes this app requests grants that call, so it failed for every
+  account ever linked. **Re-linking does not help either** — consent grants the same four scopes.
+  Either update the host, or have the user **add the shared calendar to their own Google Calendar
+  list** (Other calendars → Subscribe), after which the push reads its timezone and role from the
+  list and never takes that path. A calendar the user has already added was never affected.
+- **HTTP 403 naming a Google API** — the API is not enabled for the Cloud project behind the
   client in use. With their own client, ask them to enable that API in the Cloud Console
   (APIs & Services → Library — the error names it: "Google Calendar API", "Google Tasks API",
   or "Google Drive API"), then retry — no re-link needed. On the default (broker) flow this

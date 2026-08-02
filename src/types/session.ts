@@ -4,6 +4,8 @@
 import type { ToolResultComplete } from "gui-chat-protocol/vue";
 import { EVENT_TYPES, type PendingGeneration } from "./events";
 import type { ToolCallHistoryItem } from "./toolCallHistory";
+import type { PersistedAttachment } from "./attachment";
+import { isRecord } from "../utils/types";
 
 // ── Session origin (#486) ───────────────────────────────────
 
@@ -106,10 +108,11 @@ export interface TextEntry extends SessionEntry {
   source: "user" | "assistant";
   type: typeof EVENT_TYPES.text;
   message: string;
-  // Workspace-relative paths the user attached for this turn. Persisted
-  // alongside the text so the chat history can render attachment chips
-  // after a session reload. Only present on user entries.
-  attachments?: string[];
+  // Files the user attached for this turn. Persisted alongside the text so
+  // the chat history can render attachment chips after a session reload.
+  // Only present on user entries. Sessions recorded before #2308 hold bare
+  // path strings here — read via `normalizeAttachments`, never directly.
+  attachments?: PersistedAttachment[];
 }
 
 /** Where a skill resolution landed. Mirrors `SkillSource` from
@@ -153,7 +156,11 @@ export const isTextEntry = (entry: SessionEntry): entry is TextEntry =>
   (entry.source === "user" || entry.source === "assistant") && entry.type === EVENT_TYPES.text && typeof entry.message === "string";
 
 export const isSkillEntry = (entry: SessionEntry): entry is SkillEntry =>
-  entry.source === "assistant" && entry.type === EVENT_TYPES.skill && typeof entry.message === "string" && typeof (entry as SkillEntry).skillName === "string";
+  entry.source === "assistant" &&
+  entry.type === EVENT_TYPES.skill &&
+  typeof entry.message === "string" &&
+  isRecord(entry) &&
+  typeof entry.skillName === "string";
 
 export const isToolResultEntry = (entry: SessionEntry): entry is ToolResultEntry =>
   entry.source === "tool" && entry.type === EVENT_TYPES.toolResult && entry.result !== undefined;

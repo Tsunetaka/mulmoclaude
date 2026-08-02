@@ -19,14 +19,10 @@ import { CLI_FLAGS } from "../utils/cli-flags.mjs";
 
 // ── Type coercion helpers ───────────────────────────────────────────
 
-function asInt(value: string | undefined, fallback: number, opts: { min?: number; max?: number } = {}): number {
-  if (value === undefined || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed)) return fallback;
-  if (opts.min !== undefined && parsed < opts.min) return fallback;
-  if (opts.max !== undefined && parsed > opts.max) return fallback;
-  return parsed;
-}
+// `asInt` moved to `../utils/envCoerce.ts` (#2650): `yarn dev`'s Vite proxy has
+// to coerce `PORT` by exactly this rule, from outside the server tsconfig, and a
+// second implementation would let the two disagree about which server to talk to.
+import { asInt, DEFAULT_PORT, PORT_RANGE } from "../utils/envCoerce.js";
 
 function asFlag(value: string | undefined): boolean {
   // Established convention in this project: env flags are "1"
@@ -65,15 +61,16 @@ function asCsv(value: string | undefined): readonly string[] {
  */
 export const env = Object.freeze({
   // HTTP server
-  port: asInt(process.env.PORT, 3001, { min: 0, max: 65_535 }),
+  port: asInt(process.env.PORT, DEFAULT_PORT, PORT_RANGE),
   nodeEnv: process.env.NODE_ENV ?? "development",
   isProduction: process.env.NODE_ENV === "production",
 
-  // Claude Code CLI config-location overrides (issue #87 §2). Default
-  // undefined → `server/utils/claudeConfigPath.ts` falls back to
-  // `homedir()/.claude` + `homedir()/.claude.json`. Set when your Claude
-  // install writes elsewhere (Windows corp redirect, sandboxed test fixture,
-  // future Anthropic location change).
+  // Claude Code CLI config-location overrides (issue #87 §2). Both undefined →
+  // `server/utils/claudeConfigPath.ts` falls back to `homedir()/.claude` +
+  // `homedir()/.claude.json`. Set when your Claude install writes elsewhere
+  // (Windows corp redirect, sandboxed test fixture, future Anthropic location
+  // change). `CLAUDE_CONFIG_DIR` alone is enough: `.claude.json` lives inside
+  // that directory, so the helper resolves both from it (#2654).
   claudeConfigDir: process.env.CLAUDE_CONFIG_DIR,
   claudeConfigJson: process.env.CLAUDE_CONFIG_JSON,
 

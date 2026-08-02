@@ -102,8 +102,9 @@ export function buildMemoryContext(snapshot: MemorySnapshot, workspacePath: stri
 // #1029 PR-B (one fact per `<type>_<slug>.md`). Both this section
 // and `buildMemoryContext` derive format from the same `snapshot`
 // so write rules and read context stay consistent — including in
-// Docker runs where `workspacePath="/workspace"` doesn't match the
-// host path the snapshot was loaded from (Codex review on #1280).
+// Docker runs where `workspacePath` is `CONTAINER_WORKSPACE_PATH`,
+// which doesn't match the host path the snapshot was loaded from
+// (Codex review on #1280).
 export function buildMemoryManagementSection(snapshot: MemorySnapshot): string {
   return snapshot.format === "topic" ? TOPIC_MEMORY_MANAGEMENT : ATOMIC_MEMORY_MANAGEMENT;
 }
@@ -266,7 +267,7 @@ export interface SystemPromptParams {
    *  agent to interpret bare times in that zone without asking the
    *  user every turn. Missing or invalid values fall back to
    *  server-local date only. */
-  userTimezone?: string;
+  userTimezone?: string | undefined;
   /** Pre-loaded memory snapshot — caller awaits `loadMemorySnapshot`
    *  before invoking `buildSystemPrompt` so prompt assembly stays
    *  synchronous and side-effect-free for the memory section. */
