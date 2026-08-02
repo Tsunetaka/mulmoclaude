@@ -1218,12 +1218,22 @@ function startNewChat(message: string, roleId?: string): void {
 // fresh in-memory session bound to `roleId` and activate it in place
 // (set currentSessionId directly — no navigateToSession). sessionRole
 // then resolves to that role, so the agent run is dispatched as it.
+// Spin up a fresh in-memory session bound to `roleId` and activate it in
+// place — set currentSessionId directly, no navigateToSession / router
+// push (same as the create branch of sendMessageAs). No message is sent,
+// so activeSession resolves to an empty session. Used to clear the
+// slide-editor chat while the user stays on /slides; the previous session
+// stays in sessionMap/history so it can be reopened later.
+function activateFreshSessionAs(roleId: string): void {
+  const session = createEmptySession(uuidv4(), roleId);
+  sessionMap.set(session.id, session);
+  currentSessionId.value = session.id;
+}
+
 function sendMessageAs(message: string, roleId: string): void {
   const active = sessionMap.get(currentSessionId.value);
   if (!active || active.roleId !== roleId) {
-    const session = createEmptySession(uuidv4(), roleId);
-    sessionMap.set(session.id, session);
-    currentSessionId.value = session.id;
+    activateFreshSessionAs(roleId);
   }
   void sendMessage(message);
 }
@@ -1287,6 +1297,7 @@ provideAppApi({
   refreshRoles,
   sendMessage: (message: string) => sendMessage(message),
   sendMessageAs: (message: string, roleId: string) => sendMessageAs(message, roleId),
+  startFreshSessionAs: (roleId: string) => activateFreshSessionAs(roleId),
   startNewChat: (message: string, roleId?: string) => startNewChat(message, roleId),
   navigateToWorkspacePath: (href: string) => navigateToWorkspacePath(href),
   getResultTimestamp: (uuid: string) => activeSession.value?.resultTimestamps.get(uuid),

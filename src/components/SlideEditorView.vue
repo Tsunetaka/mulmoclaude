@@ -287,11 +287,21 @@
 
         <!-- ─ Claude チャットペイン ─ -->
         <!-- eslint-disable @intlify/vue-i18n/no-raw-text -- internal slide-editing tool; not subject to i18n -->
-        <div v-if="showChatPane" class="chat-pane flex-shrink-0 flex flex-col bg-[#080e18] border-l border-[#141e2e]">
+        <div v-if="showChatPane" class="chat-pane relative flex-shrink-0 flex flex-col bg-[#080e18] border-l border-[#141e2e]">
           <!-- ペインヘッダー -->
           <div class="h-9 flex-shrink-0 flex items-center gap-1.5 px-3 bg-[#0a1020] border-b border-[#141e2e]">
             <span class="material-icons text-sm text-[#5a95e0]">chat</span>
             <span class="text-[11px] font-bold text-[#a9cdef] flex-1">Claude に指示</span>
+            <button
+              class="flex items-center gap-0.5 text-[10px] text-[#7fa8d4] hover:text-[#cfe6ff] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="チャットを新規化（編集画面は閉じません）"
+              aria-label="チャットを新規化"
+              :disabled="agentRunning"
+              @click="newChat"
+            >
+              <span class="material-icons text-sm">add_comment</span>
+              新規
+            </button>
             <button class="text-[#5a7593] hover:text-[#a9cdef] transition-colors" aria-label="チャットを閉じる" @click="showChatPane = false">
               <span class="material-icons text-sm">close</span>
             </button>
@@ -371,6 +381,27 @@
               >
                 <span class="material-icons text-sm text-white">send</span>
               </button>
+            </div>
+          </div>
+
+          <!-- チャット新規化の確認ダイアログ（メッセージが残っている時だけ表示） -->
+          <div v-if="chatClearConfirmOpen" class="absolute inset-0 z-20 flex items-center justify-center bg-black/60 px-4">
+            <div class="w-full max-w-[240px] rounded-lg border border-[#26405f] bg-[#0d1626] p-3 shadow-xl">
+              <p class="text-[12px] font-bold text-[#cfe6ff] mb-1">チャットを新規化しますか？</p>
+              <p class="text-[11px] leading-snug text-[#8fa9c6] mb-3">
+                今のやり取りを終了して新しいチャットを開始します。編集画面は閉じません。これまでの会話は履歴に残ります。
+              </p>
+              <div class="flex justify-end gap-2">
+                <button
+                  class="text-[11px] px-2.5 py-1 rounded border border-[#2a3b4e] text-[#93b2d0] hover:text-[#cfe6ff] hover:border-[#3a5476] transition-colors"
+                  @click="chatClearConfirmOpen = false"
+                >
+                  キャンセル
+                </button>
+                <button class="text-[11px] px-2.5 py-1 rounded bg-[#1a4a8a] hover:bg-[#2a5a9a] text-white transition-colors" @click="clearChat">
+                  新規化する
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1141,6 +1172,9 @@ const showChatPane = ref(false);
 const chatInput = ref("");
 const chatMessagesEl = ref<HTMLDivElement | null>(null);
 const chatInputEl = ref<HTMLTextAreaElement | null>(null);
+// 「＋新規」＝編集画面は閉じずにチャットだけ新しいセッションへ切り替える（トークン節約用）。
+// メッセージが1件でもあれば誤操作防止の確認ダイアログを挟む（空なら即クリア）。
+const chatClearConfirmOpen = ref(false);
 
 const QUICK_HINTS = ["このページを説明して", "テキストを修正して", "レイアウトを改善して", "図解にして"] as const;
 
@@ -1971,6 +2005,25 @@ function sendChatMessage(): void {
 function sendQuickHint(hint: string): void {
   if (agentRunning.value) return;
   appApi.sendMessageAs(buildSlideContext() + hint, SLIDE_ROLE_ID);
+}
+
+/** チャットだけを新しいセッションへ切り替える（編集画面は閉じない）。
+ *  実行中は無効。メッセージが残っていれば確認ダイアログを挟む。 */
+function newChat(): void {
+  if (agentRunning.value) return;
+  if (recentChatMessages.value.length > 0) {
+    chatClearConfirmOpen.value = true;
+    return;
+  }
+  clearChat();
+}
+
+/** 実際のクリア（新規セッションを in-place で有効化）。旧セッションは履歴に残る。 */
+function clearChat(): void {
+  chatClearConfirmOpen.value = false;
+  appApi.startFreshSessionAs(SLIDE_ROLE_ID);
+  chatInput.value = "";
+  void nextTick(() => chatInputEl.value?.focus());
 }
 
 // ── Data loading ──────────────────────────────────────────────────────────────
