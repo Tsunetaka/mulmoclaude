@@ -1094,6 +1094,12 @@ const zhMessages = {
     pageFixed: "固定",
     pageEditSelectFirst: "选择此页面后可移动或删除",
     pageListAria: "幻灯片列表（使用上下箭头键选择页面）",
+    sectionMoveUp: "上移分区",
+    sectionMoveDown: "下移分区",
+    sectionRename: "重命名分区",
+    sectionDelete: "删除分区",
+    sectionDeleteNonEmpty: "无法删除包含页面的分区（请先清空）",
+    sectionAdd: "添加分区",
   },
   mulmoPoint: {
     title: "关于 MulmoPoint",

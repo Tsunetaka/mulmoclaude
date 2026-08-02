@@ -568,6 +568,18 @@ const HOST_API_ROUTES = {
     /** POST — テーマ適用済みの空の本文ページを挿入する「頁編集」（SSE）。`page_ops.py add`。
      *  表紙・Thank You セクションには追加不可。body `{ section, toIndex, template? }`。 */
     pageAdd: "/api/work/:wd/:version/page-add",
+    /** POST — 空のセクションを追加する「セクション編集」（SSE）。`page_ops.py section-add`。
+     *  先頭（表紙）の後〜Thank You の前に限定。予約名・同名は不可。body `{ name, toIndex }`。 */
+    sectionAdd: "/api/work/:wd/:version/section-add",
+    /** POST — セクションを上下 1 つ移動する「セクション編集」（SSE）。`page_ops.py section-move`。
+     *  表紙・Thank You は移動不可。body `{ name, direction: "up" | "down" }`。 */
+    sectionMove: "/api/work/:wd/:version/section-move",
+    /** POST — 空のセクションを削除する「セクション編集」（SSE）。`page_ops.py section-delete`。
+     *  頁を含むセクション・表紙・Thank You は不可。body `{ name }`。 */
+    sectionDelete: "/api/work/:wd/:version/section-delete",
+    /** POST — セクションをリネームする「セクション編集」（SSE）。`page_ops.py section-rename`。
+     *  表紙・Thank You は不可。予約名・同名は不可。body `{ name, toName }`。 */
+    sectionRename: "/api/work/:wd/:version/section-rename",
   },
 
   wiki: {

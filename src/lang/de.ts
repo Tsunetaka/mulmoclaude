@@ -1128,6 +1128,12 @@ const deMessages = {
     pageFixed: "Fest",
     pageEditSelectFirst: "Diese Seite auswählen, um sie zu verschieben oder zu löschen",
     pageListAria: "Folienliste (mit den Pfeiltasten nach oben/unten eine Seite auswählen)",
+    sectionMoveUp: "Abschnitt nach oben",
+    sectionMoveDown: "Abschnitt nach unten",
+    sectionRename: "Abschnitt umbenennen",
+    sectionDelete: "Abschnitt löschen",
+    sectionDeleteNonEmpty: "Abschnitt mit Seiten kann nicht gelöscht werden (zuerst leeren)",
+    sectionAdd: "Abschnitt hinzufügen",
   },
   mulmoPoint: {
     title: "Über MulmoPoint",

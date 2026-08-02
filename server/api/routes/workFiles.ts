@@ -2245,6 +2245,55 @@ export function validatePageAddBody(body: unknown): PageAddBody | null {
   return { section, toIndex, template: template as string | undefined };
 }
 
+// ── セクション編集（追加・移動・削除・リネーム）の body 検証 ──────────────────────
+// 検証は python（page_ops.py）が真実源（固定・予約・重複・非空削除は exit 2）。ここでは
+// リクエスト形状だけを確かめ、帯・予約・重複の判定は python に委ねる。
+
+export interface SectionAddBody {
+  name: string;
+  toIndex: number;
+}
+export function validateSectionAddBody(body: unknown): SectionAddBody | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { name, toIndex } = body as Record<string, unknown>;
+  if (!isValidSectionName(name)) return null;
+  if (typeof toIndex !== "number" || !Number.isInteger(toIndex) || toIndex < 1) return null;
+  return { name, toIndex };
+}
+
+export interface SectionMoveBody {
+  name: string;
+  direction: "up" | "down";
+}
+export function validateSectionMoveBody(body: unknown): SectionMoveBody | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { name, direction } = body as Record<string, unknown>;
+  if (!isValidSectionName(name)) return null;
+  if (direction !== "up" && direction !== "down") return null;
+  return { name, direction };
+}
+
+export interface SectionDeleteBody {
+  name: string;
+}
+export function validateSectionDeleteBody(body: unknown): SectionDeleteBody | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { name } = body as Record<string, unknown>;
+  if (!isValidSectionName(name)) return null;
+  return { name };
+}
+
+export interface SectionRenameBody {
+  name: string;
+  toName: string;
+}
+export function validateSectionRenameBody(body: unknown): SectionRenameBody | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { name, toName } = body as Record<string, unknown>;
+  if (!isValidSectionName(name) || !isValidSectionName(toName)) return null;
+  return { name, toName };
+}
+
 // page_ops.py を spawn し SSE に流す。終了コードを返す（spawn 失敗は 1）。
 async function runPageOps(args: string[], send: (line: string) => void): Promise<number> {
   const scriptPath = path.join(workspacePath, "data/work/tools/page_ops.py");
@@ -2332,6 +2381,66 @@ router.post(API_ROUTES.work.pageAdd, async (req, res) => {
   if (body.template) args.push("--template", body.template);
   const code = await runPageOps(args, ctx.send);
   await finishStructEdit(ctx, code, "頁の追加");
+  res.end();
+});
+
+// ── セクション編集（追加・移動・削除・リネーム）— page_ops.py の section-* を spawn ──
+// 頁編集と同じゲート（beginStructEdit＝wd/version 検証＋チェックアウト中 409）と
+// 後処理（finishStructEdit＝gen_thumbs 差分再生成＋DONE）を共有する。
+
+// POST /api/work/:wd/:version/section-add — 空のセクションを追加する（SSE）
+router.post(API_ROUTES.work.sectionAdd, async (req, res) => {
+  const body = validateSectionAddBody(req.body);
+  if (!body) {
+    res.status(400).json({ error: "name / toIndex（1 以上の整数）が必要です" });
+    return;
+  }
+  const ctx = await beginStructEdit(req, res);
+  if (!ctx) return;
+  const code = await runPageOps(["section-add", "--version-dir", ctx.versionDir, "--name", body.name, "--to-index", String(body.toIndex)], ctx.send);
+  await finishStructEdit(ctx, code, "セクションの追加");
+  res.end();
+});
+
+// POST /api/work/:wd/:version/section-move — セクションを上下 1 つ移動する（SSE）
+router.post(API_ROUTES.work.sectionMove, async (req, res) => {
+  const body = validateSectionMoveBody(req.body);
+  if (!body) {
+    res.status(400).json({ error: "name / direction（up | down）が必要です" });
+    return;
+  }
+  const ctx = await beginStructEdit(req, res);
+  if (!ctx) return;
+  const code = await runPageOps(["section-move", "--version-dir", ctx.versionDir, "--name", body.name, "--direction", body.direction], ctx.send);
+  await finishStructEdit(ctx, code, "セクションの移動");
+  res.end();
+});
+
+// POST /api/work/:wd/:version/section-delete — 空のセクションを削除する（SSE）
+router.post(API_ROUTES.work.sectionDelete, async (req, res) => {
+  const body = validateSectionDeleteBody(req.body);
+  if (!body) {
+    res.status(400).json({ error: "name が必要です" });
+    return;
+  }
+  const ctx = await beginStructEdit(req, res);
+  if (!ctx) return;
+  const code = await runPageOps(["section-delete", "--version-dir", ctx.versionDir, "--name", body.name], ctx.send);
+  await finishStructEdit(ctx, code, "セクションの削除");
+  res.end();
+});
+
+// POST /api/work/:wd/:version/section-rename — セクションをリネームする（SSE）
+router.post(API_ROUTES.work.sectionRename, async (req, res) => {
+  const body = validateSectionRenameBody(req.body);
+  if (!body) {
+    res.status(400).json({ error: "name / toName が必要です" });
+    return;
+  }
+  const ctx = await beginStructEdit(req, res);
+  if (!ctx) return;
+  const code = await runPageOps(["section-rename", "--version-dir", ctx.versionDir, "--name", body.name, "--to-name", body.toName], ctx.send);
+  await finishStructEdit(ctx, code, "セクションのリネーム");
   res.end();
 });
 

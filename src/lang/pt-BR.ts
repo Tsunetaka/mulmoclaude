@@ -1114,6 +1114,12 @@ const ptBRMessages = {
     pageFixed: "Fixa",
     pageEditSelectFirst: "Selecione esta página para movê-la ou excluí-la",
     pageListAria: "Lista de slides (use as setas para cima/baixo para selecionar uma página)",
+    sectionMoveUp: "Mover seção para cima",
+    sectionMoveDown: "Mover seção para baixo",
+    sectionRename: "Renomear seção",
+    sectionDelete: "Excluir seção",
+    sectionDeleteNonEmpty: "Não é possível excluir uma seção com páginas (esvazie-a primeiro)",
+    sectionAdd: "Adicionar seção",
   },
   mulmoPoint: {
     title: "Sobre o MulmoPoint",

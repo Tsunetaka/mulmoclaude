@@ -64,27 +64,65 @@
           @keydown="onSidebarKeydown"
         >
           <template v-for="(sec, si) in deck.sections" :key="si">
-            <!-- セクション見出し -->
-            <button
-              class="w-full flex items-center gap-1.5 px-2 py-1.5 bg-[#0d1828] border-b border-[#141e2e] hover:bg-[#162038] transition-colors text-left"
-              @click="toggleSection(si)"
-            >
-              <span
-                class="text-[8px] text-[#4a6a8a] flex-shrink-0 transition-transform duration-150"
-                :style="{ transform: collapsedSections.has(si) ? 'rotate(-90deg)' : 'rotate(0deg)' }"
-                >▼</span
-              >
-              <span class="text-[10px] font-bold text-[#8aacd0] flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-                {{ sec.name }}
-              </span>
-              <span
-                v-if="pageEditMode && !isEditableSection(si, sec.name)"
-                class="material-icons text-[11px] text-[#5a7593] flex-shrink-0"
-                :title="t('slides.pageFixed')"
-                >lock</span
-              >
-              <span class="text-[9px] text-[#2a3a5a] flex-shrink-0">{{ sec.pages.length }}p</span>
-            </button>
+            <!-- セクション見出し（見出しボタン＋頁編集モード時のセクション操作） -->
+            <div class="w-full flex items-center bg-[#0d1828] border-b border-[#141e2e]">
+              <button class="flex-1 min-w-0 flex items-center gap-1.5 px-2 py-1.5 hover:bg-[#162038] transition-colors text-left" @click="toggleSection(si)">
+                <span
+                  class="text-[8px] text-[#4a6a8a] flex-shrink-0 transition-transform duration-150"
+                  :style="{ transform: collapsedSections.has(si) ? 'rotate(-90deg)' : 'rotate(0deg)' }"
+                  >▼</span
+                >
+                <span class="text-[10px] font-bold text-[#8aacd0] flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+                  {{ sec.name }}
+                </span>
+                <span
+                  v-if="pageEditMode && !isEditableSection(si, sec.name)"
+                  class="material-icons text-[11px] text-[#5a7593] flex-shrink-0"
+                  :title="t('slides.pageFixed')"
+                  >lock</span
+                >
+                <span class="text-[9px] text-[#2a3a5a] flex-shrink-0">{{ sec.pages.length }}p</span>
+              </button>
+              <!-- セクション操作（編集可能セクションのみ・移動/リネーム/削除）。削除は空のときのみ。 -->
+              <div v-if="pageEditMode && isEditableSection(si, sec.name)" class="flex items-center gap-0.5 pr-1 flex-shrink-0">
+                <button
+                  class="pe-btn"
+                  :disabled="peBusy || !canMoveSectionUI(sec.name, -1)"
+                  :title="t('slides.sectionMoveUp')"
+                  :aria-label="t('slides.sectionMoveUp')"
+                  @click.stop="moveSection(sec.name, 'up')"
+                >
+                  <span class="material-icons text-[13px]">arrow_upward</span>
+                </button>
+                <button
+                  class="pe-btn"
+                  :disabled="peBusy || !canMoveSectionUI(sec.name, 1)"
+                  :title="t('slides.sectionMoveDown')"
+                  :aria-label="t('slides.sectionMoveDown')"
+                  @click.stop="moveSection(sec.name, 'down')"
+                >
+                  <span class="material-icons text-[13px]">arrow_downward</span>
+                </button>
+                <button
+                  class="pe-btn"
+                  :disabled="peBusy"
+                  :title="t('slides.sectionRename')"
+                  :aria-label="t('slides.sectionRename')"
+                  @click.stop="askRenameSection(sec.name)"
+                >
+                  <span class="material-icons text-[13px]">edit</span>
+                </button>
+                <button
+                  class="pe-btn pe-btn--danger"
+                  :disabled="peBusy || sec.pages.length > 0"
+                  :title="sec.pages.length > 0 ? t('slides.sectionDeleteNonEmpty') : t('slides.sectionDelete')"
+                  :aria-label="t('slides.sectionDelete')"
+                  @click.stop="askDeleteSection(sec.name)"
+                >
+                  <span class="material-icons text-[13px]">delete</span>
+                </button>
+              </div>
+            </div>
 
             <!-- スライド一覧 -->
             <div v-if="!collapsedSections.has(si)" class="flex flex-col gap-1 p-1.5">
@@ -177,6 +215,12 @@
               </button>
             </div>
           </template>
+
+          <!-- ＋セクション追加（頁編集モード時・先頭『表紙』の後〜Thank You の前に挿入） -->
+          <button v-if="pageEditMode" class="pe-add-btn m-1.5" :disabled="peBusy" :aria-label="t('slides.sectionAdd')" @click="askAddSection">
+            <span class="material-icons text-[13px]">playlist_add</span>
+            <span>{{ t("slides.sectionAdd") }}</span>
+          </button>
         </div>
 
         <!-- ─ メインビュー ─ -->
@@ -832,6 +876,82 @@
         </div>
       </div>
     </div>
+
+    <!-- ── セクション編集モーダル（追加／リネーム／削除の確認・入力） ── -->
+    <div v-if="sectionModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeSectionModal">
+      <div class="w-[30rem] max-w-[90vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
+        <div class="flex items-center gap-2 px-4 py-2.5 bg-[#0a1830] border-b border-[#1a2a44]">
+          <span class="material-icons text-sm text-[#4a8acc]">segment</span>
+          <span class="text-sm font-bold text-[#8aacd0] flex-1">
+            {{ sectionModalMode === "add" ? "セクションの追加" : sectionModalMode === "rename" ? "セクションのリネーム" : "セクションの削除" }} — {{ wdId }}（{{
+              version
+            }}）
+          </span>
+          <button class="text-[#3a5a7a] hover:text-[#6a9acc] disabled:opacity-30" :disabled="peBusy" aria-label="閉じる" @click="closeSectionModal">
+            <span class="material-icons text-sm">close</span>
+          </button>
+        </div>
+
+        <div class="px-4 py-3 space-y-3 text-[#8aacd0]">
+          <!-- 追加：挿入位置 -->
+          <div v-if="sectionModalMode === 'add'" class="space-y-1">
+            <label class="block text-[11px] text-[#7d9cbb]">挿入位置</label>
+            <select
+              v-model.number="sectionInsertIndex"
+              class="w-full bg-[#0d1a28] border border-[#1c2f45] focus:border-[#2f5a94] rounded text-xs text-[#e4eefa] px-2 py-1.5 focus:outline-none"
+            >
+              <option v-for="slot in sectionSlots" :key="slot.index" :value="slot.index">
+                「{{ slot.afterName }}」の後{{ slot.beforeName ? `（「${slot.beforeName}」の前）` : "（末尾）" }}
+              </option>
+            </select>
+          </div>
+
+          <!-- 追加／リネーム：名前入力 -->
+          <div v-if="sectionModalMode !== 'delete'" class="space-y-1">
+            <label class="block text-[11px] text-[#7d9cbb]">{{ sectionModalMode === "add" ? "新しいセクション名" : "新しい名前" }}</label>
+            <input
+              v-model="sectionNameInput"
+              type="text"
+              class="w-full bg-[#0d1a28] border border-[#1c2f45] focus:border-[#2f5a94] rounded text-xs text-[#e4eefa] placeholder-[#5f7286] px-2 py-1.5 focus:outline-none"
+              placeholder="例: 概要 / 手順 / 補足"
+              @keydown.enter.prevent="confirmSectionModal"
+            />
+            <p v-if="sectionNameError" class="text-[11px] text-red-300">{{ sectionNameError }}</p>
+            <p class="text-[10px] text-[#5a7593] leading-relaxed">同名・予約名（Thank You 系・未分類）は使えません。表紙と Thank You の位置は固定です。</p>
+          </div>
+
+          <!-- 削除：確認 -->
+          <div v-else class="space-y-2">
+            <p class="text-xs leading-relaxed">
+              セクション <b class="text-[#9fbdd8]">「{{ sectionTargetName }}」</b> を削除します。<br />
+              このセクションは空（頁 0）なので、頁は失われません。
+            </p>
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-2 px-4 py-2.5 bg-[#0a1220] border-t border-[#1a2a44]">
+          <button class="px-3 py-1.5 rounded text-xs text-[#8aacd0] bg-[#16233c] hover:bg-[#1e2e48]" :disabled="peBusy" @click="closeSectionModal">
+            キャンセル
+          </button>
+          <button
+            v-if="sectionModalMode === 'delete'"
+            class="px-3 py-1.5 rounded text-xs text-white bg-red-700 hover:bg-red-600 disabled:opacity-40"
+            :disabled="peBusy"
+            @click="confirmSectionModal"
+          >
+            削除する
+          </button>
+          <button
+            v-else
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a] disabled:opacity-40"
+            :disabled="peBusy || !sectionNameCheck.ok"
+            @click="confirmSectionModal"
+          >
+            {{ sectionModalMode === "add" ? "追加する" : "変更する" }}
+          </button>
+        </div>
+      </div>
+    </div>
     <!-- eslint-enable @intlify/vue-i18n/no-raw-text -->
   </div>
 </template>
@@ -853,6 +973,9 @@ import {
   isEditableSection,
   computeMoveTarget,
   sidebarNavTarget,
+  canMoveSection,
+  sectionInsertSlots,
+  validateNewSectionName,
   type SlideStructure,
   type SlideManifest,
   type DeckModel,
@@ -1141,6 +1264,106 @@ function closePageEditModal(): void {
   if (peBusy.value) return;
   pageEditModalOpen.value = false;
   pendingDelete.value = null;
+}
+
+// ── セクション編集（追加・移動・削除・リネーム・SSE）─────────────────────────────
+// 頁編集モード（pageEditMode）ON でセクション見出し行に ↑↓/✎/🗑 と、末尾に「＋セクション
+// 追加」を出す。表紙（先頭）／Thank You は固定（page_ops.py が拒否・UI も錠前）。SSE 実行は
+// 頁編集と同じ runPageEdit を再利用（section-* は PAGE_ID を返さないので単に再読込する）。
+type SectionModalMode = "add" | "rename" | "delete";
+const sectionModalOpen = ref(false);
+const sectionModalMode = ref<SectionModalMode>("add");
+const sectionNameInput = ref(""); // 追加/リネームの新しい名前
+const sectionTargetName = ref(""); // リネーム/削除の対象セクション名
+const sectionInsertIndex = ref(1); // 追加の挿入位置（sections 配列の index）
+
+/** 追加モーダルで選べる挿入位置（先頭『表紙』の後〜Thank You の前）。 */
+const sectionSlots = computed(() => (deck.value ? sectionInsertSlots(deck.value) : []));
+
+/** 新しい名前の事前検証（空・予約名・重複）。python が真実源だが即時フィードバック用。 */
+const sectionNameCheck = computed(() => {
+  const names = deck.value?.sections.map((sec) => sec.name) ?? [];
+  const exclude = sectionModalMode.value === "rename" ? sectionTargetName.value : undefined;
+  return validateNewSectionName(sectionNameInput.value, names, exclude);
+});
+
+/** 事前検証エラーの日本語文言（空文字＝エラーなし）。 */
+const sectionNameError = computed(() => {
+  if (sectionModalMode.value === "delete") return "";
+  const check = sectionNameCheck.value;
+  if (check.ok) return "";
+  if (check.problem === "empty") return "セクション名を入力してください";
+  if (check.problem === "reserved") return "その名前は予約されています（Thank You 系・未分類 は使えません）";
+  return "同名のセクションが既にあります";
+});
+
+/** ↑↓ でセクションを動かせるか（編集可能帯の端では false）。 */
+function canMoveSectionUI(name: string, direction: -1 | 1): boolean {
+  return deck.value !== null && canMoveSection(deck.value, name, direction);
+}
+
+/** セクション追加モーダルを開く（既定の挿入位置＝Thank You の直前）。 */
+function askAddSection(): void {
+  if (peBusy.value || !deck.value) return;
+  const slots = sectionInsertSlots(deck.value);
+  sectionModalMode.value = "add";
+  sectionNameInput.value = "";
+  sectionInsertIndex.value = slots.length ? slots[slots.length - 1].index : 1;
+  sectionModalOpen.value = true;
+}
+
+/** セクションリネームモーダルを開く（現在名を初期値に）。 */
+function askRenameSection(name: string): void {
+  if (peBusy.value) return;
+  sectionModalMode.value = "rename";
+  sectionTargetName.value = name;
+  sectionNameInput.value = name;
+  sectionModalOpen.value = true;
+}
+
+/** セクション削除の確認モーダルを開く（空セクションのみ・ボタンは非空で非活性）。 */
+function askDeleteSection(name: string): void {
+  if (peBusy.value) return;
+  sectionModalMode.value = "delete";
+  sectionTargetName.value = name;
+  sectionModalOpen.value = true;
+}
+
+/** セクションモーダルを閉じる（実行中は閉じない）。 */
+function closeSectionModal(): void {
+  if (peBusy.value) return;
+  sectionModalOpen.value = false;
+}
+
+/** ↑↓ 移動を即実行（確認なし・進捗は頁編集モーダルを再利用）。 */
+async function moveSection(name: string, direction: "up" | "down"): Promise<void> {
+  if (peBusy.value) return;
+  await runPageEdit(API_ROUTES.work.sectionMove, { name, direction }, "セクションの移動");
+}
+
+/** モーダルの確定（追加／リネーム／削除）。追加・リネームは事前検証を通過した時のみ。 */
+async function confirmSectionModal(): Promise<void> {
+  const mode = sectionModalMode.value;
+  if (mode === "add") {
+    if (!sectionNameCheck.value.ok) return;
+    const name = sectionNameInput.value.trim();
+    const toIndex = sectionInsertIndex.value;
+    sectionModalOpen.value = false;
+    await runPageEdit(API_ROUTES.work.sectionAdd, { name, toIndex }, "セクションの追加");
+    return;
+  }
+  if (mode === "rename") {
+    if (!sectionNameCheck.value.ok) return;
+    const name = sectionTargetName.value;
+    const toName = sectionNameInput.value.trim();
+    sectionModalOpen.value = false;
+    if (toName === name) return; // 変更なしは何もしない
+    await runPageEdit(API_ROUTES.work.sectionRename, { name, toName }, "セクションのリネーム");
+    return;
+  }
+  const name = sectionTargetName.value;
+  sectionModalOpen.value = false;
+  await runPageEdit(API_ROUTES.work.sectionDelete, { name }, "セクションの削除");
 }
 
 const pptxBasename = computed(() => sourcePptx.value.replace(/\.pptx$/i, ""));

@@ -148,6 +148,80 @@ export function computeMoveTarget(deck: DeckModel, pageId: string, direction: -1
   return { toSection: neighbor.sec, toIndex: neighbor.localIndex };
 }
 
+// ── セクション編集（追加・移動・削除・リネーム）の純関数 ─────────────────────────
+// サーバー page_ops.py の section-* サブコマンドと同一ルール。判定は python が真実源
+// で、ここはボタンの活性/非活性・入力の事前検証・挿入位置の候補算出に使う。
+
+/** Thank You 系（大小無視）または 未分類（完全一致）は予約名＝新規/リネーム不可。 */
+export function isReservedSectionName(name: string): boolean {
+  const trimmed = name.trim();
+  if (trimmed === ORPHAN_SECTION_NAME) return true;
+  return THANKYOU_SECTION_NAMES.has(trimmed.toLowerCase());
+}
+
+export type SectionNameProblem = "empty" | "reserved" | "duplicate";
+export interface SectionNameCheck {
+  ok: boolean;
+  problem?: SectionNameProblem;
+}
+
+/**
+ * 新規追加／リネームのセクション名を検証する（page_ops._validate_section_name と同一）。
+ * 空・予約名・重複（前後空白を無視した完全一致・大小文字は区別）を弾く。リネーム時は
+ * `excludeName` に現在名を渡すと、自分自身との重複衝突を除外する（＝名前据置は OK）。
+ */
+export function validateNewSectionName(name: string, existingNames: readonly string[], excludeName?: string): SectionNameCheck {
+  const trimmed = name.trim();
+  if (!trimmed) return { ok: false, problem: "empty" };
+  if (isReservedSectionName(trimmed)) return { ok: false, problem: "reserved" };
+  const exclude = excludeName?.trim();
+  const duplicate = existingNames.some((existing) => existing.trim() === trimmed && existing.trim() !== exclude);
+  return duplicate ? { ok: false, problem: "duplicate" } : { ok: true };
+}
+
+/**
+ * セクションを↑（-1）／↓（+1）へ 1 つ動かせるか（＝隣接する編集可能セクションと入れ替え
+ * 可能か）。固定セクション・編集可能帯の端・存在しない名前は false。
+ */
+export function canMoveSection(deck: DeckModel, sectionName: string, direction: -1 | 1): boolean {
+  const editableIndexes = deck.sections.map((sec, index) => ({ index, name: sec.name })).filter((entry) => isEditableSection(entry.index, entry.name));
+  const sectionIndex = deck.sections.findIndex((sec) => sec.name === sectionName);
+  if (sectionIndex < 0) return false;
+  const pos = editableIndexes.findIndex((entry) => entry.index === sectionIndex);
+  if (pos < 0) return false; // 固定セクション
+  const dest = pos + direction;
+  return dest >= 0 && dest < editableIndexes.length;
+}
+
+/** 新規セクションを挿入できる位置（sections 配列の 0 始まり index）とその前後の名前。 */
+export interface SectionInsertSlot {
+  index: number;
+  afterName: string;
+  beforeName: string | null;
+}
+
+/**
+ * 新規セクションの有効な挿入位置一覧。先頭（表紙・index 0）の後から、最初に現れる固定
+ * セクション（Thank You／未分類）の直前まで。固定セクションが無ければ末尾まで。
+ * page_ops._insert_upper_bound と同じ上限を使う。
+ */
+export function sectionInsertSlots(deck: DeckModel): SectionInsertSlot[] {
+  const { sections } = deck;
+  const count = sections.length;
+  let upper = count;
+  for (let i = 1; i < count; i++) {
+    if (isFixedSection(i, sections[i].name)) {
+      upper = i;
+      break;
+    }
+  }
+  const slots: SectionInsertSlot[] = [];
+  for (let index = 1; index <= upper; index++) {
+    slots.push({ index, afterName: sections[index - 1].name, beforeName: sections[index]?.name ?? null });
+  }
+  return slots;
+}
+
 // Version folder names: `v001`, `v012`, `v002-001`, `v003-001-002`, …
 // Validated segment-wise (not one regex) to avoid a nested-quantifier
 // ReDoS pattern — each sub-regex is anchored and linear.

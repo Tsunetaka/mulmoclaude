@@ -1109,6 +1109,12 @@ const koMessages = {
     pageFixed: "고정",
     pageEditSelectFirst: "이 페이지를 선택하면 이동·삭제할 수 있습니다",
     pageListAria: "슬라이드 목록 (위/아래 화살표 키로 페이지 선택)",
+    sectionMoveUp: "섹션 위로 이동",
+    sectionMoveDown: "섹션 아래로 이동",
+    sectionRename: "섹션 이름 변경",
+    sectionDelete: "섹션 삭제",
+    sectionDeleteNonEmpty: "페이지가 있는 섹션은 삭제할 수 없습니다(먼저 비우세요)",
+    sectionAdd: "섹션 추가",
   },
   mulmoPoint: {
     title: "MulmoPoint 정보",

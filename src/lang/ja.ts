@@ -1109,6 +1109,12 @@ const jaMessages = {
     pageFixed: "固定",
     pageEditSelectFirst: "この頁を選択すると移動・削除できます",
     pageListAria: "スライド一覧（上下矢印キーで頁を選択）",
+    sectionMoveUp: "セクションを上へ",
+    sectionMoveDown: "セクションを下へ",
+    sectionRename: "セクション名を変更",
+    sectionDelete: "セクションを削除",
+    sectionDeleteNonEmpty: "頁を含むセクションは削除できません（先に頁を空に）",
+    sectionAdd: "セクション追加",
   },
   mulmoPoint: {
     title: "MulmoPoint について",

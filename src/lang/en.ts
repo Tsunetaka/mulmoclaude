@@ -1139,6 +1139,12 @@ const enMessages = {
     pageFixed: "Fixed",
     pageEditSelectFirst: "Select this page to move or delete it",
     pageListAria: "Slide list (use the up/down arrow keys to select a page)",
+    sectionMoveUp: "Move section up",
+    sectionMoveDown: "Move section down",
+    sectionRename: "Rename section",
+    sectionDelete: "Delete section",
+    sectionDeleteNonEmpty: "Cannot delete a section that contains pages (empty it first)",
+    sectionAdd: "Add section",
   },
   mulmoPoint: {
     title: "About MulmoPoint",

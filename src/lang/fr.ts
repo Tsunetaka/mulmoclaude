@@ -1117,6 +1117,12 @@ const frMessages = {
     pageFixed: "Fixe",
     pageEditSelectFirst: "Sélectionnez cette page pour la déplacer ou la supprimer",
     pageListAria: "Liste des diapositives (utilisez les flèches haut/bas pour sélectionner une page)",
+    sectionMoveUp: "Déplacer la section vers le haut",
+    sectionMoveDown: "Déplacer la section vers le bas",
+    sectionRename: "Renommer la section",
+    sectionDelete: "Supprimer la section",
+    sectionDeleteNonEmpty: "Impossible de supprimer une section contenant des pages (videz-la d'abord)",
+    sectionAdd: "Ajouter une section",
   },
   mulmoPoint: {
     title: "À propos de MulmoPoint",

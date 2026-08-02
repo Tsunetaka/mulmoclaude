@@ -7,6 +7,10 @@ import {
   isEditableSection,
   computeMoveTarget,
   sidebarNavTarget,
+  isReservedSectionName,
+  validateNewSectionName,
+  canMoveSection,
+  sectionInsertSlots,
   type SlideStructure,
   type SlideManifest,
   type DirEntry,
@@ -299,5 +303,107 @@ describe("sidebarNavTarget", () => {
     assert.equal(sidebarNavTarget("Enter", 2, 6), null);
     assert.equal(sidebarNavTarget("a", 2, 6), null);
     assert.equal(sidebarNavTarget("ArrowDown", 0, 0), null);
+  });
+});
+
+// ── セクション編集（追加・移動・削除・リネーム）の純関数 ─────────────────────────
+
+describe("isReservedSectionName", () => {
+  it("flags Thank You family names (case-insensitive, trimmed)", () => {
+    for (const name of ["Thank You", "thankyou", "おわりに", "まとめ", "結び", " THANK YOU "]) {
+      assert.equal(isReservedSectionName(name), true, name);
+    }
+  });
+
+  it("flags the orphan 未分類 name", () => {
+    assert.equal(isReservedSectionName("未分類"), true);
+    assert.equal(isReservedSectionName(" 未分類 "), true);
+  });
+
+  it("allows ordinary section names", () => {
+    for (const name of ["概要", "本文", "はじめに", "Appendix"]) {
+      assert.equal(isReservedSectionName(name), false, name);
+    }
+  });
+});
+
+describe("validateNewSectionName", () => {
+  const existing = ["タイトル", "概要", "本文", "Thank You"];
+
+  it("rejects empty / whitespace-only names", () => {
+    assert.deepEqual(validateNewSectionName("", existing), { ok: false, problem: "empty" });
+    assert.deepEqual(validateNewSectionName("   ", existing), { ok: false, problem: "empty" });
+  });
+
+  it("rejects reserved names", () => {
+    assert.deepEqual(validateNewSectionName("おわりに", existing), { ok: false, problem: "reserved" });
+    assert.deepEqual(validateNewSectionName("未分類", existing), { ok: false, problem: "reserved" });
+  });
+
+  it("rejects duplicates (trimmed exact, case-sensitive)", () => {
+    assert.deepEqual(validateNewSectionName("本文", existing), { ok: false, problem: "duplicate" });
+    assert.deepEqual(validateNewSectionName("  本文 ", existing), { ok: false, problem: "duplicate" });
+  });
+
+  it("allows a distinct new name", () => {
+    assert.deepEqual(validateNewSectionName("補足", existing), { ok: true });
+    assert.deepEqual(validateNewSectionName("本文2", existing), { ok: true }); // 大小/別名は別物
+  });
+
+  it("excludes the current name on rename (keeping it unchanged is ok)", () => {
+    assert.deepEqual(validateNewSectionName("本文", existing, "本文"), { ok: true });
+    // 別セクションと衝突する名前へのリネームは依然 duplicate。
+    assert.deepEqual(validateNewSectionName("概要", existing, "本文"), { ok: false, problem: "duplicate" });
+  });
+});
+
+describe("canMoveSection", () => {
+  const deck = makeMoveDeck(); // タイトル / 概要 / 本文 / Thank You
+
+  it("allows moving an editable section toward another editable one", () => {
+    assert.equal(canMoveSection(deck, "概要", 1), true); // ↓ swap with 本文
+    assert.equal(canMoveSection(deck, "本文", -1), true); // ↑ swap with 概要
+  });
+
+  it("returns false at the ends of the editable band", () => {
+    assert.equal(canMoveSection(deck, "概要", -1), false); // 先頭の編集可能・↑ 不可
+    assert.equal(canMoveSection(deck, "本文", 1), false); // 末尾の編集可能・↓ 不可
+  });
+
+  it("returns false for fixed sections and unknown names", () => {
+    assert.equal(canMoveSection(deck, "タイトル", 1), false);
+    assert.equal(canMoveSection(deck, "Thank You", -1), false);
+    assert.equal(canMoveSection(deck, "存在しない", 1), false);
+  });
+});
+
+describe("sectionInsertSlots", () => {
+  it("offers slots from after the cover up to before Thank You", () => {
+    const deck = makeMoveDeck(); // [タイトル, 概要, 本文, Thank You]
+    assert.deepEqual(sectionInsertSlots(deck), [
+      { index: 1, afterName: "タイトル", beforeName: "概要" },
+      { index: 2, afterName: "概要", beforeName: "本文" },
+      { index: 3, afterName: "本文", beforeName: "Thank You" },
+    ]);
+  });
+
+  it("allows appending to the end when there is no fixed trailing section", () => {
+    const struct: SlideStructure = {
+      schema_version: 1,
+      wd: "X",
+      version: "v001",
+      sections: [
+        { name: "タイトル", page_ids: ["p-c"] },
+        { name: "本文", page_ids: ["p-b"] },
+      ],
+      pages: {
+        "p-c": { file: "p-c.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+        "p-b": { file: "p-b.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+      },
+    };
+    assert.deepEqual(sectionInsertSlots(buildDeck(struct, null)), [
+      { index: 1, afterName: "タイトル", beforeName: "本文" },
+      { index: 2, afterName: "本文", beforeName: null },
+    ]);
   });
 });

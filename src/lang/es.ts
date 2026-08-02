@@ -1126,6 +1126,12 @@ const esMessages = {
     pageFixed: "Fija",
     pageEditSelectFirst: "Selecciona esta página para moverla o eliminarla",
     pageListAria: "Lista de diapositivas (usa las flechas arriba/abajo para seleccionar una página)",
+    sectionMoveUp: "Subir la sección",
+    sectionMoveDown: "Bajar la sección",
+    sectionRename: "Renombrar la sección",
+    sectionDelete: "Eliminar la sección",
+    sectionDeleteNonEmpty: "No se puede eliminar una sección con páginas (vacíala primero)",
+    sectionAdd: "Añadir sección",
   },
   mulmoPoint: {
     title: "Acerca de MulmoPoint",
