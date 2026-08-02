@@ -1086,7 +1086,7 @@ const jaMessages = {
     generatingThumbnails: "サムネイルを生成中...",
     prevPage: "前のページ",
     nextPage: "次のページ",
-    editDone: "編集完了",
+    editDone: "機能終了",
     selectDoc: "文書選択",
     rescan: "再スキャン",
     canvasRefresh: "canvas 更新",

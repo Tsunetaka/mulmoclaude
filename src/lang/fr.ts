@@ -1094,7 +1094,7 @@ const frMessages = {
     generatingThumbnails: "Génération des miniatures...",
     prevPage: "Page précédente",
     nextPage: "Page suivante",
-    editDone: "Terminer l'édition",
+    editDone: "Quitter",
     selectDoc: "Sélectionner le document",
     rescan: "Rescanner",
     canvasRefresh: "Actualiser le canevas",

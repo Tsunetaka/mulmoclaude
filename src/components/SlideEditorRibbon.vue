@@ -49,14 +49,13 @@
              Thank You は固定で ON でも錠前を出すのみ。状態は useSlideEditor 共有。 -->
         <div class="relative group">
           <button
-            class="ribbon-text-btn"
-            :class="{ 'ribbon-text-btn--pageedit': pageEditMode }"
+            class="ribbon-icon-btn"
+            :class="{ 'ribbon-icon-btn--active': pageEditMode }"
             data-testid="ribbon-btn-page-edit"
             :aria-label="t('slides.pageEdit')"
             @click="pageEditMode = !pageEditMode"
           >
-            <span class="material-icons text-base">low_priority</span>
-            <span>{{ t("slides.pageEdit") }}</span>
+            <span class="material-icons text-lg" :class="pageEditMode ? 'text-[#cfe2ff]' : 'text-[#8ab4e8]'">low_priority</span>
           </button>
           <div class="ribbon-tooltip">{{ t("slides.pageEditHint") }}</div>
         </div>
@@ -69,17 +68,15 @@
     <template v-if="showSlideControls">
       <div class="relative group">
         <button
-          class="ribbon-text-btn"
-          :class="{ 'ribbon-text-btn--dirty': dirtyCount > 0 }"
+          class="ribbon-icon-btn"
+          :class="{ 'ribbon-icon-btn--dirty': dirtyCount > 0 }"
           data-testid="ribbon-btn-canvas-refresh"
           :aria-label="t('slides.canvasRefresh')"
           @click="slideEditor.triggerRefresh()"
         >
-          <span class="material-icons text-base">refresh</span>
-          <!-- eslint-disable-next-line @intlify/vue-i18n/no-raw-text -- count suffix appended to the i18n label -->
-          <span
-            >{{ t("slides.canvasRefresh") }}<template v-if="dirtyCount > 0"> ({{ dirtyCount }})</template></span
-          >
+          <span class="material-icons text-lg" :class="dirtyCount > 0 ? 'text-yellow-50' : 'text-[#8ab4e8]'">refresh</span>
+          <!-- eslint-disable-next-line @intlify/vue-i18n/no-raw-text -- numeric count badge -->
+          <span v-if="dirtyCount > 0" class="ribbon-badge">{{ dirtyCount }}</span>
         </button>
         <div class="ribbon-tooltip">{{ t("slides.canvasRefresh") }}</div>
       </div>
@@ -87,13 +84,12 @@
            サーバーが自動で Windows(D:) へ push する。SlideEditorView が確認モーダルで実行。 -->
       <div class="relative group">
         <button
-          class="ribbon-text-btn ribbon-text-btn--release"
+          class="ribbon-icon-btn ribbon-icon-btn--release"
           data-testid="ribbon-btn-release"
           :aria-label="t('slides.release')"
           @click="slideEditor.triggerRelease()"
         >
-          <span class="material-icons text-base">publish</span>
-          <span>{{ t("slides.release") }}</span>
+          <span class="material-icons text-lg text-green-100">publish</span>
         </button>
         <div class="ribbon-tooltip">{{ t("slides.release") }}</div>
       </div>
@@ -101,13 +97,12 @@
            SlideEditorView が頁選択モーダル → SSE で実行。 -->
       <div class="relative group">
         <button
-          class="ribbon-text-btn"
+          class="ribbon-icon-btn"
           data-testid="ribbon-btn-page-checkout"
           :aria-label="t('slides.pageCheckout')"
           @click="slideEditor.triggerPageCheckout()"
         >
-          <span class="material-icons text-base">file_download</span>
-          <span>{{ t("slides.pageCheckout") }}</span>
+          <span class="material-icons text-lg text-[#8ab4e8]">file_download</span>
         </button>
         <div class="ribbon-tooltip">{{ t("slides.pageCheckoutHint") }}</div>
       </div>
@@ -115,18 +110,16 @@
            ロック中ページが 0 のときは無効。件数をバッジ表示。 -->
       <div class="relative group">
         <button
-          class="ribbon-text-btn"
-          :class="{ 'ribbon-text-btn--checkin': lockedCount > 0 }"
+          class="ribbon-icon-btn"
+          :class="{ 'ribbon-icon-btn--checkin': lockedCount > 0 }"
           data-testid="ribbon-btn-page-checkin"
           :disabled="lockedCount === 0"
           :aria-label="t('slides.pageCheckin')"
           @click="slideEditor.triggerPageCheckin()"
         >
-          <span class="material-icons text-base">file_upload</span>
-          <!-- eslint-disable-next-line @intlify/vue-i18n/no-raw-text -- count suffix appended to the i18n label -->
-          <span
-            >{{ t("slides.pageCheckin") }}<template v-if="lockedCount > 0"> ({{ lockedCount }})</template></span
-          >
+          <span class="material-icons text-lg" :class="lockedCount > 0 ? 'text-red-50' : 'text-[#8ab4e8]'">file_upload</span>
+          <!-- eslint-disable-next-line @intlify/vue-i18n/no-raw-text -- numeric count badge -->
+          <span v-if="lockedCount > 0" class="ribbon-badge ribbon-badge--alert">{{ lockedCount }}</span>
         </button>
         <div class="ribbon-tooltip">{{ t("slides.pageCheckinHint") }}</div>
       </div>
@@ -160,16 +153,18 @@
       <div class="ribbon-tooltip">{{ t("slides.rescan") }}</div>
     </div>
 
-    <!-- ── Action buttons (right zone, data-driven) ── -->
+    <!-- ── Action buttons (right zone, data-driven) ──
+         各ボタンは material アイコンのみ（ラベルは下側の吹き出しヘルプで補う）。
+         `variant === 'exit'` は「機能終了」で赤系＝終了を強調する。 -->
     <div v-for="btn in visibleButtons" :key="btn.id" class="relative group">
       <button
         class="ribbon-icon-btn"
-        :class="{ 'ribbon-icon-btn--done': btn.variant === 'done' }"
+        :class="{ 'ribbon-icon-btn--exit': btn.variant === 'exit' }"
         :data-testid="`ribbon-btn-${btn.id}`"
         :aria-label="t(btn.labelKey)"
         @click="btn.action()"
       >
-        <img :src="btn.icon" class="w-5 h-5 object-contain" alt="" />
+        <span class="material-icons text-lg" :class="btn.variant === 'exit' ? 'text-red-100' : 'text-[#8ab4e8]'">{{ btn.icon }}</span>
       </button>
       <div class="ribbon-tooltip">{{ t(btn.labelKey) }}</div>
     </div>
@@ -186,8 +181,6 @@ import { useWorkFileSelector } from "../composables/useWorkFileSelector";
 import { NEW_DECK_THEMES } from "../utils/slides/newDeck";
 import { apiGet } from "../utils/api";
 import { API_ROUTES } from "../config/apiRoutes";
-import iconSelectDoc from "../assets/icons/icon_overview_white.png";
-import iconDone from "../assets/icons/icon_check.png";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -240,13 +233,15 @@ const showPickerControls = computed<boolean>(() => route.name === PAGE_ROUTES.wo
 
 // A single ribbon action. `pages` lists every route the button shows on, so
 // the same button set can stay identical across the picker → editor flow now
-// while still allowing a future button to target just one of them. `variant`
-// only tweaks the colour accent (e.g. the green "done" button).
+// while still allowing a future button to target just one of them. `icon` is a
+// Material Icons ligature name (icon-only — the label shows in the hover
+// tooltip). `variant` only tweaks the colour accent (e.g. the red "exit"
+// 機能終了 button).
 interface RibbonButton {
   id: string;
   labelKey: string;
   icon: string;
-  variant?: "default" | "done";
+  variant?: "default" | "exit";
   pages: PageRouteName[];
   action: () => void;
 }
@@ -256,7 +251,7 @@ function goToPicker(): void {
   router.push({ name: PAGE_ROUTES.workFiles }).catch(() => {});
 }
 
-/** 編集完了 — ホーム（チャット）へ戻る */
+/** 機能終了 — ホーム（チャット）へ戻る */
 function goHome(): void {
   router.push({ name: PAGE_ROUTES.chat }).catch(() => {});
 }
@@ -270,15 +265,16 @@ const RIBBON_BUTTONS: RibbonButton[] = [
     // ピッカー(workFiles)には既に居るので出さない — 代わりに再スキャンを同位置へ。
     id: "select-doc",
     labelKey: "slides.selectDoc",
-    icon: iconSelectDoc,
+    icon: "folder_open",
     pages: [PAGE_ROUTES.slides],
     action: goToPicker,
   },
   {
+    // 機能終了（＝MulmoPoint を抜けてチャットホームへ戻る）。電源アイコン＋赤系。
     id: "edit-done",
     labelKey: "slides.editDone",
-    icon: iconDone,
-    variant: "done",
+    icon: "power_settings_new",
+    variant: "exit",
     pages: [PAGE_ROUTES.workFiles, PAGE_ROUTES.slides],
     action: goHome,
   },
@@ -294,24 +290,44 @@ const visibleButtons = computed<RibbonButton[]>(() => {
 <style scoped>
 @reference "../index.css";
 
-/* ── アイコンボタン共通 ── */
+/* ── アイコンボタン共通 ──
+   ラベルは廃し、アイコン＋ホバー吹き出しに統一。`relative` は件数バッジ
+   （右上・absolute）の位置基準。 */
 .ribbon-icon-btn {
-  @apply w-8 h-8 flex items-center justify-center rounded
+  @apply relative w-8 h-8 flex items-center justify-center rounded
          bg-[#1a2a44] hover:bg-[#2a3a66]
          border border-[#2a3a60] hover:border-[#3a5a8a]
          transition-colors
          disabled:opacity-50 disabled:cursor-not-allowed;
 }
 
-/* 編集完了 — グリーン系 */
-.ribbon-icon-btn--done {
+/* 頁編集トグル ON・チャットトグル ON — 青系アクセント（アクティブを示す） */
+.ribbon-icon-btn--active {
+  @apply bg-[#1a3a66] border-[#3a5a8a];
+}
+
+/* canvas 更新待ち（dirty>0）— 明るい琥珀で下部バナーと同系色 */
+.ribbon-icon-btn--dirty {
+  @apply bg-yellow-700 hover:bg-yellow-600
+         border-yellow-600 hover:border-yellow-500;
+}
+
+/* リリース — グリーン系（作業ファイル選択画面の「⬆ リリース」と同系色） */
+.ribbon-icon-btn--release {
   @apply bg-[#1a3a1a] hover:bg-[#2a5a2a]
          border-[#2a4a2a] hover:border-[#3a6a3a];
 }
 
-/* チャットトグル ON 時のアクセント */
-.ribbon-icon-btn--active {
-  @apply bg-[#1a3a66] border-[#3a5a8a];
+/* チェックイン待ち（lockedCount>0）— ロック中サムネの赤帯と同系色で「戻し待ち」を示す */
+.ribbon-icon-btn--checkin {
+  @apply bg-red-900 hover:bg-red-800
+         border-red-700 hover:border-red-600;
+}
+
+/* 機能終了 — 赤系（電源オフ＝終了を強調） */
+.ribbon-icon-btn--exit {
+  @apply bg-[#3a1a1a] hover:bg-[#5a2a2a]
+         border-[#4a2a2a] hover:border-[#6a3a3a];
 }
 
 /* テーマ選択プルダウン（左ゾーン・編集コントロール） */
@@ -322,36 +338,17 @@ const visibleButtons = computed<RibbonButton[]>(() => {
          cursor-pointer transition-colors;
 }
 
-/* テキスト付きアクションボタン（canvas 更新など） */
-.ribbon-text-btn {
-  @apply h-8 flex items-center gap-1 px-2 rounded text-[11px] font-medium
-         bg-[#1a2a44] hover:bg-[#2a3a66] text-[#8aacd0]
-         border border-[#2a3a60] hover:border-[#3a5a8a]
-         transition-colors whitespace-nowrap;
+/* ── 件数バッジ（アイコン右上）── canvas 未反映数・チェックインのロック件数を示す */
+.ribbon-badge {
+  @apply absolute -top-1 -right-1 min-w-[16px] h-4 px-1
+         flex items-center justify-center
+         text-[10px] font-bold leading-none text-white
+         bg-yellow-600 rounded-full ring-1 ring-[#0e1a30];
 }
 
-/* canvas 更新待ち（dirty>0）— 明るい琥珀で下部バナーと同系色 */
-.ribbon-text-btn--dirty {
-  @apply bg-yellow-700 hover:bg-yellow-600 text-yellow-50
-         border-yellow-600 hover:border-yellow-500;
-}
-
-/* 頁編集トグル ON — 青系アクセント（編集モード中を示す） */
-.ribbon-text-btn--pageedit {
-  @apply bg-[#1a3a66] hover:bg-[#2a4a76] text-[#cfe2ff]
-         border-[#3a5a8a] hover:border-[#4a6a9a];
-}
-
-/* リリース — グリーン系（作業ファイル選択画面の「⬆ リリース」と同系色） */
-.ribbon-text-btn--release {
-  @apply bg-[#1a3a1a] hover:bg-[#2a5a2a] text-green-100
-         border-[#2a4a2a] hover:border-[#3a6a3a];
-}
-
-/* チェックイン待ち（lockedCount>0）— ロック中サムネの赤帯と同系色で「戻し待ち」を示す */
-.ribbon-text-btn--checkin {
-  @apply bg-red-900 hover:bg-red-800 text-red-50
-         border-red-700 hover:border-red-600;
+/* ロック件数（チェックイン待ち）は赤系 */
+.ribbon-badge--alert {
+  @apply bg-red-600;
 }
 
 /* ── バルーンヘルプ（ボタン下側に表示） ── */

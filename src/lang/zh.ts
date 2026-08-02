@@ -1071,7 +1071,7 @@ const zhMessages = {
     generatingThumbnails: "正在生成缩略图...",
     prevPage: "上一页",
     nextPage: "下一页",
-    editDone: "完成编辑",
+    editDone: "退出",
     selectDoc: "选择文档",
     rescan: "重新扫描",
     canvasRefresh: "更新画布",

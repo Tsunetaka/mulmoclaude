@@ -30,6 +30,7 @@
           :logo-src="isSlideEditorChrome ? takoLogoUrl : undefined"
           :home-label="isSlideEditorChrome ? t('mulmoPoint.title') : undefined"
           :hide-journal-button="isSlideEditorChrome"
+          :hide-remote-host-button="isSlideEditorChrome"
           :app-title="isSlideEditorChrome ? 'MulmoPoint' : undefined"
           @test-query="(q) => sendMessage(q)"
           @open-settings="showSettings = true"
@@ -808,7 +809,7 @@ watch(isChatPage, (isChat, wasChat) => {
   }
   // Entering /chat. When the URL carries a sessionId, the route-param
   // watcher (and loadSession) activates it. But a *bare* push to
-  // { name: chat } with no params — e.g. the slide-editor "編集完了"
+  // { name: chat } with no params — e.g. the slide-editor "機能終了"
   // ribbon button (SlideEditorRibbon.goHome) — never triggers that
   // watcher (undefined sessionId), so currentSessionId stays "" and the
   // first sendMessage is silently dropped at `if (!session) return`.

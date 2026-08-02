@@ -1086,7 +1086,7 @@ const koMessages = {
     generatingThumbnails: "썸네일 생성 중...",
     prevPage: "이전 페이지",
     nextPage: "다음 페이지",
-    editDone: "편집 완료",
+    editDone: "종료",
     selectDoc: "문서 선택",
     rescan: "다시 스캔",
     canvasRefresh: "캔버스 업데이트",

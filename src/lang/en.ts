@@ -1116,7 +1116,7 @@ const enMessages = {
     generatingThumbnails: "Generating thumbnails...",
     prevPage: "Previous page",
     nextPage: "Next page",
-    editDone: "Done Editing",
+    editDone: "Exit",
     selectDoc: "Select Document",
     rescan: "Rescan",
     canvasRefresh: "Update Canvas",

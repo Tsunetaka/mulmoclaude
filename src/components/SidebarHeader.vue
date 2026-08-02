@@ -23,7 +23,7 @@
         @test-query="(q) => emit('testQuery', q)"
       />
       <NotificationBell :force-close="lockPopupOpen" @update:open="onNotificationOpen" />
-      <RemoteHostControl />
+      <RemoteHostControl v-if="!hideRemoteHostButton" />
       <button
         v-if="!hideJournalButton"
         class="h-8 w-8 flex items-center justify-center rounded text-gray-400 hover:text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -77,10 +77,21 @@ const props = withDefaults(
     homeLabel?: string;
     /** When true, hide the today-journal (calendar) button. */
     hideJournalButton?: boolean;
+    /** When true, hide the remote-host (phonelink) button. Used in the
+        slide-editor chrome (MulmoPoint), where remote host is irrelevant. */
+    hideRemoteHostButton?: boolean;
     /** Override the app title text. Defaults to "MulmoClaude". */
     appTitle?: string;
   }>(),
-  { geminiAvailable: true, titleStyle: () => ({}), logoSrc: undefined, homeLabel: undefined, hideJournalButton: false, appTitle: "MulmoClaude" },
+  {
+    geminiAvailable: true,
+    titleStyle: () => ({}),
+    logoSrc: undefined,
+    homeLabel: undefined,
+    hideJournalButton: false,
+    hideRemoteHostButton: false,
+    appTitle: "MulmoClaude",
+  },
 );
 
 /** Resolved logo: use the override when provided, otherwise fall back to the built-in asset. */

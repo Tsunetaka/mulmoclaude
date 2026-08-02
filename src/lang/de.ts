@@ -1105,7 +1105,7 @@ const deMessages = {
     generatingThumbnails: "Miniaturbilder werden generiert...",
     prevPage: "Vorherige Seite",
     nextPage: "Nächste Seite",
-    editDone: "Bearbeitung abschließen",
+    editDone: "Beenden",
     selectDoc: "Dokument auswählen",
     rescan: "Erneut scannen",
     canvasRefresh: "Canvas aktualisieren",

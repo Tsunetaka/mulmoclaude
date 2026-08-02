@@ -1103,7 +1103,7 @@ const esMessages = {
     generatingThumbnails: "Generando miniaturas...",
     prevPage: "Página anterior",
     nextPage: "Página siguiente",
-    editDone: "Finalizar edición",
+    editDone: "Salir",
     selectDoc: "Seleccionar documento",
     rescan: "Reescanear",
     canvasRefresh: "Actualizar lienzo",

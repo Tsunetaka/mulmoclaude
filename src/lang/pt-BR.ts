@@ -1091,7 +1091,7 @@ const ptBRMessages = {
     generatingThumbnails: "Gerando miniaturas...",
     prevPage: "Página anterior",
     nextPage: "Próxima página",
-    editDone: "Concluir edição",
+    editDone: "Sair",
     selectDoc: "Selecionar documento",
     rescan: "Reescanear",
     canvasRefresh: "Atualizar canvas",
