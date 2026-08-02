@@ -115,6 +115,17 @@ export function isEditableSection(sectionIndex: number, sectionName: string): bo
   return !isFixedSection(sectionIndex, sectionName);
 }
 
+/**
+ * 現在頁のタイトルを編集できるか（＝固定でないセクションに属する頁か）。
+ * 表紙（先頭）／Thank You／未分類 の頁は編集不可（サーバー page_ops.py と同一ルール）。
+ * 存在しない pageId は false。
+ */
+export function canEditTitle(deck: DeckModel, pageId: string): boolean {
+  const sectionIndex = deck.sections.findIndex((sec) => sec.pages.some((page) => page.id === pageId));
+  if (sectionIndex < 0) return false;
+  return isEditableSection(sectionIndex, deck.sections[sectionIndex].name);
+}
+
 /** 移動 API に渡す移動先（セクション名＋そのセクション内 0 始まり位置）。 */
 export interface MoveTarget {
   toSection: string;

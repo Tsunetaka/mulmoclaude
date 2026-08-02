@@ -5,6 +5,7 @@ import {
   buildDeck,
   isFixedSection,
   isEditableSection,
+  canEditTitle,
   computeMoveTarget,
   sidebarNavTarget,
   isReservedSectionName,
@@ -270,6 +271,24 @@ describe("computeMoveTarget", () => {
 
   it("returns null for an unknown page id", () => {
     assert.equal(computeMoveTarget(deck, "p-nope", 1), null);
+  });
+});
+
+describe("canEditTitle", () => {
+  const deck = makeMoveDeck();
+
+  it("allows editing titles of pages in editable sections", () => {
+    assert.equal(canEditTitle(deck, "p-b1"), true);
+    assert.equal(canEditTitle(deck, "p-b4"), true);
+  });
+
+  it("rejects cover (first section) and Thank You pages", () => {
+    assert.equal(canEditTitle(deck, "p-cover0"), false);
+    assert.equal(canEditTitle(deck, "p-ty0000"), false);
+  });
+
+  it("rejects an unknown page id", () => {
+    assert.equal(canEditTitle(deck, "p-nope"), false);
   });
 });
 

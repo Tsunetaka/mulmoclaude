@@ -1136,6 +1136,7 @@ const enMessages = {
     pageMoveDown: "Move down",
     pageDelete: "Delete",
     pageAdd: "Add page",
+    pageTitleEdit: "Edit title",
     pageFixed: "Fixed",
     pageEditSelectFirst: "Select this page to move or delete it",
     pageListAria: "Slide list (use the up/down arrow keys to select a page)",

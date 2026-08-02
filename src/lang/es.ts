@@ -1123,6 +1123,7 @@ const esMessages = {
     pageMoveDown: "Bajar",
     pageDelete: "Eliminar",
     pageAdd: "Añadir página",
+    pageTitleEdit: "Editar título",
     pageFixed: "Fija",
     pageEditSelectFirst: "Selecciona esta página para moverla o eliminarla",
     pageListAria: "Lista de diapositivas (usa las flechas arriba/abajo para seleccionar una página)",

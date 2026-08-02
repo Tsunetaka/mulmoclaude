@@ -1111,6 +1111,7 @@ const ptBRMessages = {
     pageMoveDown: "Mover para baixo",
     pageDelete: "Excluir",
     pageAdd: "Adicionar página",
+    pageTitleEdit: "Editar título",
     pageFixed: "Fixa",
     pageEditSelectFirst: "Selecione esta página para movê-la ou excluí-la",
     pageListAria: "Lista de slides (use as setas para cima/baixo para selecionar uma página)",

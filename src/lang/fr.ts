@@ -1114,6 +1114,7 @@ const frMessages = {
     pageMoveDown: "Descendre",
     pageDelete: "Supprimer",
     pageAdd: "Ajouter une page",
+    pageTitleEdit: "Modifier le titre",
     pageFixed: "Fixe",
     pageEditSelectFirst: "Sélectionnez cette page pour la déplacer ou la supprimer",
     pageListAria: "Liste des diapositives (utilisez les flèches haut/bas pour sélectionner une page)",

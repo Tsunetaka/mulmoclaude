@@ -567,6 +567,12 @@ const HOST_API_ROUTES = {
     /** POST — テーマ適用済みの空の本文ページを挿入する「頁編集」（SSE）。`page_ops.py add`。
      *  表紙・Thank You セクションには追加不可。body `{ section, toIndex, template? }`。 */
     pageAdd: "/api/work/:wd/:version/page-add",
+    /** GET — 現在頁のタイトル文字列を返す（編集 UI の初期値）。`page_ops.py get-title`。
+     *  読み取り専用。query `?pageId=p-XXXXXXXX` → `{ title: string }`（失敗時 400/500）。 */
+    pageTitle: "/api/work/:wd/:version/page-title",
+    /** POST — 現在頁のタイトルを設定する「頁編集」（SSE）。`page_ops.py set-title`。
+     *  空文字＝クリア可。表紙・Thank You の頁は不可。body `{ pageId, title }`。 */
+    pageSetTitle: "/api/work/:wd/:version/page-set-title",
     /** POST — 空のセクションを追加する「セクション編集」（SSE）。`page_ops.py section-add`。
      *  先頭（表紙）の後〜Thank You の前に限定。予約名・同名は不可。body `{ name, toIndex }`。 */
     sectionAdd: "/api/work/:wd/:version/section-add",

@@ -186,6 +186,15 @@
                     </button>
                     <span class="flex-1"></span>
                     <button
+                      class="pe-btn"
+                      :disabled="peBusy || currentId !== page.id"
+                      :title="currentId === page.id ? t('slides.pageTitleEdit') : t('slides.pageEditSelectFirst')"
+                      :aria-label="t('slides.pageTitleEdit')"
+                      @click.stop="askEditTitle(page)"
+                    >
+                      <span class="material-icons text-[13px]">title</span>
+                    </button>
+                    <button
                       class="pe-btn pe-btn--danger"
                       :disabled="peBusy || currentId !== page.id"
                       :title="currentId === page.id ? t('slides.pageDelete') : t('slides.pageEditSelectFirst')"
@@ -877,6 +886,54 @@
       </div>
     </div>
 
+    <!-- ── タイトル編集モーダル（現在頁のタイトルを入力・空可） ── -->
+    <div v-if="titleModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeTitleModal">
+      <div class="w-[32rem] max-w-[90vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
+        <div class="flex items-center gap-2 px-4 py-2.5 bg-[#0a1830] border-b border-[#1a2a44]">
+          <span class="material-icons text-sm text-[#4a8acc]">title</span>
+          <span class="text-sm font-bold text-[#8aacd0] flex-1">タイトルの編集 — {{ wdId }}（{{ version }}）</span>
+          <button class="text-[#3a5a7a] hover:text-[#6a9acc] disabled:opacity-30" :disabled="peBusy" aria-label="閉じる" @click="closeTitleModal">
+            <span class="material-icons text-sm">close</span>
+          </button>
+        </div>
+
+        <div class="px-4 py-3 space-y-2 text-[#8aacd0]">
+          <div v-if="titleTarget" class="flex items-center gap-3 p-2 rounded bg-[#060b14] border border-[#1a2a44]">
+            <img
+              :src="thumbUrl(titleTarget)"
+              :alt="`p.${titleTarget.pageNo}`"
+              class="w-28 flex-shrink-0 rounded border border-[#22304c] object-cover bg-[#141e2e]"
+            />
+            <div class="min-w-0 text-[11px] text-[#6a8aaa]">対象: p.{{ titleTarget.pageNo }}</div>
+          </div>
+          <label class="block text-[11px] text-[#7d9cbb]">タイトル（空にすると消去します）</label>
+          <input
+            v-model="titleInput"
+            type="text"
+            :disabled="titleLoading || peBusy"
+            maxlength="500"
+            class="w-full px-2 py-1.5 rounded bg-[#060b14] border border-[#22304c] text-xs text-[#cfe0f0] focus:border-[#3a78cc] focus:outline-none disabled:opacity-50"
+            :placeholder="titleLoading ? '読み込み中...' : 'タイトルを入力（空も可）'"
+            @keydown.enter="confirmEditTitle"
+          />
+          <p v-if="titleError" class="text-[11px] text-red-300">{{ titleError }}</p>
+        </div>
+
+        <div class="flex justify-end gap-2 px-4 py-2.5 bg-[#0a1220] border-t border-[#1a2a44]">
+          <button class="px-3 py-1.5 rounded text-xs text-[#8aacd0] bg-[#16233c] hover:bg-[#1e2e48]" :disabled="peBusy" @click="closeTitleModal">
+            キャンセル
+          </button>
+          <button
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a] disabled:opacity-40"
+            :disabled="peBusy || titleLoading"
+            @click="confirmEditTitle"
+          >
+            設定する
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── セクション編集モーダル（追加／リネーム／削除の確認・入力） ── -->
     <div v-if="sectionModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeSectionModal">
       <div class="w-[30rem] max-w-[90vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
@@ -971,6 +1028,7 @@ import {
   isVersionName,
   buildDeck,
   isEditableSection,
+  canEditTitle,
   computeMoveTarget,
   sidebarNavTarget,
   canMoveSection,
@@ -1264,6 +1322,61 @@ function closePageEditModal(): void {
   if (peBusy.value) return;
   pageEditModalOpen.value = false;
   pendingDelete.value = null;
+}
+
+// ── タイトル編集（現在頁のタイトルを設定・SSE）─────────────────────────────────
+// 頁編集モードの操作行「✎タイトル」から。表紙／Thank You は固定（ボタンを出さず・
+// page_ops.py も拒否）。開いたとき GET で現在のタイトルを読み初期表示、空も許可（クリア）。
+// 進捗表示は共有の頁編集モーダル（runPageEdit）を再利用する。
+const titleModalOpen = ref(false);
+const titleTarget = ref<DeckPage | null>(null); // タイトル編集中のページ
+const titleInput = ref("");
+const titleLoading = ref(false); // GET で現在タイトルを取得中
+const titleError = ref("");
+
+/** タイトル編集モーダルを開き、現在のタイトルを GET で読み込んで初期表示する。 */
+async function askEditTitle(page: DeckPage): Promise<void> {
+  if (peBusy.value || !deck.value) return;
+  if (!canEditTitle(deck.value, page.id)) return; // 表紙／Thank You は編集不可
+  titleTarget.value = page;
+  titleInput.value = page.title; // 暫定＝manifest 値。GET 成功で実タイトルに置換
+  titleError.value = "";
+  titleModalOpen.value = true;
+  await loadCurrentTitle(page.id);
+}
+
+/** 現在頁の実タイトルを GET で取得して入力欄に反映する（失敗時は manifest 値のまま）。 */
+async function loadCurrentTitle(pageId: string): Promise<void> {
+  if (!wdId.value || !version.value) return;
+  titleLoading.value = true;
+  try {
+    const res = await apiGet<{ title?: string }>(fillRoute(API_ROUTES.work.pageTitle, wdId.value, version.value), { pageId });
+    if (res.ok && titleTarget.value?.id === pageId && typeof res.data.title === "string") {
+      titleInput.value = res.data.title;
+    } else if (!res.ok) {
+      titleError.value = `現在のタイトルを読み込めませんでした（${res.error}）`;
+    }
+  } catch (err) {
+    titleError.value = `現在のタイトルを読み込めませんでした（${err instanceof Error ? err.message : String(err)}）`;
+  } finally {
+    titleLoading.value = false;
+  }
+}
+
+/** タイトル設定を実行（空も可）。進捗は共有の頁編集モーダルを再利用。 */
+async function confirmEditTitle(): Promise<void> {
+  const page = titleTarget.value;
+  if (!page || peBusy.value || titleLoading.value) return;
+  const title = titleInput.value;
+  titleModalOpen.value = false;
+  await runPageEdit(API_ROUTES.work.pageSetTitle, { pageId: page.id, title }, "タイトルの設定");
+}
+
+/** タイトル編集モーダルを閉じる（実行中は閉じない）。 */
+function closeTitleModal(): void {
+  if (peBusy.value) return;
+  titleModalOpen.value = false;
+  titleTarget.value = null;
 }
 
 // ── セクション編集（追加・移動・削除・リネーム・SSE）─────────────────────────────

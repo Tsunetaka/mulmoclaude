@@ -70,6 +70,10 @@ function req(params: Record<string, string>, body: unknown): Request {
   return { params, body } as unknown as Request;
 }
 
+function reqQuery(params: Record<string, string>, query: Record<string, unknown>): Request {
+  return { params, query, body: {} } as unknown as Request;
+}
+
 // ── Pure validators ──────────────────────────────────────────────
 describe("validatePageMoveBody (pure)", () => {
   it("accepts a well-formed move body", async () => {
@@ -127,10 +131,52 @@ describe("validatePageAddBody (pure)", () => {
   });
 });
 
+describe("validateSetTitleBody (pure)", () => {
+  it("accepts a well-formed set-title body (empty title allowed)", async () => {
+    const { validateSetTitleBody } = await import("../../server/api/routes/workFiles.js");
+    assert.deepEqual(validateSetTitleBody({ pageId: "p-1a2b3c4d", title: "新しいタイトル" }), { pageId: "p-1a2b3c4d", title: "新しいタイトル" });
+    assert.deepEqual(validateSetTitleBody({ pageId: "p-00000000", title: "" }), { pageId: "p-00000000", title: "" });
+  });
+
+  it("rejects malformed set-title bodies", async () => {
+    const { validateSetTitleBody } = await import("../../server/api/routes/workFiles.js");
+    for (const bad of [
+      undefined,
+      null,
+      "x",
+      {},
+      { pageId: "bad", title: "x" },
+      { pageId: "p-1a2b3c4d" },
+      { pageId: "p-1a2b3c4d", title: 123 },
+      { pageId: "p-1a2b3c4d", title: "a\nb" },
+      { pageId: "p-1a2b3c4d", title: "x".repeat(501) },
+    ]) {
+      assert.equal(validateSetTitleBody(bad as unknown), null, JSON.stringify(bad));
+    }
+  });
+});
+
+describe("parseTitleOutput (pure)", () => {
+  it("extracts the JSON-encoded title from a TITLE: line", async () => {
+    const { parseTitleOutput } = await import("../../server/api/routes/workFiles.js");
+    assert.equal(parseTitleOutput('TITLE:"Step 1：確認する"'), "Step 1：確認する");
+    assert.equal(parseTitleOutput('前置き\nTITLE:""\n後置き'), "");
+  });
+
+  it("returns empty string when no TITLE: line or invalid JSON", async () => {
+    const { parseTitleOutput } = await import("../../server/api/routes/workFiles.js");
+    assert.equal(parseTitleOutput("no marker here"), "");
+    assert.equal(parseTitleOutput("TITLE:not-json"), "");
+    assert.equal(parseTitleOutput("TITLE:123"), ""); // non-string JSON → ""
+  });
+});
+
 // ── Route guards (fire before any spawn) ─────────────────────────
 let deleteHandler: Handler;
 let moveHandler: Handler;
 let addHandler: Handler;
+let setTitleHandler: Handler;
+let getTitleHandler: Handler;
 
 before(async () => {
   const tmpRoot = await mkdtemp(path.join(tmpdir(), "mulmo-pageedit-"));
@@ -142,6 +188,8 @@ before(async () => {
   deleteHandler = extractRouteHandler(routeMod, "/api/work/:wd/:version/page-delete", "post");
   moveHandler = extractRouteHandler(routeMod, "/api/work/:wd/:version/page-move", "post");
   addHandler = extractRouteHandler(routeMod, "/api/work/:wd/:version/page-add", "post");
+  setTitleHandler = extractRouteHandler(routeMod, "/api/work/:wd/:version/page-set-title", "post");
+  getTitleHandler = extractRouteHandler(routeMod, "/api/work/:wd/:version/page-title", "get");
 });
 
 describe("POST page-delete — guards", () => {
@@ -192,6 +240,38 @@ describe("POST page-add — guards", () => {
   it("400 on a bad wd / version even with a valid body", async () => {
     const { state, res } = mockRes();
     await addHandler(req({ wd: "GIT-00001", version: "bad ver" }, { section: "本文", toIndex: 0 }), res);
+    assert.equal(state.status, 400);
+  });
+});
+
+describe("POST page-set-title — guards", () => {
+  it("400 on a malformed set-title body", async () => {
+    for (const body of [{}, { pageId: "bad", title: "x" }, { pageId: "p-1a2b3c4d", title: "a\nb" }, { pageId: "p-1a2b3c4d", title: "x".repeat(501) }]) {
+      const { state, res } = mockRes();
+      await setTitleHandler(req({ wd: "GIT-00001", version: "v001" }, body), res);
+      assert.equal(state.status, 400, JSON.stringify(body));
+    }
+  });
+
+  it("400 on a bad wd / version even with a valid body (empty title OK)", async () => {
+    const { state, res } = mockRes();
+    await setTitleHandler(req({ wd: "bad id", version: "v001" }, { pageId: "p-1a2b3c4d", title: "" }), res);
+    assert.equal(state.status, 400);
+  });
+});
+
+describe("GET page-title — guards", () => {
+  it("400 on a missing / malformed pageId query", async () => {
+    for (const query of [{}, { pageId: "bad" }, { pageId: ["p-1a2b3c4d"] }]) {
+      const { state, res } = mockRes();
+      await getTitleHandler(reqQuery({ wd: "GIT-00001", version: "v001" }, query), res);
+      assert.equal(state.status, 400, JSON.stringify(query));
+    }
+  });
+
+  it("400 on a bad wd / version even with a valid pageId", async () => {
+    const { state, res } = mockRes();
+    await getTitleHandler(reqQuery({ wd: "bad id", version: "v001" }, { pageId: "p-1a2b3c4d" }), res);
     assert.equal(state.status, 400);
   });
 });

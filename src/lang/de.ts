@@ -1125,6 +1125,7 @@ const deMessages = {
     pageMoveDown: "Nach unten",
     pageDelete: "Löschen",
     pageAdd: "Seite hinzufügen",
+    pageTitleEdit: "Titel bearbeiten",
     pageFixed: "Fest",
     pageEditSelectFirst: "Diese Seite auswählen, um sie zu verschieben oder zu löschen",
     pageListAria: "Folienliste (mit den Pfeiltasten nach oben/unten eine Seite auswählen)",

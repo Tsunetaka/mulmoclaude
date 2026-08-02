@@ -1091,6 +1091,7 @@ const zhMessages = {
     pageMoveDown: "下移",
     pageDelete: "删除",
     pageAdd: "添加页面",
+    pageTitleEdit: "编辑标题",
     pageFixed: "固定",
     pageEditSelectFirst: "选择此页面后可移动或删除",
     pageListAria: "幻灯片列表（使用上下箭头键选择页面）",

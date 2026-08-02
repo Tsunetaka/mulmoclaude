@@ -2151,6 +2151,32 @@ export function validatePageAddBody(body: unknown): PageAddBody | null {
   return { section, toIndex, template: template as string | undefined };
 }
 
+export interface SetTitleBody {
+  pageId: string;
+  title: string;
+}
+// page-set-title body の検証。不正なら null。空タイトル（クリア）は許可・改行不可・500 文字以内。
+export function validateSetTitleBody(body: unknown): SetTitleBody | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { pageId, title } = body as Record<string, unknown>;
+  if (typeof pageId !== "string" || !PAGE_ID_RE.test(pageId)) return null;
+  if (typeof title !== "string" || title.length > 500 || /[\r\n]/.test(title)) return null;
+  return { pageId, title };
+}
+
+// page_ops get-title の stdout から `TITLE:<json>` 行を取り出す（無ければ ""）。
+export function parseTitleOutput(out: string): string {
+  const marker = "TITLE:";
+  const line = out.split(/\r?\n/).find((entry) => entry.startsWith(marker));
+  if (!line) return "";
+  try {
+    const parsed: unknown = JSON.parse(line.slice(marker.length));
+    return typeof parsed === "string" ? parsed : "";
+  } catch {
+    return "";
+  }
+}
+
 // ── セクション編集（追加・移動・削除・リネーム）の body 検証 ──────────────────────
 // 検証は python（page_ops.py）が真実源（固定・予約・重複・非空削除は exit 2）。ここでは
 // リクエスト形状だけを確かめ、帯・予約・重複の判定は python に委ねる。
@@ -2211,6 +2237,20 @@ async function runPageOps(args: string[], send: (line: string) => void): Promise
       send(`⚠ ${err.message}`);
       resolve(1);
     });
+  });
+}
+
+// page_ops.py を spawn し stdout を捕捉する（GET 用・SSE ではない）。{ code, out } を返す。
+async function runPageOpsCapture(args: string[]): Promise<{ code: number; out: string }> {
+  const scriptPath = path.join(workspacePath, "data/work/tools/page_ops.py");
+  return new Promise((resolve) => {
+    const proc = spawn("python3", [scriptPath, ...args], { env: { ...process.env } });
+    let out = "";
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      out += chunk.toString();
+    });
+    proc.on("close", (code) => resolve({ code: code ?? 1, out }));
+    proc.on("error", () => resolve({ code: 1, out }));
   });
 }
 
@@ -2287,6 +2327,43 @@ router.post(API_ROUTES.work.pageAdd, async (req, res) => {
   if (body.template) args.push("--template", body.template);
   const code = await runPageOps(args, ctx.send);
   await finishStructEdit(ctx, code, "頁の追加");
+  res.end();
+});
+
+// GET /api/work/:wd/:version/page-title?pageId=... — 現在頁のタイトルを返す（編集 UI 初期値）
+// 読み取り専用（get-title・固定/ロック判定なし）。SSE ではなく stdout を捕捉して JSON で返す。
+router.get(API_ROUTES.work.pageTitle, async (req, res) => {
+  const { wd, version } = req.params as { wd: string; version: string };
+  const { pageId } = req.query as { pageId?: unknown };
+  if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return;
+  }
+  if (typeof pageId !== "string" || !PAGE_ID_RE.test(pageId)) {
+    res.status(400).json({ error: "pageId（p-XXXXXXXX）が必要です" });
+    return;
+  }
+  const versionDir = path.join(workspacePath, "data/work", wd, version);
+  const { code, out } = await runPageOpsCapture(["get-title", "--version-dir", versionDir, "--page", pageId]);
+  if (code !== 0) {
+    res.status(500).json({ error: "タイトルの取得に失敗しました" });
+    return;
+  }
+  res.json({ title: parseTitleOutput(out) });
+});
+
+// POST /api/work/:wd/:version/page-set-title — 現在頁のタイトルを設定する（SSE）
+// 空文字＝クリア可。表紙／Thank You の頁は page_ops.py が exit 2 で拒否する。
+router.post(API_ROUTES.work.pageSetTitle, async (req, res) => {
+  const body = validateSetTitleBody(req.body);
+  if (!body) {
+    res.status(400).json({ error: "pageId（p-XXXXXXXX）/ title（500 文字以内・改行不可）が必要です" });
+    return;
+  }
+  const ctx = await beginStructEdit(req, res);
+  if (!ctx) return;
+  const code = await runPageOps(["set-title", "--version-dir", ctx.versionDir, "--page", body.pageId, "--title", body.title], ctx.send);
+  await finishStructEdit(ctx, code, "タイトルの設定");
   res.end();
 });
 
