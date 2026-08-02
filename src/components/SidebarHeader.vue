@@ -72,16 +72,16 @@ const props = withDefaults(
     geminiAvailable?: boolean;
     titleStyle?: CSSProperties;
     /** Override the app logo. Defaults to the built-in mulmo_bw mascot. */
-    logoSrc?: string;
+    logoSrc?: string | undefined;
     /** Override the home button tooltip/aria-label. Defaults to sidebarHeader.home. */
-    homeLabel?: string;
+    homeLabel?: string | undefined;
     /** When true, hide the today-journal (calendar) button. */
     hideJournalButton?: boolean;
     /** When true, hide the remote-host (phonelink) button. Used in the
         slide-editor chrome (MulmoPoint), where remote host is irrelevant. */
     hideRemoteHostButton?: boolean;
     /** Override the app title text. Defaults to "MulmoClaude". */
-    appTitle?: string;
+    appTitle?: string | undefined;
   }>(),
   {
     geminiAvailable: true,

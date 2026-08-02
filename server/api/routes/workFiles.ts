@@ -177,7 +177,16 @@ async function readEditingVersion(workDir: string, name: string): Promise<Versio
   const statuses = ["editing"];
   if (locked) statuses.push("checked-out");
   if (dirty) statuses.push("dirty");
-  return { version: name, versionNum: versionSegments(name)[0] ?? 0, kind: "editing", filename: "", date: "", source: struct.source, locked, statuses };
+  return {
+    version: name,
+    versionNum: versionSegments(name)[0] ?? 0,
+    kind: "editing",
+    filename: "",
+    date: "",
+    ...(struct.source ? { source: struct.source } : {}),
+    locked,
+    statuses,
+  };
 }
 
 // WSL 側 data/work/<wdId>/ のバージョンサブフォルダを editing バージョンとして列挙する。
@@ -1594,7 +1603,12 @@ router.post(API_ROUTES.work.newDeck, async (req, res) => {
   if (!ctx) return;
   // 先に D: 側の WD フォルダ構成（素材・ReleasedVersion）を WSL へミラーしてから v001 を生成する。
   await mirrorWindowsWdFolder(wd, body.windowsWdPath ?? null, ctx.send);
-  await runNewDeck(wd, version, { title: body.title ?? "", theme: body.theme ?? "cool", confidential: body.confidential }, ctx.send);
+  await runNewDeck(
+    wd,
+    version,
+    { title: body.title ?? "", theme: body.theme ?? "cool", ...(body.confidential !== undefined ? { confidential: body.confidential } : {}) },
+    ctx.send,
+  );
   res.end();
 });
 
@@ -2220,7 +2234,7 @@ export function validatePageAddBody(body: unknown): PageAddBody | null {
   if (!isValidSectionName(section)) return null;
   if (typeof toIndex !== "number" || !Number.isInteger(toIndex) || toIndex < 0) return null;
   if (template !== undefined && (typeof template !== "string" || template.length > 200)) return null;
-  return { section, toIndex, template: template as string | undefined };
+  return { section, toIndex, ...(template !== undefined ? { template: template as string } : {}) };
 }
 
 export interface SetTitleBody {
