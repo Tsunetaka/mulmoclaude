@@ -1,4 +1,4 @@
-import { ref } from "vue";
+import { ref, watch } from "vue";
 
 // 編集ビュー（SlideEditorView）と上部リボン（SlideEditorRibbon）を橋渡しする共有ストア。
 // リボンは App.vue の上部 chrome にあり編集ビューと親子関係を持たないため、
@@ -24,6 +24,21 @@ const chatOpen = ref(false);
  * ON でも操作ボタンを出さず錠前を表示する。
  */
 const pageEditMode = ref(false);
+/**
+ * 「テキストボックス編集」モード。リボンのトグルで切り替え、編集ビューがメインビュー
+ * 画像上に編集可能テキストボックスのハイライト用オーバーレイを重ねる。表紙／Thank You／
+ * 未分類／チェックアウト中の頁ではオーバーレイを出さない。頁編集モードとは排他。
+ */
+const textboxEditMode = ref(false);
+
+// 頁編集モードとテキストボックス編集モードは同時に ON にしない（サイドバー操作行と
+// メインビューのオーバーレイが同時に出る混乱を避ける）。一方が ON になったら他方を OFF。
+watch(pageEditMode, (enabled) => {
+  if (enabled) textboxEditMode.value = false;
+});
+watch(textboxEditMode, (enabled) => {
+  if (enabled) pageEditMode.value = false;
+});
 /**
  * 「テーマ未適用」を表すセンチネル値。
  * structure.theme が無い（外部から ReleasedVersion にコピーされた pptx 等・
@@ -80,6 +95,7 @@ function unregister(): void {
   lockedCount.value = 0;
   chatOpen.value = false;
   pageEditMode.value = false;
+  textboxEditMode.value = false;
   theme.value = UNAPPLIED_THEME;
 }
 
@@ -90,6 +106,7 @@ export function useSlideEditor() {
     lockedCount,
     chatOpen,
     pageEditMode,
+    textboxEditMode,
     theme,
     register,
     unregister,

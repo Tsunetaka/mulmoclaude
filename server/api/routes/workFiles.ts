@@ -2177,6 +2177,68 @@ export function parseTitleOutput(out: string): string {
   }
 }
 
+// ── テキストボックス編集（本文文字列・仕様 2026-08-02）body 検証 / 出力パース ──────────
+// 個々のテキストボックスは shape_id（スライド内一意）で指す。text は改行を含む複数段落。
+
+const TEXTBOX_TEXT_MAX = 5000;
+
+export interface TextboxInfo {
+  id: number;
+  rect: [number, number, number, number];
+  text: string;
+}
+export interface TextboxesResult {
+  editable: boolean;
+  boxes: TextboxInfo[];
+}
+
+export interface SetTextboxBody {
+  pageId: string;
+  shapeId: number;
+  text: string;
+}
+// page-set-textbox body の検証。不正なら null。空テキスト（クリア）は許可・改行可・5000 文字以内。
+export function validateSetTextboxBody(body: unknown): SetTextboxBody | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { pageId, shapeId, text } = body as Record<string, unknown>;
+  if (typeof pageId !== "string" || !PAGE_ID_RE.test(pageId)) return null;
+  if (typeof shapeId !== "number" || !Number.isInteger(shapeId) || shapeId < 0) return null;
+  if (typeof text !== "string" || text.length > TEXTBOX_TEXT_MAX) return null;
+  return { pageId, shapeId, text };
+}
+
+// 0〜1 正規化された rect（[nx,ny,nw,nh]）として妥当か。
+function isValidRect(rect: unknown): rect is [number, number, number, number] {
+  return Array.isArray(rect) && rect.length === 4 && rect.every((num) => typeof num === "number" && Number.isFinite(num));
+}
+
+// page_ops get-textboxes の stdout から `TEXTBOXES:<json>` 行を取り出す（無ければ editable:false）。
+export function parseTextboxesOutput(out: string): TextboxesResult {
+  const marker = "TEXTBOXES:";
+  const line = out.split(/\r?\n/).find((entry) => entry.startsWith(marker));
+  if (!line) return { editable: false, boxes: [] };
+  try {
+    const parsed = JSON.parse(line.slice(marker.length)) as {
+      editable?: unknown;
+      boxes?: unknown;
+    };
+    const editable = parsed.editable === true;
+    const rawBoxes = Array.isArray(parsed.boxes) ? parsed.boxes : [];
+    const boxes: TextboxInfo[] = [];
+    for (const raw of rawBoxes) {
+      if (typeof raw !== "object" || raw === null) continue;
+      const { id, rect, text } = raw as Record<string, unknown>;
+      if (typeof id !== "number" || !Number.isInteger(id)) continue;
+      if (!isValidRect(rect)) continue;
+      if (typeof text !== "string") continue;
+      boxes.push({ id, rect, text });
+    }
+    return { editable, boxes };
+  } catch {
+    return { editable: false, boxes: [] };
+  }
+}
+
 // ── セクション編集（追加・移動・削除・リネーム）の body 検証 ──────────────────────
 // 検証は python（page_ops.py）が真実源（固定・予約・重複・非空削除は exit 2）。ここでは
 // リクエスト形状だけを確かめ、帯・予約・重複の判定は python に委ねる。
@@ -2364,6 +2426,47 @@ router.post(API_ROUTES.work.pageSetTitle, async (req, res) => {
   if (!ctx) return;
   const code = await runPageOps(["set-title", "--version-dir", ctx.versionDir, "--page", body.pageId, "--title", body.title], ctx.send);
   await finishStructEdit(ctx, code, "タイトルの設定");
+  res.end();
+});
+
+// GET /api/work/:wd/:version/page-textboxes?pageId=... — 編集可能テキストボックスを列挙する
+// 読み取り専用（get-textboxes）。SSE ではなく stdout を捕捉して JSON で返す。編集対象外の頁は
+// editable:false・boxes:[] を返す（表紙・Thank You・未分類・チェックアウト中）。
+router.get(API_ROUTES.work.pageTextboxes, async (req, res) => {
+  const { wd, version } = req.params as { wd: string; version: string };
+  const { pageId } = req.query as { pageId?: unknown };
+  if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
+    res.status(400).json({ error: "invalid wd or version" });
+    return;
+  }
+  if (typeof pageId !== "string" || !PAGE_ID_RE.test(pageId)) {
+    res.status(400).json({ error: "pageId（p-XXXXXXXX）が必要です" });
+    return;
+  }
+  const versionDir = path.join(workspacePath, "data/work", wd, version);
+  const { code, out } = await runPageOpsCapture(["get-textboxes", "--version-dir", versionDir, "--page", pageId]);
+  if (code !== 0) {
+    res.status(500).json({ error: "テキストボックスの取得に失敗しました" });
+    return;
+  }
+  res.json(parseTextboxesOutput(out));
+});
+
+// POST /api/work/:wd/:version/page-set-textbox — テキストボックスの文字列を設定する（SSE）
+// 空文字＝クリア可。表紙・Thank You・チェックアウト頁・非対象シェイプは page_ops.py が exit 2 で拒否。
+router.post(API_ROUTES.work.pageSetTextbox, async (req, res) => {
+  const body = validateSetTextboxBody(req.body);
+  if (!body) {
+    res.status(400).json({ error: "pageId（p-XXXXXXXX）/ shapeId（0 以上の整数）/ text（5000 文字以内）が必要です" });
+    return;
+  }
+  const ctx = await beginStructEdit(req, res);
+  if (!ctx) return;
+  const code = await runPageOps(
+    ["set-textbox", "--version-dir", ctx.versionDir, "--page", body.pageId, "--shape-id", String(body.shapeId), "--text", body.text],
+    ctx.send,
+  );
+  await finishStructEdit(ctx, code, "テキストの設定");
   res.end();
 });
 

@@ -573,6 +573,14 @@ const HOST_API_ROUTES = {
     /** POST — 現在頁のタイトルを設定する「頁編集」（SSE）。`page_ops.py set-title`。
      *  空文字＝クリア可。表紙・Thank You の頁は不可。body `{ pageId, title }`。 */
     pageSetTitle: "/api/work/:wd/:version/page-set-title",
+    /** GET — 現在頁の編集可能テキストボックスを列挙する（「テキストボックス編集」モードの初期値）。
+     *  `page_ops.py get-textboxes`。読み取り専用。query `?pageId=p-XXXXXXXX` →
+     *  `{ editable: boolean, boxes: { id: number; rect: [nx,ny,nw,nh]; text: string }[] }`。 */
+    pageTextboxes: "/api/work/:wd/:version/page-textboxes",
+    /** POST — テキストボックス（shape_id）の文字列を設定する（SSE）。`page_ops.py set-textbox`。
+     *  空文字＝クリア可。表紙・Thank You・チェックアウト頁・非対象シェイプは不可。
+     *  body `{ pageId, shapeId, text }`。 */
+    pageSetTextbox: "/api/work/:wd/:version/page-set-textbox",
     /** POST — 空のセクションを追加する「セクション編集」（SSE）。`page_ops.py section-add`。
      *  先頭（表紙）の後〜Thank You の前に限定。予約名・同名は不可。body `{ name, toIndex }`。 */
     sectionAdd: "/api/work/:wd/:version/section-add",

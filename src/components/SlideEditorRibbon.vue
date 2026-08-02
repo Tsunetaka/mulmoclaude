@@ -59,6 +59,22 @@
           </button>
           <div class="ribbon-tooltip">{{ t("slides.pageEditHint") }}</div>
         </div>
+
+        <!-- テキストボックス編集トグル — ON でメインビュー画像上に編集可能テキスト
+             ボックスのハイライトを重ね、クリックで編集モーダルを開く。表紙／Thank You／
+             チェックアウト頁ではオーバーレイを出さない。頁編集モードとは排他（useSlideEditor）。 -->
+        <div class="relative group">
+          <button
+            class="ribbon-icon-btn"
+            :class="{ 'ribbon-icon-btn--active': textboxEditMode }"
+            data-testid="ribbon-btn-textbox-edit"
+            :aria-label="t('slides.textboxEdit')"
+            @click="textboxEditMode = !textboxEditMode"
+          >
+            <span class="material-icons text-lg" :class="textboxEditMode ? 'text-[#cfe2ff]' : 'text-[#8ab4e8]'">text_fields</span>
+          </button>
+          <div class="ribbon-tooltip">{{ t("slides.textboxEditHint") }}</div>
+        </div>
       </template>
     </div>
 
@@ -188,7 +204,7 @@ const router = useRouter();
 
 // 編集ビュー（SlideEditorView）と共有するコントロール状態・アクション。
 const slideEditor = useSlideEditor();
-const { active, dirtyCount, lockedCount, chatOpen, pageEditMode, theme } = slideEditor;
+const { active, dirtyCount, lockedCount, chatOpen, pageEditMode, textboxEditMode, theme } = slideEditor;
 
 // 作業ファイル選択（ピッカー）と共有する再スキャン状態・アクション。
 const workFileSelector = useWorkFileSelector();

@@ -236,14 +236,41 @@
         <div class="flex-1 flex flex-col bg-[#0a0e16] items-center justify-center p-4 gap-3 overflow-hidden min-w-0">
           <!-- スライド画像 -->
           <!-- メインビューはページキャンバス（.pagecanvas/）優先。未生成時はサムネイルにフォールバック -->
-          <div v-if="currentPage" class="flex-1 w-full min-h-0 flex items-center justify-center relative">
+          <div v-if="currentPage" ref="mainViewEl" class="flex-1 w-full min-h-0 flex items-center justify-center relative">
             <img
+              ref="mainImgEl"
               :src="mainImgUrl(currentPage)"
               :alt="`p.${currentPage.pageNo}`"
               class="h-full max-w-full w-auto object-contain rounded shadow-2xl"
               style="box-shadow: 0 10px 50px rgba(0, 0, 0, 0.75)"
+              @load="onMainImgLoad"
               @error="onMainImgError(currentPage.id)"
             />
+            <!-- テキストボックス編集オーバーレイ（textboxEditMode・編集可能頁のみ）。
+                 画像の実描画矩形（imgBox）に重ね、各 TB を % 配置の透明ボタンにする。
+                 常時うっすら枠線＋ホバーで強調（tb-hotspot）。クリックで編集モーダル。 -->
+            <div
+              v-if="showTextboxOverlay && imgBox"
+              class="absolute z-10"
+              :style="{ left: imgBox.left + 'px', top: imgBox.top + 'px', width: imgBox.width + 'px', height: imgBox.height + 'px' }"
+            >
+              <button
+                v-for="box in textboxes"
+                :key="box.id"
+                type="button"
+                class="tb-hotspot"
+                :style="hotspotStyle(box)"
+                :aria-label="t('slides.textboxEdit')"
+                @click="openTextboxModal(box)"
+              ></button>
+            </div>
+            <!-- 編集対象外の頁（表紙／Thank You／未分類／チェックアウト中）の注記 -->
+            <div
+              v-else-if="textboxEditMode && currentPage && deck && !canEditTextboxes(deck, currentPage.id)"
+              class="absolute top-0 left-0 right-0 bg-[#243247]/90 text-[#9fc0e6] text-[10px] font-bold text-center py-1 rounded-t pointer-events-none"
+            >
+              {{ t("slides.textboxNotEditable") }}
+            </div>
             <!-- チェックアウト中バナー -->
             <!-- eslint-disable @intlify/vue-i18n/no-raw-text -- status banner for internal slide editing tool -->
             <div
@@ -965,6 +992,45 @@
       </div>
     </div>
 
+    <!-- ── テキストボックス編集モーダル（本文テキストボックスの文字列を入力・空可） ── -->
+    <div v-if="tbModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeTextboxModal">
+      <div class="w-[38rem] max-w-[92vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
+        <div class="flex items-center gap-2 px-4 py-2.5 bg-[#0a1830] border-b border-[#1a2a44]">
+          <span class="material-icons text-sm text-[#4a8acc]">text_fields</span>
+          <span class="text-sm font-bold text-[#8aacd0] flex-1">テキストの編集 — {{ wdId }}（{{ version }}）</span>
+          <button class="text-[#3a5a7a] hover:text-[#6a9acc] disabled:opacity-30" :disabled="peBusy" aria-label="閉じる" @click="closeTextboxModal">
+            <span class="material-icons text-sm">close</span>
+          </button>
+        </div>
+
+        <div class="px-4 py-3 space-y-2 text-[#8aacd0]">
+          <label class="block text-[11px] text-[#7d9cbb]">テキスト（改行で段落・空にすると消去します）</label>
+          <textarea
+            v-model="tbInput"
+            :disabled="peBusy"
+            rows="8"
+            maxlength="5000"
+            class="w-full px-2 py-1.5 rounded bg-[#060b14] border border-[#22304c] text-xs text-[#cfe0f0] leading-relaxed focus:border-[#3a78cc] focus:outline-none disabled:opacity-50 resize-y"
+            placeholder="テキストを入力（空も可）"
+          ></textarea>
+          <p class="text-[10px] text-[#5a7593]">※ 段落内の部分的な書式（一部だけ太字・色替え）は段落先頭の書式に揃います。長文は枠内に自動縮小されます。</p>
+        </div>
+
+        <div class="flex justify-end gap-2 px-4 py-2.5 bg-[#0a1220] border-t border-[#1a2a44]">
+          <button class="px-3 py-1.5 rounded text-xs text-[#8aacd0] bg-[#16233c] hover:bg-[#1e2e48]" :disabled="peBusy" @click="closeTextboxModal">
+            キャンセル
+          </button>
+          <button
+            class="px-3 py-1.5 rounded text-xs text-white bg-[#1a4a8a] hover:bg-[#2a5a9a] disabled:opacity-40"
+            :disabled="peBusy"
+            @click="confirmEditTextbox"
+          >
+            設定する
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── セクション編集モーダル（追加／リネーム／削除の確認・入力） ── -->
     <div v-if="sectionModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeSectionModal">
       <div class="w-[30rem] max-w-[90vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
@@ -1045,7 +1111,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onUnmounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { PAGE_ROUTES } from "../router/pageRoutes";
@@ -1060,6 +1126,7 @@ import {
   buildDeck,
   isEditableSection,
   canEditTitle,
+  canEditTextboxes,
   computeMoveTarget,
   sidebarNavTarget,
   canMoveSection,
@@ -1536,6 +1603,121 @@ const currentIndex = computed<number>(() => {
   if (!deck.value) return -1;
   return deck.value.pages.findIndex((page) => page.id === currentId.value);
 });
+
+// ── テキストボックス編集（本文テキストボックスの文字列を設定・SSE）─────────────────
+// リボンの「テキストボックス編集」トグル ON でメインビュー画像上に編集可能 TB の
+// ハイライトを重ね、クリックで編集モーダルを開く。表紙／Thank You／未分類／チェックアウト
+// 頁は対象外。進捗表示は共有の頁編集モーダル（runPageEdit）を再利用する。
+const { textboxEditMode } = slideEditor; // template auto-unwrap 用に top-level 参照
+
+interface TextboxInfo {
+  id: number;
+  rect: [number, number, number, number]; // [nx, ny, nw, nh]（スライド寸法で 0〜1 正規化）
+  text: string;
+}
+const textboxes = ref<TextboxInfo[]>([]); // 現在頁の編集可能テキストボックス
+const mainViewEl = ref<HTMLDivElement | null>(null);
+const mainImgEl = ref<HTMLImageElement | null>(null);
+// 画像の実描画矩形（mainViewEl 基準の px）。object-contain のレターボックス補正込みで
+// getBoundingClientRect から求める。オーバーレイ（% 配置）の基準枠に使う。
+const imgBox = ref<{ left: number; top: number; width: number; height: number } | null>(null);
+
+/** メインビュー画像上にテキストボックス編集オーバーレイを出すか（編集可能頁のみ）。 */
+const showTextboxOverlay = computed<boolean>(() => {
+  if (!textboxEditMode.value || !deck.value || !currentPage.value) return false;
+  return canEditTextboxes(deck.value, currentPage.value.id);
+});
+
+/** 各テキストボックスの % 配置スタイル（imgBox を基準枠にした割合）。 */
+function hotspotStyle(box: TextboxInfo): Record<string, string> {
+  const [normLeft, normTop, normWidth, normHeight] = box.rect;
+  return {
+    left: `${(normLeft * 100).toString()}%`,
+    top: `${(normTop * 100).toString()}%`,
+    width: `${(normWidth * 100).toString()}%`,
+    height: `${(normHeight * 100).toString()}%`,
+  };
+}
+
+/** mainImgEl の実描画矩形を測って imgBox に反映する（未表示なら null）。 */
+function measureImgBox(): void {
+  const img = mainImgEl.value;
+  const box = mainViewEl.value;
+  if (!img || !box) {
+    imgBox.value = null;
+    return;
+  }
+  const imgRect = img.getBoundingClientRect();
+  const boxRect = box.getBoundingClientRect();
+  if (imgRect.width < 1 || imgRect.height < 1) {
+    imgBox.value = null;
+    return;
+  }
+  imgBox.value = { left: imgRect.left - boxRect.left, top: imgRect.top - boxRect.top, width: imgRect.width, height: imgRect.height };
+}
+
+/** 画像ロード完了で描画矩形を測り直す（オーバーレイ整列用）。 */
+function onMainImgLoad(): void {
+  measureImgBox();
+}
+
+/** 現在頁の編集可能テキストボックスを GET で取得する（読み取り専用）。 */
+async function loadTextboxes(pageId: string): Promise<void> {
+  if (!wdId.value || !version.value) return;
+  try {
+    const res = await apiGet<{ editable?: boolean; boxes?: TextboxInfo[] }>(fillRoute(API_ROUTES.work.pageTextboxes, wdId.value, version.value), { pageId });
+    if (currentId.value !== pageId) return; // 取得中に頁が変わった
+    textboxes.value = res.ok && Array.isArray(res.data.boxes) ? res.data.boxes : [];
+  } catch {
+    textboxes.value = [];
+  } finally {
+    await nextTick();
+    measureImgBox();
+  }
+}
+
+// モード ON / 頁変更で TB を取得（対象外頁ならクリア）。deck 再読込後の再取得は保存側で行う。
+watch([textboxEditMode, currentId], () => {
+  if (showTextboxOverlay.value && currentPage.value) {
+    void loadTextboxes(currentPage.value.id);
+  } else {
+    textboxes.value = [];
+  }
+});
+
+const onWinResize = (): void => measureImgBox();
+onMounted(() => window.addEventListener("resize", onWinResize));
+onUnmounted(() => window.removeEventListener("resize", onWinResize));
+
+const tbModalOpen = ref(false);
+const tbTarget = ref<TextboxInfo | null>(null); // 編集中の TB
+const tbInput = ref("");
+
+/** テキストボックスをクリック → 編集モーダルを開く（現在テキストを prefill）。 */
+function openTextboxModal(box: TextboxInfo): void {
+  if (peBusy.value) return;
+  tbTarget.value = box;
+  tbInput.value = box.text;
+  tbModalOpen.value = true;
+}
+
+/** テキスト設定を実行（空も可）。進捗は共有の頁編集モーダルを再利用し、成功後 TB を再取得。 */
+async function confirmEditTextbox(): Promise<void> {
+  const box = tbTarget.value;
+  const page = currentPage.value;
+  if (!box || !page || peBusy.value) return;
+  const text = tbInput.value;
+  tbModalOpen.value = false;
+  await runPageEdit(API_ROUTES.work.pageSetTextbox, { pageId: page.id, shapeId: box.id, text }, "テキストの設定");
+  if (showTextboxOverlay.value) await loadTextboxes(page.id);
+}
+
+/** テキストボックス編集モーダルを閉じる（実行中は閉じない）。 */
+function closeTextboxModal(): void {
+  if (peBusy.value) return;
+  tbModalOpen.value = false;
+  tbTarget.value = null;
+}
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 
@@ -2199,6 +2381,27 @@ onUnmounted(() => {
          text-[#6aaade] bg-[#0e2036] hover:bg-[#16304e]
          border border-dashed border-[#2a4060] hover:border-[#3a5a8a]
          transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+}
+
+/* ── テキストボックス編集オーバーレイ（textboxEditMode 時） ── */
+/* 編集可能な TB を常時うっすら枠線で示し、ホバーで強調する（仕様 Q3）。 */
+.tb-hotspot {
+  position: absolute;
+  border: 1px dashed rgba(122, 176, 255, 0.55);
+  background: rgba(80, 140, 230, 0.08);
+  border-radius: 3px;
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+.tb-hotspot:hover,
+.tb-hotspot:focus-visible {
+  border: 1px solid rgba(150, 200, 255, 0.95);
+  background: rgba(90, 150, 240, 0.22);
+  box-shadow: 0 0 0 1px rgba(150, 200, 255, 0.5);
+  outline: none;
 }
 
 /* ── Claude チャットペイン ── */

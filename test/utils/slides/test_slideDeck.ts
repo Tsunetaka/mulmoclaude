@@ -6,6 +6,7 @@ import {
   isFixedSection,
   isEditableSection,
   canEditTitle,
+  canEditTextboxes,
   computeMoveTarget,
   sidebarNavTarget,
   isReservedSectionName,
@@ -289,6 +290,47 @@ describe("canEditTitle", () => {
 
   it("rejects an unknown page id", () => {
     assert.equal(canEditTitle(deck, "p-nope"), false);
+  });
+});
+
+describe("canEditTextboxes", () => {
+  // 本文 p-b3 をチェックアウト中にした deck。
+  function makeLockedDeck(): DeckModel {
+    const struct: SlideStructure = {
+      schema_version: 1,
+      wd: "GIT-00003",
+      version: "v001",
+      sections: [
+        { name: "タイトル", page_ids: ["p-cover0"] },
+        { name: "本文", page_ids: ["p-b3", "p-b4"] },
+        { name: "Thank You", page_ids: ["p-ty0000"] },
+      ],
+      pages: {
+        "p-cover0": { file: "p-cover0.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+        "p-b3": { file: "p-b3.pptx", checked_out: true, checkout_by: "komachiya", checkout_at: null },
+        "p-b4": { file: "p-b4.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+        "p-ty0000": { file: "p-ty0000.pptx", checked_out: false, checkout_by: null, checkout_at: null },
+      },
+    };
+    return buildDeck(struct, null);
+  }
+
+  it("allows body pages that are not checked out", () => {
+    assert.equal(canEditTextboxes(makeLockedDeck(), "p-b4"), true);
+  });
+
+  it("rejects cover / Thank You pages", () => {
+    const deck = makeLockedDeck();
+    assert.equal(canEditTextboxes(deck, "p-cover0"), false);
+    assert.equal(canEditTextboxes(deck, "p-ty0000"), false);
+  });
+
+  it("rejects a checked-out body page", () => {
+    assert.equal(canEditTextboxes(makeLockedDeck(), "p-b3"), false);
+  });
+
+  it("rejects an unknown page id", () => {
+    assert.equal(canEditTextboxes(makeLockedDeck(), "p-nope"), false);
   });
 });
 

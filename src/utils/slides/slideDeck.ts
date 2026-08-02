@@ -126,6 +126,19 @@ export function canEditTitle(deck: DeckModel, pageId: string): boolean {
   return isEditableSection(sectionIndex, deck.sections[sectionIndex].name);
 }
 
+/**
+ * 現在頁のテキストボックスを編集できるか（＝固定でないセクションに属し、かつチェックアウト
+ * 中でない頁か）。表紙（先頭）／Thank You／未分類／チェックアウト中の頁は不可（サーバー
+ * page_ops.py と同一ルール）。存在しない pageId は false。
+ */
+export function canEditTextboxes(deck: DeckModel, pageId: string): boolean {
+  const sectionIndex = deck.sections.findIndex((sec) => sec.pages.some((page) => page.id === pageId));
+  if (sectionIndex < 0) return false;
+  if (!isEditableSection(sectionIndex, deck.sections[sectionIndex].name)) return false;
+  const page = deck.sections[sectionIndex].pages.find((entry) => entry.id === pageId);
+  return page ? !page.checkedOut : false;
+}
+
 /** 移動 API に渡す移動先（セクション名＋そのセクション内 0 始まり位置）。 */
 export interface MoveTarget {
   toSection: string;
