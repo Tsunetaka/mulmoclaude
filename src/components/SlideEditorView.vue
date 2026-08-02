@@ -992,6 +992,13 @@
       </div>
     </div>
 
+    <!-- ── アセット挿入ピッカー（アイコン/画像ライブラリから1点選ぶ・選択をチャットで返送） ── -->
+    <div v-if="assetPickerModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" @click.self="closeAssetPickerModal">
+      <div class="w-[52rem] max-w-[95vw] max-h-[90vh] overflow-hidden rounded-lg shadow-2xl">
+        <AssetPickerGallery :initial-tab="assetPickerTab" :initial-query="assetPickerQuery" @pick="onAssetPick" @cancel="closeAssetPickerModal" />
+      </div>
+    </div>
+
     <!-- ── テキストボックス編集モーダル（本文テキストボックスの文字列を入力・空可） ── -->
     <div v-if="tbModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="closeTextboxModal">
       <div class="w-[38rem] max-w-[92vw] bg-[#0d1526] border border-[#1a2a44] rounded-lg shadow-2xl overflow-hidden">
@@ -1138,6 +1145,8 @@ import {
   type DeckPage,
 } from "../utils/slides/slideDeck";
 import { SLIDE_ROLE_ID } from "../utils/slides/newDeck";
+import AssetPickerGallery from "./AssetPickerGallery.vue";
+import { formatAssetSelection, type AssetItem } from "../utils/assetPicker/catalog";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -2189,6 +2198,50 @@ function sendQuickHint(hint: string): void {
   appApi.sendMessageAs(buildSlideContext() + hint, SLIDE_ROLE_ID);
 }
 
+// ── アセット挿入ピッカー ─────────────────────────────────────────────────
+// Claude が presentAssetPicker を呼ぶと、スライドセッションに toolResult が積まれる。
+// このビューがそれを検知してモーダル（アイコン/画像ギャラリー）を開く。リボンの
+// 「アセット挿入」ボタンからも開ける。選択されたアセットは formatAssetSelection で
+// チャットへ投入し、Claude が python-pptx で配置する（座標・サイズは都度チャット指定）。
+const assetPickerModalOpen = ref(false);
+const assetPickerTab = ref<"icons" | "images">("icons");
+const assetPickerQuery = ref("");
+
+function openAssetPickerModal(tab: "icons" | "images" = "icons", query = ""): void {
+  assetPickerTab.value = tab;
+  assetPickerQuery.value = query;
+  assetPickerModalOpen.value = true;
+}
+function closeAssetPickerModal(): void {
+  assetPickerModalOpen.value = false;
+}
+function onAssetPick(asset: AssetItem): void {
+  closeAssetPickerModal();
+  if (agentRunning.value) return;
+  appApi.sendMessageAs(buildSlideContext() + formatAssetSelection(asset), SLIDE_ROLE_ID);
+}
+
+// presentAssetPicker の toolResult を監視。新規出現でモーダルを開く。マウント時点で
+// 既にある（履歴の）ものは seen に入れて除外し、以後の新規呼び出しだけ反応する。
+const seenAssetPickerResults = new Set<string>();
+function scanAssetPickerResults(open: boolean): void {
+  const results = activeSessionRef?.value?.toolResults;
+  if (!results) return;
+  let pending: { tab: "icons" | "images"; query: string } | null = null;
+  for (const result of results) {
+    if (result.toolName !== "presentAssetPicker" || seenAssetPickerResults.has(result.uuid)) continue;
+    seenAssetPickerResults.add(result.uuid);
+    const payload = result.data as { tab?: "icons" | "images"; query?: string } | undefined;
+    pending = { tab: payload?.tab === "images" ? "images" : "icons", query: typeof payload?.query === "string" ? payload.query : "" };
+  }
+  if (open && pending) openAssetPickerModal(pending.tab, pending.query);
+}
+onMounted(() => scanAssetPickerResults(false));
+watch(
+  () => activeSessionRef?.value?.toolResults?.length ?? 0,
+  () => scanAssetPickerResults(true),
+);
+
 /** チャットだけを新しいセッションへ切り替える（編集画面は閉じない）。
  *  実行中は無効。メッセージが残っていれば確認ダイアログを挟む。 */
 function newChat(): void {
@@ -2339,6 +2392,7 @@ slideEditor.register({
   onToggleChat: () => {
     showChatPane.value = !showChatPane.value;
   },
+  onOpenAssetPicker: (tab, query) => openAssetPickerModal(tab ?? "icons", query ?? ""),
 });
 watch(deck, (value) => (slideEditor.active.value = Boolean(value)), { immediate: true });
 watch(dirtyCount, (value) => (slideEditor.dirtyCount.value = value), { immediate: true });

@@ -320,6 +320,78 @@ router.get(API_ROUTES.work.scan, async (req, res) => {
   }
 });
 
+// ── アセットピッカー用カタログ（icons / images の index.json 読取） ──────────
+interface AssetIndexEntry {
+  id?: string;
+  file?: string;
+  label?: string;
+  description?: string;
+  color_tone?: string;
+  tags?: string[];
+  status?: string;
+  icon_type?: string | null;
+  step_number?: number | null;
+  slide_position?: string | null;
+}
+interface AssetIndexFile {
+  assets?: AssetIndexEntry[];
+}
+interface AssetCatalogItem {
+  kind: "icon" | "image";
+  id: string;
+  label: string;
+  description: string;
+  path: string;
+  colorTone: string;
+  tags: string[];
+  iconType: string | null;
+  stepNumber: number | null;
+  slidePosition: string | null;
+}
+
+// Reads data/work/<subdir>/index.json and maps its entries to catalog items.
+// The stored `file` is relative to the index (e.g. "compressed/icon_x.png"),
+// so we prefix it with the workspace-relative asset dir. Non-usable ("使用可"
+// 以外) and id-less rows are dropped. Missing / unreadable index → [].
+async function readAssetIndex(subdir: "icons" | "images", kind: "icon" | "image"): Promise<AssetCatalogItem[]> {
+  const indexPath = path.join(workspacePath, "data/work", subdir, "index.json");
+  let parsed: AssetIndexFile;
+  try {
+    parsed = JSON.parse(await fsp.readFile(indexPath, "utf-8")) as AssetIndexFile;
+  } catch (err) {
+    log.warn("workFiles.assetCatalog", "index read failed", { subdir, err });
+    return [];
+  }
+  const items: AssetCatalogItem[] = [];
+  for (const entry of parsed.assets ?? []) {
+    if (!entry.id || !entry.file) continue;
+    if (entry.status && entry.status !== "使用可") continue;
+    items.push({
+      kind,
+      id: entry.id,
+      label: entry.label ?? entry.id,
+      description: entry.description ?? "",
+      path: path.posix.join("data/work", subdir, entry.file),
+      colorTone: entry.color_tone ?? "",
+      tags: Array.isArray(entry.tags) ? entry.tags : [],
+      iconType: entry.icon_type ?? null,
+      stepNumber: typeof entry.step_number === "number" ? entry.step_number : null,
+      slidePosition: entry.slide_position ?? null,
+    });
+  }
+  return items;
+}
+
+router.get(API_ROUTES.work.assetCatalog, async (_req, res) => {
+  try {
+    const [icons, images] = await Promise.all([readAssetIndex("icons", "icon"), readAssetIndex("images", "image")]);
+    res.json({ icons, images });
+  } catch (err) {
+    log.error("workFiles.assetCatalog", "catalog build failed", { err });
+    res.status(500).json({ error: "asset catalog failed" });
+  }
+});
+
 // サムネイル生成 Python スクリプト（実行時に /tmp に書き出す）
 const THUMB_SCRIPT = `
 import sys, json, zipfile, hashlib, datetime, shutil, subprocess, tempfile

@@ -59,6 +59,8 @@ let applyTemplateHandler: TemplateHandler | null = null;
 let releaseHandler: Handler | null = null;
 let pageCheckoutHandler: Handler | null = null;
 let pageCheckinHandler: Handler | null = null;
+type AssetPickerHandler = (tab?: "icons" | "images", query?: string) => void;
+let openAssetPickerHandler: AssetPickerHandler | null = null;
 
 interface SlideEditorHandlers {
   onRefresh: Handler;
@@ -68,6 +70,7 @@ interface SlideEditorHandlers {
   onRelease: Handler;
   onPageCheckout: Handler;
   onPageCheckin: Handler;
+  onOpenAssetPicker: AssetPickerHandler;
 }
 
 /** 編集ビューがアクション（canvas 更新・チャットトグル・テーマ／テンプレ適用・リリース・頁チェックアウト／チェックイン）を登録する。 */
@@ -79,6 +82,7 @@ function register(handlers: SlideEditorHandlers): void {
   releaseHandler = handlers.onRelease;
   pageCheckoutHandler = handlers.onPageCheckout;
   pageCheckinHandler = handlers.onPageCheckin;
+  openAssetPickerHandler = handlers.onOpenAssetPicker;
 }
 
 /** 編集ビューのアンマウント時にハンドラと状態を解除する。 */
@@ -90,6 +94,7 @@ function unregister(): void {
   releaseHandler = null;
   pageCheckoutHandler = null;
   pageCheckinHandler = null;
+  openAssetPickerHandler = null;
   active.value = false;
   dirtyCount.value = 0;
   lockedCount.value = 0;
@@ -124,5 +129,7 @@ export function useSlideEditor() {
     triggerPageCheckout: (): void => pageCheckoutHandler?.(),
     /** リボンの「チェックイン」ボタンから、チェックイン（戻す/破棄）モーダルを開くトリガー。 */
     triggerPageCheckin: (): void => pageCheckinHandler?.(),
+    /** リボンの「アセット挿入」ボタン／Claude の presentAssetPicker から、アセット選択モーダルを開くトリガー。 */
+    triggerOpenAssetPicker: (tab?: "icons" | "images", query?: string): void => openAssetPickerHandler?.(tab, query),
   };
 }

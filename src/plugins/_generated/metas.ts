@@ -11,6 +11,7 @@ import { META as generateImageMeta } from "../generateImage/meta";
 import { META as manageSkillsMeta } from "../manageSkills/meta";
 import { META as markdownMeta } from "../markdown/meta";
 import { META as photoLocationsMeta } from "../photoLocations/meta";
+import { META as presentAssetPickerMeta } from "../presentAssetPicker/meta";
 import { META as presentCollectionMeta } from "../presentCollection/meta";
 import { META as presentFormMeta } from "../presentForm/meta";
 import { META as presentHtmlMeta } from "../presentHtml/meta";
@@ -31,6 +32,7 @@ export const GENERATED_PLUGIN_METAS = [
   manageSkillsMeta,
   markdownMeta,
   photoLocationsMeta,
+  presentAssetPickerMeta,
   presentCollectionMeta,
   presentFormMeta,
   presentHtmlMeta,

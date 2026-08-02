@@ -454,6 +454,10 @@ const HOST_API_ROUTES = {
 
   work: {
     scan: "/api/work/scan",
+    /** GET — スライド素材ライブラリのカタログ。`data/work/icons/index.json` と
+     *  `data/work/images/index.json` を読み、アセットピッカー用に
+     *  `{ icons:[...], images:[...] }`（id/label/description/path/tags 等）を返す。 */
+    assetCatalog: "/api/work/asset-catalog",
     /** Thumbnail-only generation for a WD already present on disk. SSE stream. */
     thumbnails: "/api/work/thumbnails",
     /** POST — リリース選択前プレビュー（N5）。body `{ wdId, windowsWdPath }`。

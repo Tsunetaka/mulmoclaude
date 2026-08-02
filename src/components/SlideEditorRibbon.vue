@@ -139,6 +139,15 @@
         </button>
         <div class="ribbon-tooltip">{{ t("slides.pageCheckinHint") }}</div>
       </div>
+      <!-- アセット挿入 — アイコン/画像ライブラリのギャラリーを開き、1点選んで
+           チャットに投入する（Claude が python-pptx で配置）。Claude の
+           presentAssetPicker でも同じモーダルが開く。 -->
+      <div class="relative group">
+        <button class="ribbon-icon-btn" data-testid="ribbon-btn-asset-picker" :aria-label="t('slides.pickAsset')" @click="slideEditor.triggerOpenAssetPicker()">
+          <span class="material-icons text-lg text-[#8ab4e8]">add_photo_alternate</span>
+        </button>
+        <div class="ribbon-tooltip">{{ t("slides.pickAssetHint") }}</div>
+      </div>
       <div class="relative group">
         <button
           class="ribbon-icon-btn"

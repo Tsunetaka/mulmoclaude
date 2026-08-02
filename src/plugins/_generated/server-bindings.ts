@@ -10,6 +10,7 @@ import chartDef from "../chart/definition";
 import manageSkillsDef from "../manageSkills/definition";
 import markdownDef from "../markdown/definition";
 import photoLocationsDef from "../photoLocations/definition";
+import presentAssetPickerDef from "../presentAssetPicker/definition";
 import presentCollectionDef from "../presentCollection/definition";
 import presentFormDef from "../presentForm/definition";
 import presentHtmlDef from "../presentHtml/definition";
@@ -23,6 +24,7 @@ import { META as chartMeta } from "../chart/meta";
 import { META as manageSkillsMeta } from "../manageSkills/meta";
 import { META as markdownMeta } from "../markdown/meta";
 import { META as photoLocationsMeta } from "../photoLocations/meta";
+import { META as presentAssetPickerMeta } from "../presentAssetPicker/meta";
 import { META as presentCollectionMeta } from "../presentCollection/meta";
 import { META as presentFormMeta } from "../presentForm/meta";
 import { META as presentHtmlMeta } from "../presentHtml/meta";
@@ -41,6 +43,7 @@ export const GENERATED_SERVER_BINDINGS: readonly ServerPluginBinding[] = [
   { def: manageSkillsDef, endpoint: mcpEndpoint(manageSkillsMeta) },
   { def: markdownDef, endpoint: mcpEndpoint(markdownMeta) },
   { def: photoLocationsDef, endpoint: mcpEndpoint(photoLocationsMeta) },
+  { def: presentAssetPickerDef, endpoint: mcpEndpoint(presentAssetPickerMeta) },
   { def: presentCollectionDef, endpoint: mcpEndpoint(presentCollectionMeta) },
   { def: presentFormDef, endpoint: mcpEndpoint(presentFormMeta) },
   { def: presentHtmlDef, endpoint: mcpEndpoint(presentHtmlMeta) },

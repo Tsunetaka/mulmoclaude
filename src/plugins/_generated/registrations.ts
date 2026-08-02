@@ -11,6 +11,7 @@ import { REGISTRATION as generateImageRegistration } from "../generateImage";
 import { REGISTRATION as manageSkillsRegistration } from "../manageSkills";
 import { REGISTRATION as markdownRegistration } from "../markdown";
 import { REGISTRATION as photoLocationsRegistration } from "../photoLocations";
+import { REGISTRATION as presentAssetPickerRegistration } from "../presentAssetPicker";
 import { REGISTRATION as presentCollectionRegistration } from "../presentCollection";
 import { REGISTRATION as presentFormRegistration } from "../presentForm";
 import { REGISTRATION as presentHtmlRegistration } from "../presentHtml";
@@ -35,6 +36,7 @@ export const GENERATED_PLUGIN_REGISTRATIONS: readonly PluginRegistration[] = [
   manageSkillsRegistration,
   markdownRegistration,
   photoLocationsRegistration,
+  presentAssetPickerRegistration,
   presentCollectionRegistration,
   presentFormRegistration,
   presentHtmlRegistration,

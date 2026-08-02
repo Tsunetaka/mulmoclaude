@@ -3,6 +3,7 @@ import { executeMindMap } from "@gui-chat-plugin/mindmap";
 import { executeSpreadsheet, type SpreadsheetArgs } from "../../../src/plugins/spreadsheet/definition.js";
 import { executeQuiz } from "@mulmochat-plugin/quiz";
 import { executeForm } from "../../../src/plugins/presentForm/plugin.js";
+import { executeAssetPicker } from "../../../src/plugins/presentAssetPicker/plugin.js";
 import { executePresentCollection } from "../../../src/plugins/presentCollection/plugin.js";
 import type { PresentCollectionArgs } from "../../../src/plugins/presentCollection/types.js";
 import { loadCollection, validateCollectionRecords } from "../../workspace/collections/index.js";
@@ -308,6 +309,13 @@ bindRoute(
   router,
   API_ROUTES.form.dispatch,
   wrapPluginExecute<Parameters<typeof executeForm>[1]>((req) => executeForm(null as never, req.body)),
+);
+
+// presentAssetPicker — assetPicker (slide icon / image library picker)
+bindRoute(
+  router,
+  API_ROUTES.assetPicker.dispatch,
+  wrapPluginExecute<Parameters<typeof executeAssetPicker>[1]>((req) => executeAssetPicker(null as never, req.body)),
 );
 
 // presentCollection — render a collection (or one item) as an inline,
