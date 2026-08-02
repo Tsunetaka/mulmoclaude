@@ -293,7 +293,7 @@ export async function resolveWdTitle(wdId: string): Promise<string | null> {
 }
 
 /** WD-ID から D: フォルダの Windows パスを解決する（D: マスターを走査）。
- *  リリース逆同期（D: へ push）で `.checkout-source` が無い GUI 登録 WD 向けのフォールバック。
+ *  リリース逆同期（D: へ push）・split 前同期・頁チェックアウト等で共通に使う。
  *  見つからない / スキャン失敗時は null。 */
 export async function resolveWdWindowsPath(wdId: string): Promise<string | null> {
   try {
@@ -732,18 +732,6 @@ async function statPptxList(dir: string): Promise<MirrorFile[]> {
   return out;
 }
 
-// .checkout-source から windows_path（/mnt/d 形式）を読む。無ければ null。
-async function readCheckoutWindowsPath(wdId: string): Promise<string | null> {
-  try {
-    const raw = await fsp.readFile(path.join(workspacePath, "data/work", wdId, ".checkout-source"), "utf-8");
-    const line = raw.split(/\r?\n/).find((entry) => entry.startsWith("windows_path="));
-    const value = line ? line.slice("windows_path=".length).trim() : "";
-    return value || null;
-  } catch {
-    return null;
-  }
-}
-
 // D:→WSL コピー（最終ガード: 直下・安全な pptx 名のみ）。
 async function mirrorCopy(srcDir: string, destDir: string, names: string[]): Promise<string[]> {
   const done: string[] = [];
@@ -1067,7 +1055,7 @@ router.post(API_ROUTES.work.unregister, async (req, res) => {
 });
 
 // POST /api/work/release-to-windows — WSL の ReleasedVersion を Windows(D:) へ push（逆同期）。
-// windowsWdPath 省略時は .checkout-source（windows_path）から解決する。JSON。
+// windowsWdPath 省略時は D: フォルダ名スキャン（resolveWdWindowsPath）で解決する。JSON。
 router.post(API_ROUTES.work.releaseToWindows, async (req, res) => {
   const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
   if (!wdId || !isValidWorkWdId(wdId)) {
@@ -1075,9 +1063,9 @@ router.post(API_ROUTES.work.releaseToWindows, async (req, res) => {
     return;
   }
   try {
-    const winPath = windowsWdPath ?? (await readCheckoutWindowsPath(wdId));
+    const winPath = windowsWdPath ?? (await resolveWdWindowsPath(wdId));
     if (!winPath) {
-      res.status(400).json({ error: "windowsWdPath 未指定かつ .checkout-source に windows_path がありません" });
+      res.status(400).json({ error: "windowsWdPath 未指定かつ D: 上に該当 WD フォルダが見つかりません" });
       return;
     }
     const { copied } = await pushReleasedToWindows(wdId, winPath);
@@ -1236,9 +1224,8 @@ router.post(API_ROUTES.work.split, async (req, res) => {
   const ctx = beginComStream(req, res);
   if (!ctx) return;
   // split 前の安全網: D: を正として ReleasedVersion を同期（stale 名の自己回復）。
-  // windowsWdPath は body に無いため .checkout-source → 無ければ D: スキャンで解決する
-  // （combine と同型の二段。GUI 登録 WD は .checkout-source が無いため後段が要る）。
-  const synced = await syncReleasedFromWindows(ctx.wd, await resolveCheckoutWinPath(ctx.wd));
+  // windowsWdPath は body に無いため D: フォルダ名スキャン（resolveWdWindowsPath）で解決する。
+  const synced = await syncReleasedFromWindows(ctx.wd, await resolveWdWindowsPath(ctx.wd));
   if (synced.copied.length || synced.deleted.length) {
     ctx.send(`🔄 ReleasedVersion を D: に同期（+${synced.copied.length}/-${synced.deleted.length}）`);
   }
@@ -1283,10 +1270,10 @@ router.post(API_ROUTES.work.combine, async (req, res) => {
   // COM 結合は .pages/*.pptx を読むため、先に表紙 pptx を書き換えておけば結合物へ反映される。
   await runUpdateCoverMeta(ctx.wd, ctx.version, COVER_META_FIELDS_RELEASE, ctx.send);
   // 結合成功後、新版 ReleasedVersion を Windows(D:) へ自動 push（L823 の注記どおり
-  // 「新版は D: へ push してからミラー」の順序を守る）。Windows パスは .checkout-source →
-  // 無ければ D: スキャン（resolveWdWindowsPath）で解決する（GUI 登録 WD は .checkout-source が無い）。
+  // 「新版は D: へ push してからミラー」の順序を守る）。Windows パスは D: フォルダ名
+  // スキャン（resolveWdWindowsPath）で解決する。
   await runComScript(args, ctx.wd, ctx.send, async () => {
-    const winPath = await resolveCheckoutWinPath(ctx.wd);
+    const winPath = await resolveWdWindowsPath(ctx.wd);
     if (!winPath) {
       ctx.send("⚠ Windows パスを解決できず、D: への push をスキップしました（ReleasedVersion は WSL に生成済み）");
       return;
@@ -1924,11 +1911,6 @@ export function validateOptionalPageIds(ids: unknown): string[] | null {
   return Array.isArray(ids) && ids.length === 0 ? [] : validateRequiredPageIds(ids);
 }
 
-// Windows パス解決（combine と同型の二段）：.checkout-source → 無ければ D: スキャン。
-async function resolveCheckoutWinPath(wdId: string): Promise<string | null> {
-  return (await readCheckoutWindowsPath(wdId)) ?? (await resolveWdWindowsPath(wdId));
-}
-
 // 往復用 .checkedoutpages ディレクトリ（WSL 側 / Windows 側）。
 function localCheckedoutDir(wdId: string, version: string): string {
   return path.join(workspacePath, "data/work", wdId, version, ".checkedoutpages");
@@ -2023,7 +2005,7 @@ async function runPageCheckout(ctx: PageOpCtx, pageIds: string[]): Promise<void>
 
 // .checkedoutpages（WSL）→ Windows(D:) へ pptx を push。
 async function pushCheckedoutToWindows(ctx: PageOpCtx, files: string[]): Promise<void> {
-  const winPath = await resolveCheckoutWinPath(ctx.wdId);
+  const winPath = await resolveWdWindowsPath(ctx.wdId);
   if (!winPath) {
     ctx.send("⚠ Windows パスを解決できず、D: への push をスキップしました（.checkedoutpages は WSL に生成済み）");
     return;
@@ -2053,7 +2035,7 @@ router.post(API_ROUTES.work.pageCheckin, async (req, res) => {
 async function runPageCheckin(ctx: PageOpCtx, apply: string[], discard: string[]): Promise<void> {
   // apply/discard 両省略時は、現在ロック中の全ページを apply とみなす。
   const applyIds = apply.length === 0 && discard.length === 0 ? Object.keys(ctx.pages).filter((pageId) => ctx.pages[pageId].checked_out) : apply;
-  const winPath = await resolveCheckoutWinPath(ctx.wdId);
+  const winPath = await resolveWdWindowsPath(ctx.wdId);
   try {
     const appliedAny = await checkinApplyGroup(ctx, applyIds, winPath);
     await checkinDiscardGroup(ctx, discard, winPath);

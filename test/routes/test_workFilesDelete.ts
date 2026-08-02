@@ -132,8 +132,8 @@ function wdDir(): string {
 }
 
 // Build a WD_ID with two version subfolders, a ReleasedVersion/, and a
-// .checkout-source pointing windows_path at a fake (already WSL-form)
-// Windows base that also mirrors the version subfolders.
+// neutral WD-root marker file, plus a fake (already WSL-form) Windows base
+// that mirrors the version subfolders (to assert D: is never touched).
 function seedWd(opts: { lockedPage?: boolean } = {}): void {
   const wdPath = wdDir();
   fakeWinRoot = path.join(tmpRoot, "fakewin", WD_ID);
@@ -145,7 +145,7 @@ function seedWd(opts: { lockedPage?: boolean } = {}): void {
   }
   mkdirSync(path.join(wdPath, "ReleasedVersion"), { recursive: true });
   writeFileSync(path.join(wdPath, "ReleasedVersion", "GIT-00003 sample_20260629_v002.pptx"), "x");
-  writeFileSync(path.join(wdPath, ".checkout-source"), `windows_path=${fakeWinRoot}\n`);
+  writeFileSync(path.join(wdPath, ".wd-marker"), "marker\n");
   const struct = { pages: { "p-aaaa1111": { checked_out: Boolean(opts.lockedPage) } } };
   writeFileSync(path.join(wdPath, VERSION, ".pages", "structure.json"), JSON.stringify(struct));
 }
@@ -186,11 +186,11 @@ describe("DELETE /api/work/:wd/:version — subfolder-limited deletion", () => {
     // … the Windows (D:) copy of the same version SURVIVES (D: is never touched) …
     assert.ok(existsSync(path.join(fakeWinRoot, VERSION)), "Windows version dir untouched");
     // … and the sibling version, ReleasedVersion/, WD_ID root, and the
-    // checkout-source all survive (no global --delete).
+    // root marker file all survive (no global --delete).
     assert.ok(existsSync(path.join(wdDir(), "v001")), "sibling WSL version kept");
     assert.ok(existsSync(path.join(fakeWinRoot, "v001")), "sibling Windows version kept");
     assert.ok(existsSync(path.join(wdDir(), "ReleasedVersion")), "ReleasedVersion kept");
-    assert.ok(existsSync(path.join(wdDir(), ".checkout-source")), "checkout-source kept");
+    assert.ok(existsSync(path.join(wdDir(), ".wd-marker")), "WD-root marker kept");
     const remaining = await readdir(wdDir());
     assert.ok(!remaining.includes(VERSION), "WD_ID root no longer lists the deleted version");
   });
@@ -245,7 +245,7 @@ describe("DELETE /api/work/:wd/:version — subfolder-limited deletion", () => {
     assert.ok(existsSync(path.join(fakeWinRoot, VERSION)), "Windows (D:) copy still untouched even with force");
   });
 
-  it("removes the WSL side regardless of any .checkout-source (Windows never consulted)", async () => {
+  it("removes the WSL side without consulting Windows (D: never touched)", async () => {
     const wdPath = wdDir();
     mkdirSync(path.join(wdPath, VERSION, ".pages"), { recursive: true });
     const { state, res } = mockRes();

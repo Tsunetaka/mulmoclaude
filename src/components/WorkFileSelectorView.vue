@@ -206,7 +206,7 @@
             <input v-model="releaseFilename" type="text" class="mt-1 w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono" />
           </label>
           <p class="text-xs text-gray-500 leading-relaxed">
-            結合後、サーバーが <span class="font-mono">.checkout-source</span> の Windows パスへ自動でコピー（逆同期）します。<br />
+            結合後、サーバーが D: 上の該当 WD フォルダへ自動でコピー（逆同期）します。<br />
             ⚠ COM 結合のため、実行前に <b>PowerPoint を全て閉じて</b>ください（起動中は中止されます）。
           </p>
         </div>
@@ -719,7 +719,7 @@ function closeReleaseModal(): void {
   releaseModal.value = null;
 }
 
-// combine を SSE で叩く（結合成功後、サーバーが .checkout-source の Windows パスへ自動 push）。
+// combine を SSE で叩く（結合成功後、サーバーが D: 上の該当 WD フォルダへ自動 push）。
 async function executeRelease(): Promise<void> {
   const modal = releaseModal.value;
   if (!modal || !releaseFilename.value.trim()) return;

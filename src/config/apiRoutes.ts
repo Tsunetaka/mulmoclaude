@@ -529,8 +529,8 @@ const HOST_API_ROUTES = {
     applyTemplate: "/api/work/:wd/:version/apply-template",
     /** POST — WSL の `<wd>/ReleasedVersion/*.pptx` を Windows(D:) の Materials
      *  `<windows_path>/ReleasedVersion/` へ push（リリース逆同期）。JSON。
-     *  body `{ wdId, windowsWdPath? }`（windowsWdPath 省略時は `.checkout-source`
-     *  の `windows_path` から解決）。新/更新の pptx のみコピーし、D: 側の他版は
+     *  body `{ wdId, windowsWdPath? }`（windowsWdPath 省略時は D: フォルダ名
+     *  スキャン `resolveWdWindowsPath` で解決）。新/更新の pptx のみコピーし、D: 側の他版は
      *  削除しない（安全側）。サンドボックスの Claude は /mnt/d を触れないため、
      *  /mnt/d が見えるホストのサーバー経由でこの push を実行する口。 */
     releaseToWindows: "/api/work/release-to-windows",
@@ -544,8 +544,8 @@ const HOST_API_ROUTES = {
     /** POST — 選択ページを Windows へ出す「頁単位チェックアウト」（SSE）。
      *  `slide_struct.py checkout` で `<version>/.pages/<id>.pptx` を `.checkedoutpages/`
      *  へコピー＋structure ロック（checked_out）し、Windows(D:) の `.checkedoutpages/` へ
-     *  rsync push する。Windows パスは `.checkout-source` → 無ければ D: スキャン
-     *  （resolveWdWindowsPath）で解決。既にロック中のページは除外し SSE に明示。
+     *  rsync push する。Windows パスは D: フォルダ名スキャン（resolveWdWindowsPath）
+     *  で解決。既にロック中のページは除外し SSE に明示。
      *  body `{ pageIds: string[] }`。 */
     pageCheckout: "/api/work/:wd/:version/page-checkout",
     /** POST — チェックアウト中ページを戻す／破棄する「頁単位チェックイン」（SSE）。

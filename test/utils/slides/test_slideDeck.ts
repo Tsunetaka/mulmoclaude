@@ -33,7 +33,7 @@ describe("parseVersionDirs", () => {
     { name: "v003", type: "dir" },
     { name: "v002", type: "dir" },
     { name: "ReleasedVersion", type: "dir" },
-    { name: ".checkout-source", type: "file" },
+    { name: ".wd-marker", type: "file" },
     { name: "notes.txt", type: "file" },
   ];
 

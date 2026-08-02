@@ -1667,7 +1667,7 @@ async function runApplyTemplate(): Promise<void> {
 
 // ── リリース（リボンの「リリース」ボタン発） ──────────────────────────────────
 // 編集中バージョンの .pages を COM 結合（combine）して ReleasedVersion/<file>.pptx を生成し、
-// サーバーが .checkout-source の Windows パスへ自動 push する。作業ファイル選択画面の
+// サーバーが D: 上の該当 WD フォルダへ自動 push する。作業ファイル選択画面の
 // リリースと同一の口（API_ROUTES.work.combine）・同一の命名規約を用いる。
 
 /** YYYYMMDD（ローカル日付）。リリース既定ファイル名の日付部に使う。 */
