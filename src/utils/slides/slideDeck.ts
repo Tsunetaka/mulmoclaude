@@ -252,3 +252,30 @@ export function buildDeck(structure: SlideStructure, manifest: SlideManifest | n
   const pages = sections.flatMap((sec) => sec.pages);
   return { version: structure.version, totalPages: pages.length, sections, pages };
 }
+
+/**
+ * サイドバー（サムネイルペイン）のキーボード頁送りで、押されたキーから遷移先の
+ * フラット index を返す。対象外キーは null（呼び出し側は preventDefault しない）。
+ * - ArrowUp / PageUp   … 前の頁（先頭で頭打ち）
+ * - ArrowDown / PageDown … 次の頁（末尾で頭打ち）
+ * - Home … 先頭 / End … 末尾
+ * current<0（未選択）は 0 起点とする。total<=0 は常に null。
+ */
+export function sidebarNavTarget(key: string, current: number, total: number): number | null {
+  if (total <= 0) return null;
+  const base = current < 0 ? 0 : current;
+  switch (key) {
+    case "ArrowUp":
+    case "PageUp":
+      return Math.max(0, base - 1);
+    case "ArrowDown":
+    case "PageDown":
+      return Math.min(total - 1, base + 1);
+    case "Home":
+      return 0;
+    case "End":
+      return total - 1;
+    default:
+      return null;
+  }
+}

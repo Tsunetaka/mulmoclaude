@@ -56,9 +56,12 @@
         <!-- ─ サイドバー ─ -->
         <div
           ref="sidebarEl"
-          class="w-44 flex-shrink-0 bg-[#080e18] border-r border-[#141e2e] overflow-y-auto overflow-x-hidden"
+          class="w-44 flex-shrink-0 bg-[#080e18] border-r border-[#141e2e] overflow-y-auto overflow-x-hidden focus:outline-none"
           style="scrollbar-width: thin; scrollbar-color: #2a3a5a transparent"
+          tabindex="0"
+          :aria-label="t('slides.pageListAria')"
           @wheel.stop
+          @keydown="onSidebarKeydown"
         >
           <template v-for="(sec, si) in deck.sections" :key="si">
             <!-- セクション見出し -->
@@ -86,13 +89,16 @@
             <!-- スライド一覧 -->
             <div v-if="!collapsedSections.has(si)" class="flex flex-col gap-1 p-1.5">
               <div v-for="page in sec.pages" :key="page.id" class="flex flex-col">
+                <!-- focus:outline-none＝クリック後にキー操作すると残る白い枠（button の
+                     :focus-visible リング）を抑止。選択状態は下の青枠が唯一の指標。 -->
                 <button
-                  class="rounded overflow-hidden border transition-all text-left w-full"
+                  class="rounded overflow-hidden border transition-all text-left w-full focus:outline-none focus-visible:outline-none"
                   :class="
                     currentId === page.id
                       ? 'border-[#3a78cc] bg-[#0d2040] shadow-[0_0_0_1px_#3a78cc40]'
                       : 'border-[#1e2e48] bg-[#0a1220] hover:border-[#3a5a88]'
                   "
+                  :data-page-id="page.id"
                   @click="selectId(page.id)"
                 >
                   <div class="relative">
@@ -114,13 +120,18 @@
                 </button>
 
                 <!-- 頁編集コントロール（トグル ON 時）。編集可能セクションは ↑↓/🗑、
-                     表紙／Thank You は錠前のみ（固定）。 -->
-                <div v-if="pageEditMode" class="flex items-center gap-0.5 px-0.5 pt-0.5 pb-1">
+                     表紙／Thank You は錠前のみ（固定）。移動・削除は「現在選択中の頁」
+                     に対してのみ有効（他頁は非活性）＝どの頁への操作か取り違えを防ぐ。 -->
+                <div
+                  v-if="pageEditMode"
+                  class="flex items-center gap-0.5 px-0.5 pt-0.5 pb-1 rounded transition-colors"
+                  :class="isEditableSection(si, sec.name) && currentId === page.id ? 'bg-[#0d2040]/60' : ''"
+                >
                   <template v-if="isEditableSection(si, sec.name)">
                     <button
                       class="pe-btn"
-                      :disabled="peBusy || !canMovePage(page, -1)"
-                      :title="t('slides.pageMoveUp')"
+                      :disabled="peBusy || currentId !== page.id || !canMovePage(page, -1)"
+                      :title="currentId === page.id ? t('slides.pageMoveUp') : t('slides.pageEditSelectFirst')"
                       :aria-label="t('slides.pageMoveUp')"
                       @click.stop="movePage(page, -1)"
                     >
@@ -128,8 +139,8 @@
                     </button>
                     <button
                       class="pe-btn"
-                      :disabled="peBusy || !canMovePage(page, 1)"
-                      :title="t('slides.pageMoveDown')"
+                      :disabled="peBusy || currentId !== page.id || !canMovePage(page, 1)"
+                      :title="currentId === page.id ? t('slides.pageMoveDown') : t('slides.pageEditSelectFirst')"
                       :aria-label="t('slides.pageMoveDown')"
                       @click.stop="movePage(page, 1)"
                     >
@@ -138,8 +149,8 @@
                     <span class="flex-1"></span>
                     <button
                       class="pe-btn pe-btn--danger"
-                      :disabled="peBusy"
-                      :title="t('slides.pageDelete')"
+                      :disabled="peBusy || currentId !== page.id"
+                      :title="currentId === page.id ? t('slides.pageDelete') : t('slides.pageEditSelectFirst')"
                       :aria-label="t('slides.pageDelete')"
                       @click.stop="askDeletePage(page)"
                     >
@@ -767,15 +778,24 @@
         </div>
 
         <!-- ① 削除の確認 -->
-        <div v-if="pageEditPhase === 'confirm'" class="px-4 py-3 space-y-2 text-[#8aacd0]">
+        <div v-if="pageEditPhase === 'confirm'" class="px-4 py-3 space-y-3 text-[#8aacd0]">
           <p class="text-xs leading-relaxed">
             この頁を削除します。ページ pptx とプレビュー画像は削除され、後続ページの 通し番号（フッター）は自動で振り直されます。<b class="text-red-300"
               >元に戻せません</b
             >。
           </p>
-          <p v-if="pendingDelete" class="text-[11px] text-[#6a8aaa]">
-            対象: p.{{ pendingDelete.pageNo }}<span v-if="pendingDelete.title">（{{ pendingDelete.title }}）</span>
-          </p>
+          <!-- 削除対象のサムネイル（取り違え防止）。 -->
+          <div v-if="pendingDelete" class="flex items-center gap-3 p-2 rounded bg-[#060b14] border border-[#1a2a44]">
+            <img
+              :src="thumbUrl(pendingDelete)"
+              :alt="`p.${pendingDelete.pageNo}`"
+              class="w-32 flex-shrink-0 rounded border border-[#22304c] object-cover bg-[#141e2e]"
+            />
+            <div class="min-w-0">
+              <div class="text-[11px] font-bold text-[#9fbdd8]">対象: p.{{ pendingDelete.pageNo }}</div>
+              <div v-if="pendingDelete.title" class="text-[11px] text-[#6a8aaa] mt-0.5 break-words">{{ pendingDelete.title }}</div>
+            </div>
+          </div>
         </div>
 
         <!-- ② SSE ログ -->
@@ -832,6 +852,7 @@ import {
   buildDeck,
   isEditableSection,
   computeMoveTarget,
+  sidebarNavTarget,
   type SlideStructure,
   type SlideManifest,
   type DeckModel,
@@ -1051,11 +1072,13 @@ async function confirmDeletePage(): Promise<void> {
   pendingDelete.value = null;
 }
 
-/** ↑↓ 移動を即実行（確認なし・進捗モーダル）。 */
+/** ↑↓ 移動を即実行（確認なし・進捗モーダル）。移動後もその頁を選択したままにする
+ *  （id ネイティブの currentId＋reloadDeck の preserve で維持。連続移動できるように）。 */
 async function movePage(page: DeckPage, direction: -1 | 1): Promise<void> {
   if (peBusy.value || !deck.value) return;
   const target = computeMoveTarget(deck.value, page.id, direction);
   if (!target) return;
+  currentId.value = page.id; // 移動対象＝選択頁を明示（reloadDeck preserve で維持される）
   await runPageEdit(API_ROUTES.work.pageMove, { pageId: page.id, toSection: target.toSection, toIndex: target.toIndex }, "頁の移動");
 }
 
@@ -1158,6 +1181,36 @@ function selectByIndex(index: number): void {
   if (!deck.value) return;
   const page = deck.value.pages[index];
   if (page) currentId.value = page.id;
+}
+
+/**
+ * サイドバー（サムネイルペイン）にフォーカスがある時、キーボードで選択頁を切り替える。
+ * ↑↓/PgUp/PgDn＝前後の頁、Home/End＝先頭/末尾。既定ではペインが縦スクロール
+ * してしまうため、対象キーは preventDefault で抑止して選択移動に置き換える。
+ */
+function onSidebarKeydown(event: KeyboardEvent): void {
+  if (!deck.value) return;
+  const next = sidebarNavTarget(event.key, currentIndex.value, deck.value.pages.length);
+  if (next === null) return;
+  event.preventDefault();
+  const page = deck.value.pages[next];
+  if (!page) return;
+  currentId.value = page.id;
+  revealPageInSidebar(page.id);
+}
+
+/** 選択頁がサイドバーに見えるよう、折りたたみ中セクションを開いてからスクロールする。 */
+function revealPageInSidebar(pageId: string): void {
+  if (!deck.value) return;
+  const secIndex = deck.value.sections.findIndex((sec) => sec.pages.some((page) => page.id === pageId));
+  if (secIndex >= 0 && collapsedSections.value.has(secIndex)) {
+    collapsedSections.value.delete(secIndex);
+    collapsedSections.value = new Set(collapsedSections.value); // Set の変更を追跡させる
+  }
+  void nextTick(() => {
+    const sel = `[data-page-id="${CSS.escape(pageId)}"]`;
+    sidebarEl.value?.querySelector<HTMLElement>(sel)?.scrollIntoView({ block: "nearest" });
+  });
 }
 
 function toggleSection(idx: number): void {

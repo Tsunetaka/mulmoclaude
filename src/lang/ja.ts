@@ -1107,6 +1107,8 @@ const jaMessages = {
     pageDelete: "削除",
     pageAdd: "頁追加",
     pageFixed: "固定",
+    pageEditSelectFirst: "この頁を選択すると移動・削除できます",
+    pageListAria: "スライド一覧（上下矢印キーで頁を選択）",
   },
   mulmoPoint: {
     title: "MulmoPoint について",

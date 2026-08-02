@@ -1107,6 +1107,8 @@ const koMessages = {
     pageDelete: "삭제",
     pageAdd: "페이지 추가",
     pageFixed: "고정",
+    pageEditSelectFirst: "이 페이지를 선택하면 이동·삭제할 수 있습니다",
+    pageListAria: "슬라이드 목록 (위/아래 화살표 키로 페이지 선택)",
   },
   mulmoPoint: {
     title: "MulmoPoint 정보",

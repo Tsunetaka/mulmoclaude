@@ -6,6 +6,7 @@ import {
   isFixedSection,
   isEditableSection,
   computeMoveTarget,
+  sidebarNavTarget,
   type SlideStructure,
   type SlideManifest,
   type DirEntry,
@@ -265,5 +266,38 @@ describe("computeMoveTarget", () => {
 
   it("returns null for an unknown page id", () => {
     assert.equal(computeMoveTarget(deck, "p-nope", 1), null);
+  });
+});
+
+describe("sidebarNavTarget", () => {
+  it("ArrowDown / PageDown move to the next page", () => {
+    assert.equal(sidebarNavTarget("ArrowDown", 2, 6), 3);
+    assert.equal(sidebarNavTarget("PageDown", 2, 6), 3);
+  });
+
+  it("ArrowUp / PageUp move to the previous page", () => {
+    assert.equal(sidebarNavTarget("ArrowUp", 2, 6), 1);
+    assert.equal(sidebarNavTarget("PageUp", 2, 6), 1);
+  });
+
+  it("Home jumps to the first page, End to the last", () => {
+    assert.equal(sidebarNavTarget("Home", 4, 6), 0);
+    assert.equal(sidebarNavTarget("End", 1, 6), 5);
+  });
+
+  it("clamps at the boundaries (no wrap-around)", () => {
+    assert.equal(sidebarNavTarget("ArrowUp", 0, 6), 0);
+    assert.equal(sidebarNavTarget("ArrowDown", 5, 6), 5);
+  });
+
+  it("treats an unselected index (-1) as the start", () => {
+    assert.equal(sidebarNavTarget("ArrowDown", -1, 6), 1);
+    assert.equal(sidebarNavTarget("ArrowUp", -1, 6), 0);
+  });
+
+  it("returns null for non-nav keys or an empty deck", () => {
+    assert.equal(sidebarNavTarget("Enter", 2, 6), null);
+    assert.equal(sidebarNavTarget("a", 2, 6), null);
+    assert.equal(sidebarNavTarget("ArrowDown", 0, 0), null);
   });
 });

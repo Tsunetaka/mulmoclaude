@@ -1124,6 +1124,8 @@ const esMessages = {
     pageDelete: "Eliminar",
     pageAdd: "Añadir página",
     pageFixed: "Fija",
+    pageEditSelectFirst: "Selecciona esta página para moverla o eliminarla",
+    pageListAria: "Lista de diapositivas (usa las flechas arriba/abajo para seleccionar una página)",
   },
   mulmoPoint: {
     title: "Acerca de MulmoPoint",

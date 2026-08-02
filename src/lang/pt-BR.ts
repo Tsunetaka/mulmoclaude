@@ -1112,6 +1112,8 @@ const ptBRMessages = {
     pageDelete: "Excluir",
     pageAdd: "Adicionar página",
     pageFixed: "Fixa",
+    pageEditSelectFirst: "Selecione esta página para movê-la ou excluí-la",
+    pageListAria: "Lista de slides (use as setas para cima/baixo para selecionar uma página)",
   },
   mulmoPoint: {
     title: "Sobre o MulmoPoint",

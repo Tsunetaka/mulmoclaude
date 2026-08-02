@@ -1137,6 +1137,8 @@ const enMessages = {
     pageDelete: "Delete",
     pageAdd: "Add page",
     pageFixed: "Fixed",
+    pageEditSelectFirst: "Select this page to move or delete it",
+    pageListAria: "Slide list (use the up/down arrow keys to select a page)",
   },
   mulmoPoint: {
     title: "About MulmoPoint",
