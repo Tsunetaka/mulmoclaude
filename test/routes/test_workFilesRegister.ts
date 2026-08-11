@@ -144,6 +144,22 @@ describe("POST /api/work/register — materialises the WD", () => {
   });
 });
 
+describe("POST /api/work/register — mirrors D: source materials", () => {
+  // 素材の取り込みは「登録」と「同期」だけの責務（展開プレビューは触らない）。
+  // 「登録」から素材ミラーが落ちると、初回登録で素材が空のまま編集を始めてしまう。
+  it("pulls D: materials into the freshly registered WD", async () => {
+    mkdirSync(path.join(fakeWinWd, "ScreenShots"), { recursive: true });
+    writeFileSync(path.join(fakeWinWd, "ScreenShots", "shot.png"), "png");
+    writeFileSync(path.join(fakeWinWd, "DocumentLayouts.md"), "layout");
+
+    const { state, res } = mockRes();
+    await registerHandler(postReq({ wdId: WD_ID, windowsWdPath: fakeWinWd }), res);
+    assert.equal(state.status, 200, JSON.stringify(state.body));
+    assert.ok(existsSync(path.join(wdDir(), "ScreenShots", "shot.png")), "screenshot mirrored on register");
+    assert.ok(existsSync(path.join(wdDir(), "DocumentLayouts.md")), "layouts mirrored on register");
+  });
+});
+
 describe("POST /api/work/released-thumbs — never auto-creates an unregistered WD", () => {
   it("returns an empty list and writes nothing when the WD is not registered", async () => {
     assert.equal(existsSync(wdDir()), false, "precondition: WD dir absent");

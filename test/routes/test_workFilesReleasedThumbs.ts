@@ -303,54 +303,40 @@ describe("POST /api/work/released-thumbs — mirrors ReleasedVersion from D: (D:
   });
 });
 
-// ── 4. 素材フォルダ D:→WSL ミラー（D: を正・完全一致）─────────────────
-describe("POST /api/work/released-thumbs — mirrors source materials from D: (D: master)", () => {
-  it("copies materials, deletes WSL extras, and honours the AudioFiles md-only filter", async () => {
-    // D: (fake Windows) source materials. No ReleasedVersion → thumb generation
-    // is a no-op (no LibreOffice), so we exercise only the material mirror.
+// ── 4. 素材フォルダは展開では同期しない（「同期」ボタンの責務）───────────────
+// 展開プレビューが D: の素材を先に取り込んでしまうと、直後に押した「同期」が
+// copied:0 を返し「素材は最新です（変更なし）」と誤報告する（実測ログで確認）。
+// 素材の取り込みは register / sync-materials だけの責務。
+// 素材ミラー自体の検証は test_workFilesSyncMaterials.ts が持つ。
+describe("POST /api/work/released-thumbs — leaves source materials alone", () => {
+  it("does not pull D: materials into WSL on expand", async () => {
     const win = fakeWinWd();
-    mkdirSync(path.join(win, "FrameFiles"), { recursive: true });
-    writeFileSync(path.join(win, "FrameFiles", "frame_0001.jpg"), "jpg");
     mkdirSync(path.join(win, "ScreenShots"), { recursive: true });
     writeFileSync(path.join(win, "ScreenShots", "shot.png"), "png");
-    mkdirSync(path.join(win, "RelatedMaterials"), { recursive: true });
-    writeFileSync(path.join(win, "RelatedMaterials", "ref.pdf"), "pdf");
-    writeFileSync(path.join(win, "ProjectInformation.md"), "info");
     writeFileSync(path.join(win, "DocumentLayouts.md"), "layout");
-    mkdirSync(path.join(win, "AudioFiles"), { recursive: true });
-    writeFileSync(path.join(win, "AudioFiles", "script.md"), "transcript");
-    writeFileSync(path.join(win, "AudioFiles", "session.wav"), "wavdata"); // must NOT be copied
-
-    // WSL side: a stale FrameFiles extra that must be deleted (D: master).
+    // 登録済み WD（data/work/<wd>/ が実体化済み）＝展開プレビューが走る条件。
     const wslWd = path.join(workspaceDir, "data/work", WD_ID);
-    mkdirSync(path.join(wslWd, "FrameFiles"), { recursive: true });
-    writeFileSync(path.join(wslWd, "FrameFiles", "stale.jpg"), "old");
+    mkdirSync(wslWd, { recursive: true });
 
     const { state, res } = mockRes();
     await thumbsHandler(req({ wdId: WD_ID, windowsWdPath: win }), res);
     assert.equal(state.status, 200, JSON.stringify(state.body));
-
-    assert.equal(existsSync(path.join(wslWd, "FrameFiles", "frame_0001.jpg")), true, "frame copied");
-    assert.equal(existsSync(path.join(wslWd, "FrameFiles", "stale.jpg")), false, "WSL extra frame deleted");
-    assert.equal(existsSync(path.join(wslWd, "ScreenShots", "shot.png")), true, "screenshot copied");
-    assert.equal(existsSync(path.join(wslWd, "RelatedMaterials", "ref.pdf")), true, "related material copied");
-    assert.equal(existsSync(path.join(wslWd, "ProjectInformation.md")), true, "project info copied");
-    assert.equal(existsSync(path.join(wslWd, "DocumentLayouts.md")), true, "layouts copied");
-    assert.equal(existsSync(path.join(wslWd, "AudioFiles", "script.md")), true, "transcript md copied");
-    assert.equal(existsSync(path.join(wslWd, "AudioFiles", "session.wav")), false, "wav excluded by filter");
+    assert.equal(existsSync(path.join(wslWd, "ScreenShots", "shot.png")), false, "screenshot NOT copied on expand");
+    assert.equal(existsSync(path.join(wslWd, "DocumentLayouts.md")), false, "layouts NOT copied on expand");
   });
 
-  it("preserves WSL materials when the D: item is absent (safety valve)", async () => {
+  it("does not prune WSL material extras on expand", async () => {
     const win = fakeWinWd();
-    mkdirSync(win, { recursive: true }); // WD root exists but no material dirs
+    mkdirSync(path.join(win, "ScreenShots"), { recursive: true });
+    writeFileSync(path.join(win, "ScreenShots", "shot.png"), "png");
     const wslWd = path.join(workspaceDir, "data/work", WD_ID);
-    mkdirSync(path.join(wslWd, "FrameFiles"), { recursive: true });
-    const keep = path.join(wslWd, "FrameFiles", "keep.jpg");
-    writeFileSync(keep, "keep");
+    mkdirSync(path.join(wslWd, "ScreenShots"), { recursive: true });
+    const stale = path.join(wslWd, "ScreenShots", "stale.png");
+    writeFileSync(stale, "old");
 
     const { state, res } = mockRes();
     await thumbsHandler(req({ wdId: WD_ID, windowsWdPath: win }), res);
-    assert.equal(state.status, 200);
-    assert.equal(existsSync(keep), true, "WSL material preserved when D: lacks the folder");
+    assert.equal(state.status, 200, JSON.stringify(state.body));
+    assert.equal(existsSync(stale), true, "WSL extra kept on expand (mirroring is the sync button's job)");
   });
 });

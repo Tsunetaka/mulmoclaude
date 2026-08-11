@@ -483,8 +483,10 @@ interface ReleasedThumb {
 }
 
 // 展開時に対象 WD の released サムネ（欠落/古いものだけ）をサーバー生成して取り込む。
-// released 版が無い新規 WD でも windowsWdPath があれば呼ぶ（released-thumbs エンドポイントが
-// D: 側の素材フォルダ構成を WSL へミラーするため）。released 版が無ければサムネは空で返る。
+// released 版が無い新規 WD でも windowsWdPath があれば呼ぶ（D: にしか無いリリース済版を
+// WSL へミラーするため）。released 版が無ければサムネは空で返る。
+// 素材フォルダ（スクショ・資料）はこのエンドポイントでは同期されない ── 展開が先に取り込むと
+// 直後の「同期」が「変更なし」と誤報告するため、素材は「登録」と「同期」だけが取り込む。
 async function loadReleasedThumbs(wdInfo: WdInfo): Promise<void> {
   if (!wdInfo.windowsWdPath || thumbsLoading.value.has(wdInfo.id)) return;
   thumbsLoading.value = new Set(thumbsLoading.value).add(wdInfo.id);

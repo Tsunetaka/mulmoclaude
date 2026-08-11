@@ -1016,15 +1016,23 @@ async function syncSourceMaterialsFromWindows(wdId: string, windowsWdPath: strin
   return total;
 }
 
-// 登録済み WD の D:→WSL ミラー（ReleasedVersion＋素材）＋リリース済サムネ生成をまとめて行う。
-// 「登録」ボタン（register）と、登録済み WD の展開時プレビュー（released-thumbs）が共有する本体。
-async function mirrorWindowsAndBuildThumbs(wdId: string, windowsWdPath: string): Promise<ReleasedThumb[]> {
+// 登録済み WD の D:→WSL ミラー（ReleasedVersion のみ）＋リリース済サムネ生成。
+// WD 展開時のプレビュー（released-thumbs）が使う本体。
+// 素材（SOURCE_MATERIALS）には触れない ── 素材の取り込みは「登録」(register) と
+// 「同期」(sync-materials) だけの責務。展開プレビューが先に取り込むと、直後に押した
+// 「同期」が copied:0 を返し「素材は最新です（変更なし）」と誤報告する。
+async function mirrorReleasedAndBuildThumbs(wdId: string, windowsWdPath: string): Promise<ReleasedThumb[]> {
   // D: を正として WSL の ReleasedVersion を先に同期（孤児サムネ/版ズレ解消）。
   await syncReleasedFromWindows(wdId, windowsWdPath);
-  // 併せて素材（FrameFiles/ScreenShots/RelatedMaterials/AudioFiles md/*.md 等）を D: を正にミラー。
-  await syncSourceMaterialsFromWindows(wdId, windowsWdPath);
   const releasedDirWsl = path.join(windowsToWsl(windowsWdPath), "ReleasedVersion");
   return generateReleasedThumbs(wdId, releasedDirWsl);
+}
+
+// 「登録」用：素材（FrameFiles/ScreenShots/RelatedMaterials/AudioFiles md/*.md 等）も
+// 併せて D: を正にミラーしてから ReleasedVersion 同期＋サムネ生成を行う。
+async function mirrorWindowsAndBuildThumbs(wdId: string, windowsWdPath: string): Promise<ReleasedThumb[]> {
+  await syncSourceMaterialsFromWindows(wdId, windowsWdPath);
+  return mirrorReleasedAndBuildThumbs(wdId, windowsWdPath);
 }
 
 // data/work/<wdId>/ が実体化済み（＝登録済み）か。
@@ -1034,6 +1042,7 @@ async function isWdRegistered(wdId: string): Promise<boolean> {
 
 // POST /api/work/released-thumbs — リリース選択前プレビュー（N5）。
 // 未登録（WSL に data/work/<wd>/ が無い）WD では一切ミラー・生成しない（勝手に WD を実体化しない）。
+// 素材フォルダには触れない（D: の素材の取り込みは「登録」と「同期」だけが行う）。
 router.post(API_ROUTES.work.releasedThumbs, async (req, res) => {
   const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
 
@@ -1047,7 +1056,7 @@ router.post(API_ROUTES.work.releasedThumbs, async (req, res) => {
       res.json({ thumbs: [] }); // 未登録 WD は WSL に何も書かない
       return;
     }
-    const thumbs = await mirrorWindowsAndBuildThumbs(wdId, windowsWdPath);
+    const thumbs = await mirrorReleasedAndBuildThumbs(wdId, windowsWdPath);
     res.json({ thumbs });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
