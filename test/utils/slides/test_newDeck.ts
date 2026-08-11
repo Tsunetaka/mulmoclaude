@@ -13,9 +13,9 @@ describe("SLIDE_ROLE_ID", () => {
 // ── NEW_DECK_THEMES ───────────────────────────────────────────────────────────
 
 describe("NEW_DECK_THEMES", () => {
-  it("has exactly the 10 theme ids new_deck.py accepts, in catalog order", () => {
+  it("has exactly the 12 theme ids new_deck.py accepts, in catalog order", () => {
     const ids = NEW_DECK_THEMES.map((theme) => theme.id);
-    assert.deepEqual(ids, ["cool", "warm", "vivid", "dark", "plain", "earth", "neutral", "soft", "forest", "premium"]);
+    assert.deepEqual(ids, ["cool", "warm", "vivid", "dark", "plain", "earth", "neutral", "soft", "forest", "premium", "tropical", "marine"]);
   });
 
   it("ids are unique", () => {

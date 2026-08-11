@@ -104,7 +104,8 @@ describe("validatePageMoveBody (pure)", () => {
 describe("validatePageAddBody (pure)", () => {
   it("accepts a well-formed add body (template optional)", async () => {
     const { validatePageAddBody } = await import("../../server/api/routes/workFiles.js");
-    assert.deepEqual(validatePageAddBody({ section: "本文", toIndex: 3 }), { section: "本文", toIndex: 3, template: undefined });
+    // template 省略時はキー自体を返さない（exactOptionalPropertyTypes: `template: undefined` は入れない）。
+    assert.deepEqual(validatePageAddBody({ section: "本文", toIndex: 3 }), { section: "本文", toIndex: 3 });
     assert.deepEqual(validatePageAddBody({ section: "概要", toIndex: 0, template: "geoplan-cover" }), {
       section: "概要",
       toIndex: 0,
