@@ -5,7 +5,8 @@ import { spawn } from "child_process";
 import { workspacePath } from "../../workspace/workspace.js";
 import { log } from "../../system/logger/index.js";
 import { API_ROUTES } from "../../../src/config/apiRoutes.js";
-import { ONE_HOUR_MS } from "../../utils/time.js";
+import { ONE_HOUR_MS, ONE_MINUTE_MS, ONE_SECOND_MS } from "../../utils/time.js";
+import { spawnSystemWorker, type SpawnSystemWorkerResult } from "./agent.js";
 import { versionSegments } from "../../../src/utils/slides/slideDeck.js";
 import { hasDescendantVersion } from "../../../src/utils/slides/versioning.js";
 
@@ -2622,6 +2623,273 @@ router.post(API_ROUTES.work.sectionRename, async (req, res) => {
   if (!ctx) return;
   const code = await runPageOps(["section-rename", "--version-dir", ctx.versionDir, "--name", body.name, "--to-name", body.toName], ctx.send);
   await finishStructEdit(ctx, code, "セクションのリネーム");
+  res.end();
+});
+
+// ── 教材索引 CSV の生成（カテゴリ見出しの [索引作成] ボタン）─────────────────
+//
+// 8 列のうち 6 列は機械的に決まり、`Description` と `Tags` の 2 列だけは資料の
+// 内容を読んで書く必要がある。そのため python ツール（機械列）＋ hidden agent
+// worker（Claude が書く 2 列）の 2 レイヤ構成になる。
+//
+//   Phase 1  build_index.py scan   … 機械列＋資料抜粋の下書きを WSL に生成
+//   Phase 2  hidden agent worker   … Description / Tags を rows/*.json に書く
+//   Phase 3  build_index.py apply  … マージして D: へ反映
+//
+// **Phase 3 は worker の完了フックの中で走る**（SSE ハンドラの中ではない）。
+// モーダルを閉じても・ブラウザをリロードしても D: への反映は完走し、SSE が
+// 切れている場合は送信を諦めるだけ。サンドボックスの Claude は D: に書けないので、
+// Claude はステージングにだけ書き、D: への反映はサーバーが行う（既存のリリース
+// 逆同期と同じ役割分担）。
+
+const INDEX_STAGING_ROOT = "data/work/.index";
+const INDEX_SCRIPT = "data/work/tools/build_index.py";
+const INDEX_SKILL = "build-training-index";
+const INDEX_WORKER_ROLE = "general";
+const INDEX_PROGRESS_POLL_MS = 2 * ONE_SECOND_MS;
+const INDEX_OBSERVE_TIMEOUT_MS = 10 * ONE_MINUTE_MS;
+// build_index.py の「書き出す行が 0 件（D: 未変更）」。既存 CSV をヘッダだけの
+// CSV で潰さないための安全弁が働いた印。
+const INDEX_EXIT_EMPTY = 3;
+
+/** `category` がスキャン結果のカテゴリ名の集合に含まれるか（純粋判定）。
+ *  **これがパス操作の許可リスト**であり、`..` やパス区切りの混入を構造的に
+ *  排除する（`isValidWorkWdId()` と同じ思想）。以降ステージングのパスに
+ *  カテゴリ名をそのまま使えるのは、この検証を通っているからである。 */
+export function isAllowedIndexCategory(category: unknown, categories: { name: string }[]): category is string {
+  return typeof category === "string" && category.length > 0 && categories.some((cat) => cat.name === category);
+}
+
+/** scan の stdout から最終行 `PENDING: <n>` を読む（純粋）。
+ *  欠落・不正なら null＝「pending 不明」とし、呼び出し側は Phase 2 を実行する
+ *  （記入を飛ばして空欄の CSV を書くより、余分に 1 回走らせるほうが安全）。 */
+export function parsePendingCount(lines: string[]): number | null {
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const matched = /^PENDING:\s*(\d+)$/.exec(lines[index].trim());
+    if (matched) return parseInt(matched[1], 10);
+  }
+  return null;
+}
+
+/** `rows/` のファイル数から進捗行を組み立てる（純粋）。前回送った件数と同じなら
+ *  null＝送らない（2 秒ごとに同じ行を並べないため）。 */
+export function buildIndexProgressLine(written: number, total: number, lastSent: number | null): string | null {
+  if (written === lastSent) return null;
+  // pending 件数が読めなかったとき（`PENDING:` 行が無い＝total 0）は分母を出さない。
+  if (total <= 0) return `Claude が記入中... (${written} 件)`;
+  return `Claude が記入中... (${written}/${total})`;
+}
+
+/** build_index.py の CLI 引数を組み立てる（純粋）。 */
+export function buildIndexScriptArgs(subcommand: "scan" | "apply", scriptPath: string, ctx: BuildIndexContext): string[] {
+  return [scriptPath, subcommand, "--work-root", ctx.workRootWin, "--category", ctx.category, "--staging", ctx.staging];
+}
+
+export interface BuildIndexContext {
+  category: string;
+  workRootWin: string;
+  /** ステージングの絶対パス（`<workspace>/data/work/.index/<カテゴリ>`）。 */
+  staging: string;
+  /** worker に渡すワークスペース相対パス。 */
+  stagingRel: string;
+}
+
+/** 実行中のカテゴリ。Phase 1 の直前に登録し、Phase 3 の完了時（成功・失敗どちらも）
+ *  に外す。プロセス内メモリで良い ── worker はプロセスと共に死ぬので、永続化すると
+ *  ボタンが固まるだけ（`collectionAgentActions.ts` の `running` Map と同じ流儀）。 */
+const buildingIndex = new Set<string>();
+
+/** そのカテゴリの索引作成が実行中か（ルートの 409 判定）。 */
+export function isBuildingIndex(category: string): boolean {
+  return buildingIndex.has(category);
+}
+
+/** テスト専用：実行中ガードを空にする。 */
+export function resetBuildIndexForTesting(): void {
+  buildingIndex.clear();
+}
+
+/** 注入可能な seam（既定は実モジュール。テストは実エージェント・実 python を動かさない）。 */
+export interface BuildIndexDeps {
+  runScript: (subcommand: "scan" | "apply", ctx: BuildIndexContext, send: (line: string) => void) => Promise<{ code: number; lines: string[] }>;
+  spawnWorker: (args: {
+    message: string;
+    roleId: string;
+    hidden: boolean;
+    onComplete?: ((outcome: { didError: boolean }) => void | Promise<void>) | undefined;
+  }) => Promise<SpawnSystemWorkerResult>;
+  /** 進捗表示用に `rows/*.json` の件数を数える。 */
+  countWrittenRows: (ctx: BuildIndexContext) => Promise<number>;
+  /** 進捗ポーリングの待ち。テストは即時解決に差し替えて 2 秒待たない。 */
+  wait: (delayMs: number) => Promise<void>;
+}
+
+// build_index.py を spawn して stdout/stderr を SSE に流し、exit code と全行を返す。
+// `PENDING: <n>` を読むために生の行も溜める（SSE 側は pipeToSse の整形済み）。
+async function spawnBuildIndex(subcommand: "scan" | "apply", ctx: BuildIndexContext, send: (line: string) => void): Promise<{ code: number; lines: string[] }> {
+  const args = buildIndexScriptArgs(subcommand, path.join(workspacePath, INDEX_SCRIPT), ctx);
+  const lines: string[] = [];
+  return new Promise((resolve) => {
+    const proc = spawn("python3", args, { env: { ...process.env } });
+    pipeToSse(proc, (line) => {
+      lines.push(line);
+      send(line);
+    });
+    proc.on("close", (code) => resolve({ code: code ?? 1, lines }));
+    proc.on("error", (err) => {
+      send(`⚠ ${err.message}`);
+      resolve({ code: 1, lines });
+    });
+  });
+}
+
+async function countWrittenIndexRows(ctx: BuildIndexContext): Promise<number> {
+  return (await listFiles(path.join(ctx.staging, "rows"), /\.json$/i)).length;
+}
+
+const defaultBuildIndexDeps: BuildIndexDeps = {
+  runScript: spawnBuildIndex,
+  spawnWorker: spawnSystemWorker,
+  countWrittenRows: countWrittenIndexRows,
+  wait: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+};
+
+interface BuildIndexRun {
+  ctx: BuildIndexContext;
+  send: (line: string) => void;
+  deps: BuildIndexDeps;
+  /** Phase 3 が終わった（＝この実行は完結した）。SSE 観測の終了条件。 */
+  done: boolean;
+  /** 進捗行として最後に送った件数（差分が無いときは送らない）。 */
+  lastProgress: number | null;
+  /** 進捗の分母＝Claude が書く件数（pending）。`rows/` はこの数までしか増えない。 */
+  total: number;
+}
+
+// この実行を終わらせる（実行中ガードを外し、SSE 観測ループの終了条件を立てる）。
+// 成功・失敗・例外のどれでも必ず通す ── 通し忘れるとボタンが 409 で固まる。
+function finishIndexRun(run: BuildIndexRun): void {
+  run.done = true;
+  buildingIndex.delete(run.ctx.category);
+}
+
+// Phase 3。worker の完了フックの中（または pending 0 件のとき直接）から呼ばれる。
+async function applyIndex(run: BuildIndexRun): Promise<void> {
+  try {
+    const applied = await run.deps.runScript("apply", run.ctx, run.send);
+    if (applied.code === INDEX_EXIT_EMPTY) {
+      run.send("ERROR: 書き出す行が 0 件のため D: を変更しませんでした");
+    } else if (applied.code !== 0) {
+      run.send(`ERROR: 索引の反映に失敗しました（exit ${String(applied.code)}）`);
+    } else {
+      run.send(`DONE: ${run.ctx.category} Index.csv`);
+    }
+  } catch (err) {
+    log.error("workFiles.buildIndex", "apply failed", { category: run.ctx.category, err });
+    run.send(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    finishIndexRun(run);
+  }
+}
+
+// SSE の観測だけを行う（worker は kill しない）。10 分で諦めて SSE を閉じるが、
+// 完了フックはそのまま生きているので D: への反映は後から完走する。
+async function observeIndexProgress(run: BuildIndexRun): Promise<void> {
+  const deadline = Date.now() + INDEX_OBSERVE_TIMEOUT_MS;
+  while (!run.done) {
+    if (Date.now() >= deadline) {
+      run.send("⚠ Claude の処理が長引いています。バックグラウンドで続行中です（完了すると D: に反映されます）");
+      return;
+    }
+    await run.deps.wait(INDEX_PROGRESS_POLL_MS);
+    if (run.done) return;
+    const written = await run.deps.countWrittenRows(run.ctx);
+    const line = buildIndexProgressLine(written, run.total, run.lastProgress);
+    if (line) {
+      run.send(line);
+      run.lastProgress = written;
+    }
+  }
+}
+
+// Phase 2。hidden worker を起動し、完了フックに Phase 3 を仕込む。起動できなければ
+// ガードを外して false（呼び出し側は ERROR を出して終わる）。
+async function launchIndexWorker(run: BuildIndexRun): Promise<boolean> {
+  const launch = await run.deps.spawnWorker({
+    message: `/${INDEX_SKILL} "${run.ctx.stagingRel}"`,
+    roleId: INDEX_WORKER_ROLE,
+    hidden: true,
+    onComplete: () => applyIndex(run),
+  });
+  if (launch.ok) {
+    log.info("workFiles.buildIndex", "worker dispatched", { category: run.ctx.category, chatId: launch.chatId, pending: run.total });
+    return true;
+  }
+  run.send(`ERROR: ${launch.error}`);
+  finishIndexRun(run);
+  return false;
+}
+
+/** 3 フェーズの本体。実行中ガードの登録も解除もこの関数が持つ ── 登録は Phase 1 の
+ *  spawn より前（最初の await より前）に同期的に行うので、ルートの 409 判定から
+ *  ここまでの間に別の POST が割り込む余地はない。 */
+export async function runBuildIndex(ctx: BuildIndexContext, send: (line: string) => void, deps: BuildIndexDeps = defaultBuildIndexDeps): Promise<void> {
+  const run: BuildIndexRun = { ctx, send, deps, done: false, lastProgress: null, total: 0 };
+  buildingIndex.add(ctx.category);
+  const scan = await deps.runScript("scan", ctx, send);
+  if (scan.code !== 0) {
+    send(`ERROR: 索引の下書き生成に失敗しました（exit ${String(scan.code)}）`);
+    finishIndexRun(run);
+    return;
+  }
+  const pending = parsePendingCount(scan.lines);
+  if (pending === 0) {
+    // 全行が既存 CSV から引き継げた ── Claude を呼ばずに Phase 3 へ直行する。
+    await applyIndex(run);
+    return;
+  }
+  run.total = pending ?? 0;
+  if (pending === null) send("⚠ pending 件数を読めませんでした（記入を実行します）");
+  if (!(await launchIndexWorker(run))) return;
+  await observeIndexProgress(run);
+}
+
+// POST /api/work/build-index — カテゴリの教材索引 CSV を生成する（SSE）
+router.post(API_ROUTES.work.buildIndex, async (req, res) => {
+  const { category } = req.body as { category?: unknown };
+  const workRootWin = await getWorkRootWin();
+  const categories = await scanRoot(workRootWin);
+  if (!isAllowedIndexCategory(category, categories)) {
+    res.status(400).json({ error: "category が不正です（スキャン結果のカテゴリ名を指定してください）" });
+    return;
+  }
+  if (isBuildingIndex(category)) {
+    res.status(409).json({ error: `「${category}」の索引作成は実行中です` });
+    return;
+  }
+  const stagingRel = `${INDEX_STAGING_ROOT}/${category}`;
+  const ctx: BuildIndexContext = { category, workRootWin, staging: path.join(workspacePath, INDEX_STAGING_ROOT, category), stagingRel };
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+  // SSE が切れている（モーダルを閉じた・リロードした）場合は黙って捨てる。
+  // Phase 2/3 は SSE と無関係に完走する。
+  const send = (line: string): void => {
+    if (res.writableEnded) return;
+    res.write(`data: ${line}\n\n`);
+  };
+
+  // 登録は runBuildIndex が Phase 1 の spawn より前に同期的に行う（この 409 判定と
+  // 登録の間に await が無いので、二重 POST は必ずここで弾かれる）。
+  try {
+    await runBuildIndex(ctx, send);
+  } catch (err) {
+    log.error("workFiles.buildIndex", "build index failed", { category, err });
+    send(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    buildingIndex.delete(category);
+  }
   res.end();
 });
 

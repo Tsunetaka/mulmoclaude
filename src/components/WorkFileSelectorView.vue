@@ -15,14 +15,29 @@
 
     <!-- カテゴリ一覧 -->
     <div v-for="cat in categories" :key="cat.name" class="mb-4">
-      <button
-        class="w-full flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg font-semibold text-left hover:bg-gray-50"
-        @click="toggleCategory(cat.name)"
-      >
-        <span class="material-icons text-sm">{{ expandedCategories.has(cat.name) ? "expand_more" : "chevron_right" }}</span>
-        <span>{{ cat.name }}</span>
-        <span class="ml-auto text-xs text-gray-400">{{ cat.wds.length }} 件</span>
-      </button>
+      <!-- カテゴリ見出し：行全体が button だと中にボタンを置けない（ネストした button は不正）ので、
+           外側は div にし、トグルは chevron ＋ カテゴリ名だけを持つ button に縮めている。 -->
+      <div class="w-full flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg font-semibold">
+        <button class="flex-1 flex items-center gap-2 text-left rounded hover:opacity-60 transition-opacity" @click="toggleCategory(cat.name)">
+          <span class="material-icons text-sm">{{ expandedCategories.has(cat.name) ? "expand_more" : "chevron_right" }}</span>
+          <span>{{ cat.name }}</span>
+        </button>
+        <!-- 索引作成：このカテゴリ直下に `<カテゴリ> Index.csv`（AppSheet の教材ポータルが読む索引）を生成する。
+             released 版を 1 つも持たないカテゴリでは作れないので無効化する。 -->
+        <button
+          class="px-3 py-1 rounded text-sm font-medium border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          :disabled="!canBuildIndex(cat)"
+          :title="
+            canBuildIndex(cat)
+              ? `${cat.name} Index.csv を生成します（Description と Tags は Claude が記入）`
+              : 'ReleasedVersion に pptx が無いため索引を作成できません'
+          "
+          @click="openBuildIndexModal(cat)"
+        >
+          索引作成
+        </button>
+        <span class="text-xs text-gray-400 font-normal">{{ cat.wds.length }} 件</span>
+      </div>
 
       <div v-if="expandedCategories.has(cat.name)" class="mt-1 ml-4 space-y-2">
         <!-- WD 一覧 -->
@@ -360,6 +375,45 @@
           >
             {{ deleteBusy ? "削除中..." : "削除する" }}
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 索引作成モーダル：build_index.py scan（機械列）→ 裏で Claude が Description/Tags →
+         apply（D: へ反映）。SSE はあくまで観測者で、閉じても Phase 2/3 は完走する。 -->
+    <div v-if="buildIndexModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 flex flex-col">
+        <div class="flex items-center gap-2 px-4 py-3 border-b">
+          <span class="font-semibold">索引作成 — {{ buildIndexModal.category }}</span>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" @click="closeBuildIndexModal">✕</button>
+        </div>
+
+        <!-- ① 確認 -->
+        <div v-if="modalPhase === 'choose'" class="px-4 py-3 space-y-2 text-sm text-gray-700">
+          <p>
+            出力先: <span class="font-mono">{{ buildIndexModal.category }} Index.csv</span>
+          </p>
+          <p>対象 {{ buildIndexModal.wdCount }} WD ／ Claude が Description と Tags を記入します。</p>
+          <p class="text-xs text-gray-500 leading-relaxed">
+            Claude の記入は裏で実行されます（チャットには遷移しません）。<b>このモーダルを閉じても処理は継続</b>し、完了すると D: に CSV が出来ます。<br />
+            既存 CSV の Description / Tags は、Training_ID とバージョンが変わっていなければそのまま引き継ぎます（変わった行だけ Claude が書き直します）。
+          </p>
+        </div>
+
+        <!-- ② SSE ログ。ERROR が出たら「処理中...」を止める（DONE が来ないまま終わるため） -->
+        <div v-else class="flex-1 overflow-y-auto px-4 py-3 max-h-80 font-mono text-xs bg-gray-900">
+          <div v-for="(line, i) in modalLog" :key="i" class="whitespace-pre-wrap" :class="line.startsWith('ERROR:') ? 'text-red-300' : 'text-green-300'">
+            {{ line }}
+          </div>
+          <div v-if="modalPhase === 'running' && !buildIndexFailed" class="text-yellow-300 animate-pulse">処理中...</div>
+        </div>
+
+        <div class="px-4 py-3 border-t flex justify-end gap-2">
+          <button v-if="modalPhase === 'choose'" class="px-4 py-2 bg-gray-200 rounded text-sm" @click="closeBuildIndexModal">キャンセル</button>
+          <button v-if="modalPhase === 'choose'" class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="executeBuildIndex">
+            索引作成
+          </button>
+          <button v-else class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="handleBuildIndexDone">閉じる</button>
         </div>
       </div>
     </div>
@@ -947,6 +1001,46 @@ async function executeDeleteVersion(): Promise<void> {
   } finally {
     deleteBusy.value = false;
   }
+}
+
+// ── 索引作成モーダル（カテゴリ見出しの [索引作成]）───────────────────────────
+// build_index.py scan（機械列＋資料抜粋の下書き）→ 裏で Claude が Description /
+// Tags を記入 → apply（D: へ反映）の 3 フェーズを SSE で観測する。SSE はあくまで
+// 観測者で、モーダルを閉じても Phase 2/3 はサーバー側で完走する。
+const buildIndexModal = ref<{ category: string; wdCount: number } | null>(null);
+
+// SSE の途中で ERROR が出た（DONE が来ないまま終わる）ことの検出。共有の
+// drainModalSse は DONE しか見ないので、そのままだと「処理中...」が出続ける。
+const buildIndexFailed = computed(() => modalLog.value.some((line) => line.startsWith("ERROR:")));
+
+// released 版を 1 つも持たないカテゴリは索引を作れない（会議録画系 WD だけの
+// カテゴリなど）。scan の戻り値だけで判定できるので追加リクエストは要らない。
+function canBuildIndex(cat: CategoryInfo): boolean {
+  return cat.wds.some((wdInfo) => wdInfo.versions.some((ver) => ver.kind === "released"));
+}
+
+function openBuildIndexModal(cat: CategoryInfo): void {
+  if (!canBuildIndex(cat)) return;
+  buildIndexModal.value = { category: cat.name, wdCount: cat.wds.length };
+  modalPhase.value = "choose";
+  modalLog.value = [];
+}
+
+// 実行中でも閉じられる（他のモーダルと違い、閉じても処理が継続するのが仕様）。
+function closeBuildIndexModal(): void {
+  buildIndexModal.value = null;
+}
+
+async function executeBuildIndex(): Promise<void> {
+  const modal = buildIndexModal.value;
+  if (!modal) return;
+  await runModalSse(API_ROUTES.work.buildIndex, { category: modal.category });
+}
+
+// 閉じたあとに再スキャン（Version 表示等の整合のため）。
+function handleBuildIndexDone(): void {
+  buildIndexModal.value = null;
+  scanFiles().catch(() => {});
 }
 
 onMounted(() => {

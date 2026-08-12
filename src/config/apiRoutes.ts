@@ -597,6 +597,12 @@ const HOST_API_ROUTES = {
     /** POST — セクションをリネームする「セクション編集」（SSE）。`page_ops.py section-rename`。
      *  表紙・Thank You は不可。予約名・同名は不可。body `{ name, toName }`。 */
     sectionRename: "/api/work/:wd/:version/section-rename",
+    /** POST — カテゴリ（サブフォルダ）の教材索引 CSV を生成する（SSE）。
+     *  ① build_index.py scan（機械列＋資料抜粋の下書きを WSL に生成）
+     *  ② pending があれば hidden agent worker を起動し Description/Tags を書かせる
+     *  ③ worker 完了フックで build_index.py apply（D: へ反映）
+     *  SSE はあくまで観測者で、切断しても ②③ は完走する。body `{ category }`。 */
+    buildIndex: "/api/work/build-index",
   },
 
   wiki: {

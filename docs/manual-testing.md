@@ -379,6 +379,61 @@ The launcher's own log is `%LOCALAPPDATA%\MulmoClaude\logs\launcher.log`.
 
 ---
 
+## 13. 教材索引 CSV の生成（作業ファイル選択画面の「索引作成」）
+
+**Why it can't be E2E'd:** the flow needs (a) a real `D:` mount with the
+Materials tree on it, (b) a live agent session — a hidden worker writes the
+`Description` / `Tags` columns — and (c) a write to `D:` outside the
+workspace. The pure logic IS covered:
+`test/routes/test_workFilesBuildIndex.ts` (allowlist, in-flight guard,
+`PENDING: n` parsing, progress lines, all three phases with both seams
+injected) and `python3 data/work/tools/build_index.py --selftest` (version
+selection, filename parsing, `SW_Doc` relative paths, `Study_Materials`
+selection, carry-over decisions, CSV byte layout, the 0-row `exit 3` safety
+valve). What remains is the wiring to the real `D:` and to a real Claude.
+
+### What to check
+
+1. **First run.** Expand 作業ファイル選択, press 索引作成 on
+   **Smallworld with AI**. The log shows `対象 9 件` → `Claude が記入中... (n/9)`
+   → `DONE: Smallworld with AI Index.csv`. Then, on the host:
+
+   ```bash
+   od -c "/mnt/d/SW_Doc/Materials/Smallworld with AI/Smallworld with AI Index.csv" | head -3
+   od -c "/mnt/d/SW_Doc/Materials/Smallworld with AI/Smallworld with AI Index.csv" | tail -2
+   ```
+
+   Confirm **no BOM** (the file starts at `T r a i n i n g`), **CRLF** line
+   endings, and **no trailing newline**. Excel / AppSheet depend on that
+   layout — a BOM or an LF-only file changes how they read the sheet.
+2. **Idempotence.** Press it again on the same category. The log must say
+   `引き継ぎ 9 件 / Claude が記入 0 件`, and a `diff` against the previous
+   copy of the CSV must be empty — the carry-over path must not let Claude
+   rewrite a row whose `Training_ID` and `Version` are unchanged.
+3. **Incremental.** Release one new version of a single WD, then press it.
+   Only that one row is pending (`Claude が記入 1 件`); every other row's
+   `Description` / `Tags` is byte-identical to before.
+4. **Disabled categories.** **NAM** (and the other recording-only
+   categories) show 索引作成 greyed out with the tooltip
+   `ReleasedVersion に pptx が無いため索引を作成できません`. Nothing is
+   written to `D:` for them.
+5. **Closing the modal does not cancel.** Start it, close the modal while
+   `Claude が記入中...` is showing, wait. The CSV still appears on `D:` —
+   Phase 3 lives in the worker's completion hook, not in the SSE handler.
+   (Reloading the browser mid-run must not change that either.)
+6. **Double press.** While a run is in flight, press 索引作成 on the same
+   category again. The second press must report
+   `「<カテゴリ>」の索引作成は実行中です` (HTTP 409) and must NOT launch a
+   second worker.
+
+Staging for a run is `data/work/.index/<カテゴリ>/` — `draft.csv`,
+`pending.json`, `brief/*.md`, `rows/*.json`, `out.csv`, `result.json`. Read
+`result.json` to see which rows came out blank and why (its `warnings` array
+carries every `⚠` line). Blank rows are picked up again on the next press,
+so a partial Claude failure converges rather than needing a repair.
+
+---
+
 ## Updating this document
 
 When you land a PR:
