@@ -18,6 +18,18 @@ const PPTX_VERSION_PATTERN = /_v(\d+)\.pptx$/i;
 const WD_NAME_PATTERN = /^([A-Z]+-\d+)\s+(\S.*)$/;
 const WD_ROOT_PATTERN = /^[A-Z]+-\d{5}\s+/;
 
+// スタンプ選択機能（花モチーフの修了証／未受講ペア）。
+// 元は data/work/stamps/compressed/<花名>_completed.png / _incompleted.png のペア。
+// 選択したペアを WD の Windows 側 `Stamps` フォルダへ「全消し→コピー」する。
+const STAMPS_DIR_REL = "data/work/stamps";
+const STAMPS_COMPRESSED_SUBDIR = "compressed";
+const STAMPS_INDEX_FILENAME = "index.json";
+const STAMP_COMPLETED_SUFFIX = "_completed.png";
+const STAMP_INCOMPLETED_SUFFIX = "_incompleted.png";
+const STAMPS_FOLDER_NAME = "Stamps";
+const STAMP_COMPLETED_PATTERN = /_completed\.png$/i;
+const STAMP_BASE_PATTERN = /^\w+$/;
+
 // WD-ID（例 GIT-00003）／バージョン名（例 v001・枝番 v001-002）の厳格パターン。
 // DELETE のパスパラメータを正規表現で固定し、`.` / `..` / パス区切りを構造的に排除する。
 const WD_ID_PATTERN = /^[A-Z]+-\d+$/;
@@ -1113,6 +1125,201 @@ router.post(API_ROUTES.work.syncMaterials, async (req, res) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error("workFiles.syncMaterials", "source-material sync failed", { err });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ── スタンプ選択（Windows 側 Stamps フォルダ）────────────────────────────────
+// 「スタンプ選択」ボタン用。data/work/stamps/compressed の花モチーフのペア（修了証
+// _completed.png / 未受講 _incompleted.png）から 1 件を選び、WD の Windows 側
+// `Stamps` フォルダへ「既存を全消し→ペアをコピー」する。使用状況は同一カテゴリの
+// 兄弟 WD の Stamps を走査して算出する（ファイル名一致）。
+
+interface StampInfo {
+  id: string; // 花名ベース（例 "bellflower"）＝選択キー
+  flower: string; // 表示ラベル（例 "キキョウ"）
+  label: string; // index.json のフルラベル or フォールバック
+  thumbPath: string; // workspace 相対（/api/files/raw?path= で表示）
+  completedFile: string;
+  incompletedFile: string;
+  usedByCurrent: boolean;
+  usedBySiblings: { id: string; title: string }[];
+}
+
+interface StampIndexEntry {
+  id?: string;
+  label?: string;
+}
+
+// スタンプ png ファイル名の安全判定（パス区切り・`..`・先頭ドットを排し .png のみ許可）。
+function isSafeStampFilename(name: string): boolean {
+  if (!name || name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  if (name.startsWith(".")) return false;
+  return /\.png$/i.test(name);
+}
+
+// 選択キー（花名ベース）の安全判定。英数字とアンダースコアのみ。
+function isSafeStampBase(base: string): boolean {
+  return STAMP_BASE_PATTERN.test(base);
+}
+
+// フルラベルから短い花名を取り出す（例「キキョウ 修了証スタンプ（フルカラー）」→「キキョウ」）。
+function flowerFromLabel(label: string): string {
+  const idx = label.indexOf("修了証スタンプ");
+  return (idx >= 0 ? label.slice(0, idx) : label).trim();
+}
+
+// compressed 内でペアの揃った花名ベースを列挙する（_incompleted 欠けは warn して除外）。
+async function listStampBases(compressedDir: string): Promise<string[]> {
+  const completed = await listFiles(compressedDir, STAMP_COMPLETED_PATTERN);
+  const bases: string[] = [];
+  for (const name of completed) {
+    const base = name.slice(0, -STAMP_COMPLETED_SUFFIX.length);
+    if (await pathExists(path.join(compressedDir, `${base}${STAMP_INCOMPLETED_SUFFIX}`))) bases.push(base);
+    else log.warn("workFiles.stamps", "stamp missing incompleted pair", { base });
+  }
+  return bases.sort((left, right) => left.localeCompare(right));
+}
+
+// index.json から `<id>_completed` → label のマップを作る（無ければ空マップ）。
+async function readStampLabels(stampsDir: string): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  try {
+    const raw = await fsp.readFile(path.join(stampsDir, STAMPS_INDEX_FILENAME), "utf-8");
+    const parsed = JSON.parse(raw) as { assets?: StampIndexEntry[] };
+    for (const asset of parsed.assets ?? []) {
+      if (asset.id && asset.label) map.set(asset.id, asset.label);
+    }
+  } catch {
+    // index が無い / 壊れている → フォールバックラベルを使う
+  }
+  return map;
+}
+
+// WD の Windows 側 Stamps に置かれた `*_completed.png` の花名ベース集合を返す。
+async function stampsInWdFolder(winWdPath: string): Promise<Set<string>> {
+  const wslStamps = path.join(windowsToWsl(winWdPath), STAMPS_FOLDER_NAME);
+  const completed = await listFiles(wslStamps, STAMP_COMPLETED_PATTERN);
+  return new Set(completed.map((name) => name.slice(0, -STAMP_COMPLETED_SUFFIX.length)));
+}
+
+// wdId が属するカテゴリを特定し、その WD 自身と同列の兄弟 WD を返す。
+async function resolveStampSiblings(wdId: string): Promise<{ current: WdInfo | null; siblings: WdInfo[] }> {
+  const categories = await scanRoot(await getWorkRootWin());
+  for (const cat of categories) {
+    const current = cat.wds.find((entry) => entry.id === wdId);
+    if (current) return { current, siblings: cat.wds.filter((entry) => entry.id !== wdId) };
+  }
+  return { current: null, siblings: [] };
+}
+
+// 1 スタンプ分の StampInfo を組み立てる（純粋関数）。
+function toStampInfo(base: string, labels: Map<string, string>, currentSet: Set<string>, siblingSets: { wd: WdInfo; set: Set<string> }[]): StampInfo {
+  const label = labels.get(`${base}_completed`) ?? base;
+  const usedBySiblings = siblingSets.filter((entry) => entry.set.has(base)).map((entry) => ({ id: entry.wd.id, title: entry.wd.title.trim() }));
+  return {
+    id: base,
+    flower: flowerFromLabel(label) || base,
+    label,
+    thumbPath: `${STAMPS_DIR_REL}/${STAMPS_COMPRESSED_SUBDIR}/${base}${STAMP_COMPLETED_SUFFIX}`,
+    completedFile: `${base}${STAMP_COMPLETED_SUFFIX}`,
+    incompletedFile: `${base}${STAMP_INCOMPLETED_SUFFIX}`,
+    usedByCurrent: currentSet.has(base),
+    usedBySiblings,
+  };
+}
+
+// スタンプ一覧＋当該 WD カテゴリの使用状況を組み立てる。
+async function buildStampInfos(wdId: string): Promise<StampInfo[]> {
+  const stampsDir = path.join(workspacePath, STAMPS_DIR_REL);
+  const compressedDir = path.join(stampsDir, STAMPS_COMPRESSED_SUBDIR);
+  const [bases, labels, ctx] = await Promise.all([listStampBases(compressedDir), readStampLabels(stampsDir), resolveStampSiblings(wdId)]);
+  const currentSet = ctx.current ? await stampsInWdFolder(ctx.current.windowsWdPath) : new Set<string>();
+  const siblingSets = await Promise.all(ctx.siblings.map(async (entry) => ({ wd: entry, set: await stampsInWdFolder(entry.windowsWdPath) })));
+  return bases.map((base) => toStampInfo(base, labels, currentSet, siblingSets));
+}
+
+// Stamps フォルダ直下のエントリを全削除する（Stamps 自身は消さない）。削除数を返す。
+async function wipeStampsFolder(stampsDir: string): Promise<number> {
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(stampsDir);
+  } catch {
+    return 0; // まだ存在しない
+  }
+  let removed = 0;
+  for (const name of entries) {
+    const target = path.join(stampsDir, name);
+    if (!isContainedChild(target, stampsDir, name)) continue;
+    try {
+      await fsp.rm(target, { recursive: true, force: true });
+      removed++;
+    } catch {
+      // 個別失敗は無視
+    }
+  }
+  return removed;
+}
+
+// 選択スタンプのペア（compressed）を Stamps フォルダへコピーする。コピー名の配列を返す。
+async function copyStampPair(compressedDir: string, stampsDir: string, base: string): Promise<string[]> {
+  const names = [`${base}${STAMP_COMPLETED_SUFFIX}`, `${base}${STAMP_INCOMPLETED_SUFFIX}`];
+  const copied: string[] = [];
+  for (const name of names) {
+    const dest = path.join(stampsDir, name);
+    if (!isSafeStampFilename(name) || !isContainedChild(dest, stampsDir, name)) continue;
+    await fsp.copyFile(path.join(compressedDir, name), dest);
+    copied.push(name);
+  }
+  return copied;
+}
+
+// GET /api/work/stamps?wdId=<id> — スタンプ一覧＋当該 WD カテゴリの使用状況。
+router.get(API_ROUTES.work.stamps, async (req, res) => {
+  const wdId = typeof req.query.wdId === "string" ? req.query.wdId : "";
+  if (!wdId || !isValidWorkWdId(wdId)) {
+    res.status(400).json({ error: "wdId (valid WD-ID) required" });
+    return;
+  }
+  try {
+    const stamps = await buildStampInfos(wdId);
+    res.json({ stamps });
+  } catch (err) {
+    log.error("workFiles.stamps", "list stamps failed", { err });
+    res.status(500).json({ error: "スタンプ一覧の取得に失敗しました" });
+  }
+});
+
+// POST /api/work/stamp-apply — 選択スタンプのペアを WD の Windows 側 Stamps へ
+// 「全消し→コピー」する。body `{ wdId, stampId, windowsWdPath? }`。
+router.post(API_ROUTES.work.stampApply, async (req, res) => {
+  const { wdId, stampId, windowsWdPath } = req.body as { wdId?: string; stampId?: string; windowsWdPath?: string };
+  if (!wdId || !isValidWorkWdId(wdId) || !stampId || !isSafeStampBase(stampId)) {
+    res.status(400).json({ error: "wdId (valid WD-ID) と stampId が必要です" });
+    return;
+  }
+  try {
+    const compressedDir = path.join(workspacePath, STAMPS_DIR_REL, STAMPS_COMPRESSED_SUBDIR);
+    const completed = path.join(compressedDir, `${stampId}${STAMP_COMPLETED_SUFFIX}`);
+    const incompleted = path.join(compressedDir, `${stampId}${STAMP_INCOMPLETED_SUFFIX}`);
+    if (!(await pathExists(completed)) || !(await pathExists(incompleted))) {
+      res.status(409).json({ error: "スタンプのペア（修了証／未受講）が見つかりません" });
+      return;
+    }
+    const winPath = windowsWdPath ?? (await resolveWdWindowsPath(wdId));
+    if (!winPath) {
+      res.status(409).json({ error: "Windows パスを解決できませんでした" });
+      return;
+    }
+    const stampsDir = path.join(windowsToWsl(winPath), STAMPS_FOLDER_NAME);
+    await fsp.mkdir(stampsDir, { recursive: true });
+    const removed = await wipeStampsFolder(stampsDir);
+    const copied = await copyStampPair(compressedDir, stampsDir, stampId);
+    log.info("workFiles.stampApply", "applied stamp to WD Stamps folder", { wdId, stampId, removed, copied });
+    res.json({ applied: true, wdId, stampId, removed, copied });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error("workFiles.stampApply", "apply stamp failed", { err });
     res.status(500).json({ error: msg });
   }
 });

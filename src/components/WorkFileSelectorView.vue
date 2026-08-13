@@ -82,6 +82,16 @@
                     >
                       ＋ 新規作成
                     </button>
+                    <!-- スタンプ選択：この WD の Windows 側 Stamps フォルダへ花モチーフのスタンプ（修了証／未受講ペア）を設定 -->
+                    <button
+                      class="px-3 py-1 rounded text-sm font-medium border border-purple-300 text-purple-600 hover:bg-purple-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-1"
+                      :disabled="wdBusy.has(wd.id)"
+                      title="スタンプ（修了証／未受講のペア）を選んで、この WD の Stamps フォルダに設定します。"
+                      @click="openStampModal(wd)"
+                    >
+                      <span class="material-icons text-sm">local_florist</span>
+                      スタンプ選択
+                    </button>
                     <!-- 同期：D: の素材（スクショ・資料）だけを WSL へ取り込み直す（追加・更新・削除を反映） -->
                     <button
                       class="px-3 py-1 rounded text-sm font-medium border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
@@ -414,6 +424,92 @@
             索引作成
           </button>
           <button v-else class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="handleBuildIndexDone">閉じる</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- スタンプ選択モーダル：data/work/stamps/compressed の修了証スタンプ一覧から 1 件選ぶ。
+         使用中バッジ（現在使用中／使用中）は同一カテゴリの兄弟 WD の Stamps 走査で付く。 -->
+    <div v-if="stampModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-3xl mx-4 flex flex-col max-h-[85vh]">
+        <div class="flex items-center gap-2 px-4 py-3 border-b">
+          <span class="material-icons text-purple-600">local_florist</span>
+          <span class="font-semibold">スタンプ選択 — {{ stampModal.wd.id }}</span>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" @click="closeStampModal">✕</button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-4 py-3">
+          <p v-if="stampLoading" class="text-sm text-gray-500">読み込み中...</p>
+          <p v-else-if="stampError" class="text-sm text-red-600">{{ stampError }}</p>
+          <p v-else-if="stampList.length === 0" class="text-sm text-gray-500">選択できるスタンプがありません。</p>
+          <div v-else class="grid grid-cols-3 sm:grid-cols-4 gap-3">
+            <button
+              v-for="stamp in stampList"
+              :key="stamp.id"
+              class="relative flex flex-col items-center gap-1 rounded-lg border-2 p-2 transition-colors hover:bg-purple-50"
+              :class="stampSelectedId === stamp.id ? 'border-purple-500 bg-purple-50' : 'border-gray-200'"
+              @click="stampSelectedId = stamp.id"
+            >
+              <!-- 使用中バッジ：現在 WD が使用中＝別色、他 WD が使用中＝アンバー -->
+              <span
+                v-if="stamp.usedByCurrent"
+                class="absolute top-1 left-1 text-[10px] px-1.5 py-0.5 rounded bg-blue-600 text-white"
+                :title="siblingTip(stamp)"
+              >
+                現在使用中
+              </span>
+              <span
+                v-else-if="stamp.usedBySiblings.length > 0"
+                class="absolute top-1 left-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500 text-white"
+                :title="siblingTip(stamp)"
+              >
+                使用中
+              </span>
+              <img :src="stampThumbUrl(stamp.thumbPath)" :alt="stamp.flower" class="w-full aspect-square object-contain" />
+              <span class="text-xs text-gray-700 text-center leading-tight">{{ stamp.flower }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="px-4 py-3 border-t flex items-center gap-2">
+          <span class="text-xs text-gray-500">選択したスタンプ（修了証／未受講のペア）を {{ stampModal.wd.id }} の Stamps フォルダに設定します。</span>
+          <span class="ml-auto flex gap-2">
+            <button class="px-4 py-2 bg-gray-200 rounded text-sm" :disabled="stampApplying" @click="closeStampModal">キャンセル</button>
+            <button
+              class="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50"
+              :disabled="!stampSelectedId || stampApplying"
+              @click="stampConfirmOpen = true"
+            >
+              このスタンプを設定
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- スタンプ設定の確認：Stamps フォルダを全消ししてからコピーする破壊的操作の最終確認 -->
+    <div v-if="stampConfirmOpen && stampModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 flex flex-col">
+        <div class="px-4 py-3 border-b font-semibold text-purple-700">スタンプを設定 — {{ stampModal.wd.id }}</div>
+        <div class="px-4 py-3 space-y-2 text-sm text-gray-700">
+          <p>
+            <span class="font-semibold text-red-600">{{ stampModal.wd.id }} の Stamps フォルダの既存内容をすべて削除</span>し、選択したスタンプ<span
+              v-if="selectedStampFlower"
+              >（{{ selectedStampFlower }}）</span
+            >の修了証／未受講ペアをコピーします。
+          </p>
+          <p class="text-xs text-gray-500 leading-relaxed">この操作は Windows(D:) 側の Stamps フォルダに対して行われます。よろしいですか？</p>
+          <p v-if="stampError" class="text-xs text-red-600">{{ stampError }}</p>
+        </div>
+        <div class="px-4 py-3 border-t flex justify-end gap-2">
+          <button class="px-4 py-2 bg-gray-200 rounded text-sm" :disabled="stampApplying" @click="stampConfirmOpen = false">キャンセル</button>
+          <button
+            class="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50"
+            :disabled="stampApplying"
+            @click="applyStamp"
+          >
+            {{ stampApplying ? "設定中..." : "設定する" }}
+          </button>
         </div>
       </div>
     </div>
@@ -900,6 +996,97 @@ async function onSync(wdInfo: WdInfo): Promise<void> {
     setSyncNote(wdInfo.id, note);
   } finally {
     setWdBusy(wdInfo.id, false);
+  }
+}
+
+// ── スタンプ選択 ─────────────────────────────────────────────────────────────
+interface StampInfo {
+  id: string;
+  flower: string;
+  label: string;
+  thumbPath: string;
+  completedFile: string;
+  incompletedFile: string;
+  usedByCurrent: boolean;
+  usedBySiblings: { id: string; title: string }[];
+}
+
+const stampModal = ref<{ wd: WdInfo } | null>(null);
+const stampList = ref<StampInfo[]>([]);
+const stampLoading = ref(false);
+const stampError = ref<string | null>(null);
+const stampSelectedId = ref<string | null>(null);
+const stampApplying = ref(false);
+const stampConfirmOpen = ref(false);
+
+// 選択中スタンプの花名（確認ダイアログ表示用）。
+const selectedStampFlower = computed(() => stampList.value.find((item) => item.id === stampSelectedId.value)?.flower ?? "");
+
+// スタンプサムネ URL（released サムネと同じ /api/files/raw 経由）。
+function stampThumbUrl(relPath: string): string {
+  return `${API_ROUTES.files.raw}?path=${encodeURIComponent(relPath)}`;
+}
+
+// 使用中バッジのツールチップ（使用している同列 WD 名を列挙）。
+function siblingTip(stamp: StampInfo): string {
+  const siblings = stamp.usedBySiblings.map((sibling) => sibling.title || sibling.id);
+  const parts: string[] = [];
+  if (stamp.usedByCurrent) parts.push("この WD で使用中");
+  if (siblings.length > 0) parts.push(`使用中の WD: ${siblings.join(", ")}`);
+  return parts.join(" / ");
+}
+
+// 「スタンプ選択」：一覧を取得してモーダルを開く。
+async function openStampModal(wdInfo: WdInfo): Promise<void> {
+  stampModal.value = { wd: wdInfo };
+  stampSelectedId.value = null;
+  stampError.value = null;
+  stampConfirmOpen.value = false;
+  stampList.value = [];
+  stampLoading.value = true;
+  try {
+    const result = await apiGet<{ stamps: StampInfo[] }>(API_ROUTES.work.stamps, { wdId: wdInfo.id });
+    if (!result.ok) {
+      stampError.value = result.error;
+      return;
+    }
+    stampList.value = result.data.stamps;
+  } finally {
+    stampLoading.value = false;
+  }
+}
+
+function closeStampModal(): void {
+  stampModal.value = null;
+  stampConfirmOpen.value = false;
+  stampSelectedId.value = null;
+}
+
+// 「設定する」：確認後、選択スタンプを WD の Stamps へ全消し→コピー。成功後は即閉じる。
+async function applyStamp(): Promise<void> {
+  const modal = stampModal.value;
+  const stampId = stampSelectedId.value;
+  if (!modal || !stampId || stampApplying.value) return;
+  stampApplying.value = true;
+  stampError.value = null;
+  setWdBusy(modal.wd.id, true);
+  try {
+    const result = await apiPost<{ applied: boolean; removed: number; copied: string[] }>(API_ROUTES.work.stampApply, {
+      wdId: modal.wd.id,
+      stampId,
+      windowsWdPath: modal.wd.windowsWdPath,
+    });
+    if (!result.ok) {
+      stampError.value = result.error;
+      return;
+    }
+    const flower = selectedStampFlower.value;
+    const flowerSuffix = flower ? `（${flower}）` : "";
+    setSyncNote(modal.wd.id, `✓ スタンプを設定しました${flowerSuffix}`);
+    closeStampModal();
+  } finally {
+    stampApplying.value = false;
+    setWdBusy(modal.wd.id, false);
   }
 }
 

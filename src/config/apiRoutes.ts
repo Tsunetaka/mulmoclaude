@@ -482,6 +482,15 @@ const HOST_API_ROUTES = {
      *  release-to-windows、頁チェックアウトは sw-page-checkin が別途管理）。未登録 WD は 409。
      *  body `{ wdId, windowsWdPath }`。返り値 `{ synced, copied, deleted }`。 */
     syncMaterials: "/api/work/sync-materials",
+    /** GET — スタンプ一覧（`data/work/stamps/compressed/*_completed.png`）と、
+     *  `?wdId=<id>` で指定した WD が属するカテゴリ内の使用状況を返す。各スタンプに
+     *  `usedByCurrent`（この WD の `Stamps` にある）と `usedBySiblings`（同一カテゴリの
+     *  他 WD にある）を付す。返り値 `{ stamps: StampInfo[] }`。 */
+    stamps: "/api/work/stamps",
+    /** POST — 選択したスタンプペア（`<花名>_completed.png` / `_incompleted.png`）を、
+     *  対象 WD の **Windows 側 `Stamps` フォルダ**へ「既存を全消し→コピー」する。
+     *  body `{ wdId, stampId, windowsWdPath? }`。返り値 `{ applied, removed, copied }`。 */
+    stampApply: "/api/work/stamp-apply",
     /** POST — ReleasedVersion 由来の新版を **Windows COM 分割**（`split_pages.py`）する。
      *  `<wd>/ReleasedVersion/<sourceFilename>` を読み `<wd>/<version>/.pages/` に
      *  ページ単位 pptx ＋ structure.json を生成。SSE ストリーム。
