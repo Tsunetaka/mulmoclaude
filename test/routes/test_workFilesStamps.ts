@@ -48,12 +48,24 @@ interface StampInfo {
   usedByCurrent: boolean;
   usedBySiblings: StampSibling[];
 }
+interface WdScan {
+  id: string;
+  registered: boolean;
+  stampNames: string[] | null;
+  stampConflicts: { name: string; siblings: { id: string; title: string }[] }[];
+}
+interface CatScan {
+  name: string;
+  wds: WdScan[];
+}
 interface ResultBody {
   stamps?: StampInfo[];
   applied?: boolean;
   removed?: number;
   copied?: string[];
   error?: string;
+  categories?: CatScan[];
+  rootPath?: string;
 }
 
 function mockRes() {
@@ -82,6 +94,7 @@ let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 let stampsHandler: Handler;
 let applyHandler: Handler;
+let scanHandler: Handler;
 
 function compressedDir(): string {
   return path.join(workspaceDir, "data/work/stamps/compressed");
@@ -122,6 +135,7 @@ before(async () => {
   const routeMod = await import("../../server/api/routes/workFiles.js");
   stampsHandler = extractRouteHandler(routeMod, "/api/work/stamps", "get");
   applyHandler = extractRouteHandler(routeMod, "/api/work/stamp-apply", "post");
+  scanHandler = extractRouteHandler(routeMod, "/api/work/scan", "get");
 });
 
 after(async () => {
@@ -267,5 +281,120 @@ describe("POST /api/work/stamp-apply — wipe + copy", () => {
     assert.equal(state.body?.removed, 0);
     assert.equal(existsSync(path.join(stampsFolder, "aaa_completed.png")), true);
     assert.equal(existsSync(path.join(stampsFolder, "aaa_incompleted.png")), true);
+  });
+});
+
+// Mark a WD as "registered" by materializing its WSL work folder.
+function registerWd(wdId: string): void {
+  mkdirSync(path.join(workspaceDir, "data/work", wdId), { recursive: true });
+}
+// Put a completed stamp png into a WD's Windows-side Stamps folder.
+function seedWdStamp(wdWin: string, completedFileName: string): void {
+  mkdirSync(path.join(wdWin, "Stamps"), { recursive: true });
+  writeFileSync(path.join(wdWin, "Stamps", completedFileName), "x");
+}
+function scannedWd(body: ResultBody | undefined, wdId: string): WdScan | undefined {
+  for (const cat of body?.categories ?? []) {
+    const found = cat.wds.find((entry) => entry.id === wdId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+describe("GET /api/work/scan — stampNames (list-view current stamp)", () => {
+  it("resolves the flower name from index.json for a registered WD with a stamp set", async () => {
+    registerWd(CURRENT_WD);
+    seedWdStamp(currentWdWin(), "aaa_completed.png");
+    const { state, res } = mockRes();
+    await scanHandler(getReq({}), res);
+    assert.equal(state.status, 200, JSON.stringify(state.body));
+    assert.deepEqual(scannedWd(state.body, CURRENT_WD)?.stampNames, ["アアア"]);
+  });
+
+  it("returns [] (未選択) for a registered WD whose Stamps folder is empty/absent", async () => {
+    registerWd(CURRENT_WD);
+    const { state, res } = mockRes();
+    await scanHandler(getReq({}), res);
+    assert.deepEqual(scannedWd(state.body, CURRENT_WD)?.stampNames, []);
+  });
+
+  it("returns null (hidden) for an unregistered WD even if a stamp sits on Windows", async () => {
+    // GIT-00008 is NOT registered (no WSL work folder), but its D: Stamps holds a stamp.
+    seedWdStamp(siblingWdWin(), "aaa_completed.png");
+    const { state, res } = mockRes();
+    await scanHandler(getReq({}), res);
+    const sibling = scannedWd(state.body, SIBLING_WD);
+    assert.equal(sibling?.registered, false);
+    assert.equal(sibling?.stampNames, null);
+  });
+
+  it("falls back to the filename base when the stamp is not in index.json", async () => {
+    registerWd(CURRENT_WD);
+    seedWdStamp(currentWdWin(), "zzz_completed.png"); // no index label / not in compressed
+    const { state, res } = mockRes();
+    await scanHandler(getReq({}), res);
+    assert.deepEqual(scannedWd(state.body, CURRENT_WD)?.stampNames, ["zzz"]);
+  });
+
+  it("joins multiple completed stamps sorted by base (anomaly case)", async () => {
+    registerWd(CURRENT_WD);
+    seedWdStamp(currentWdWin(), "bbb_completed.png");
+    writeFileSync(path.join(currentWdWin(), "Stamps", "aaa_completed.png"), "x");
+    const { state, res } = mockRes();
+    await scanHandler(getReq({}), res);
+    // sorted by base: aaa → アアア, bbb → ビビビ
+    assert.deepEqual(scannedWd(state.body, CURRENT_WD)?.stampNames, ["アアア", "ビビビ"]);
+  });
+});
+
+describe("GET /api/work/scan — stampConflicts (same-category duplicate warning)", () => {
+  it("flags both registered WDs when they share a stamp in the same category", async () => {
+    registerWd(CURRENT_WD);
+    registerWd(SIBLING_WD);
+    seedWdStamp(currentWdWin(), "aaa_completed.png");
+    seedWdStamp(siblingWdWin(), "aaa_completed.png");
+    const { state, res } = mockRes();
+    await scanHandler(getReq({}), res);
+    const current = scannedWd(state.body, CURRENT_WD);
+    const sibling = scannedWd(state.body, SIBLING_WD);
+    assert.equal(current?.stampConflicts.length, 1);
+    assert.equal(current?.stampConflicts[0].name, "アアア");
+    assert.deepEqual(
+      current?.stampConflicts[0].siblings.map((entry) => entry.id),
+      [SIBLING_WD],
+    );
+    assert.deepEqual(
+      sibling?.stampConflicts[0].siblings.map((entry) => entry.id),
+      [CURRENT_WD],
+    );
+  });
+
+  it("counts an UNREGISTERED sibling's D: stamp as a conflict (registration-agnostic scope)", async () => {
+    registerWd(CURRENT_WD); // sibling stays unregistered
+    seedWdStamp(currentWdWin(), "aaa_completed.png");
+    seedWdStamp(siblingWdWin(), "aaa_completed.png");
+    const { state, res } = mockRes();
+    await scanHandler(getReq({}), res);
+    const current = scannedWd(state.body, CURRENT_WD);
+    const sibling = scannedWd(state.body, SIBLING_WD);
+    assert.deepEqual(
+      current?.stampConflicts.map((conflict) => conflict.name),
+      ["アアア"],
+      "registered WD is warned about the unregistered sibling",
+    );
+    assert.equal(sibling?.registered, false);
+    assert.equal(sibling?.stampNames, null, "unregistered sibling shows nothing");
+    assert.deepEqual(sibling?.stampConflicts, [], "unregistered sibling carries no warning");
+  });
+
+  it("reports no conflict when the two WDs use different stamps", async () => {
+    registerWd(CURRENT_WD);
+    registerWd(SIBLING_WD);
+    seedWdStamp(currentWdWin(), "aaa_completed.png");
+    seedWdStamp(siblingWdWin(), "bbb_completed.png");
+    const { state, res } = mockRes();
+    await scanHandler(getReq({}), res);
+    assert.deepEqual(scannedWd(state.body, CURRENT_WD)?.stampConflicts, []);
+    assert.deepEqual(scannedWd(state.body, SIBLING_WD)?.stampConflicts, []);
   });
 });

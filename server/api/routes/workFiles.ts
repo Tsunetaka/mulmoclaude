@@ -152,7 +152,20 @@ interface WdInfo {
   /** WSL 側 `data/work/<id>/` が実体化済みか（＝「登録」済み）。
    *  未登録の WD は展開してもミラー・サムネ生成を行わず、UI では「登録」ボタンを出す。 */
   registered: boolean;
+  /** 現在この WD の Windows 側 Stamps フォルダに設定されている修了証スタンプの花名（複数可）。
+   *  null＝未登録／Windows パス読取不可で「表示しない」、[]＝読めたが未選択（UI が赤字表示）、
+   *  [名前…]＝設定済み。登録済み WD かつ withStamps 指定のスキャンでのみ算出する。 */
+  stampNames: string[] | null;
+  /** 同一カテゴリ内で同じスタンプを使っている他 WD がある場合の重複警告（空＝重複なし）。
+   *  比較対象は登録の有無を問わずカテゴリ内で D: にそのスタンプを持つ全 WD。 */
+  stampConflicts: StampConflict[];
   versions: VersionInfo[];
+}
+
+/** スタンプ重複 1 件：name＝花名（解決不可なら base）、siblings＝同じスタンプを使う同カテゴリの他 WD。 */
+interface StampConflict {
+  name: string;
+  siblings: { id: string; title: string }[];
 }
 
 interface CategoryInfo {
@@ -227,8 +240,79 @@ function compareVersionAsc(verA: VersionInfo, verB: VersionInfo): number {
   return 0;
 }
 
+// WD の Windows 側 Stamps に設定中の修了証スタンプの base 集合（昇順）を返す。
+// null＝Windows パス未解決/読取不可（UI は非表示）、[]＝読めたが未選択（UI は赤字）。
+// 登録の有無は問わない（重複判定は D: の実体で行うため）。
+async function resolveWdStampBases(winWdPath: string): Promise<string[] | null> {
+  if (!winWdPath) return null;
+  const wslWdPath = windowsToWsl(winWdPath);
+  // WD フォルダ自体が読めない（D: 未接続など）なら「未選択」と断定せず非表示にする。
+  if (!(await pathExists(wslWdPath))) return null;
+  const completed = await listFiles(path.join(wslWdPath, STAMPS_FOLDER_NAME), STAMP_COMPLETED_PATTERN);
+  return completed.map((name) => name.slice(0, -STAMP_COMPLETED_SUFFIX.length)).sort((left, right) => left.localeCompare(right));
+}
+
+// base（例 "bellflower"）→ 花名（index に無ければ base そのもの）。index キーは `<base>_completed`。
+function stampFlowerName(base: string, labels: Map<string, string>): string {
+  return flowerFromLabel(labels.get(`${base}_completed`) ?? base) || base;
+}
+
+// カテゴリ内の各 WD の現在スタンプ base を集める（読取不可の WD はマップに載せない）。登録の有無は問わない。
+async function collectStampBases(wds: WdInfo[]): Promise<Map<string, string[]>> {
+  const byWd = new Map<string, string[]>();
+  for (const entry of wds) {
+    const bases = await resolveWdStampBases(entry.windowsWdPath);
+    if (bases !== null) byWd.set(entry.id, bases);
+  }
+  return byWd;
+}
+
+// base → そのスタンプを使う WD（{id,title}）一覧。カテゴリ内の重複検出に使う。
+function buildStampUsage(wds: WdInfo[], basesByWd: Map<string, string[]>): Map<string, { id: string; title: string }[]> {
+  const usage = new Map<string, { id: string; title: string }[]>();
+  for (const entry of wds) {
+    for (const base of basesByWd.get(entry.id) ?? []) {
+      const arr = usage.get(base) ?? [];
+      arr.push({ id: entry.id, title: entry.title.trim() });
+      usage.set(base, arr);
+    }
+  }
+  return usage;
+}
+
+// 登録済み WD 1 件に表示用スタンプ名と重複警告を埋める（in-place）。
+function assignStampInfo(
+  target: WdInfo,
+  basesByWd: Map<string, string[]>,
+  usage: Map<string, { id: string; title: string }[]>,
+  labels: Map<string, string>,
+): void {
+  const bases = basesByWd.get(target.id);
+  if (bases === undefined) {
+    target.stampNames = null; // Windows パス読取不可 → 非表示
+    return;
+  }
+  target.stampNames = bases.map((base) => stampFlowerName(base, labels));
+  const conflicts: StampConflict[] = [];
+  for (const base of bases) {
+    const siblings = (usage.get(base) ?? []).filter((entry) => entry.id !== target.id);
+    if (siblings.length > 0) conflicts.push({ name: stampFlowerName(base, labels), siblings });
+  }
+  target.stampConflicts = conflicts;
+}
+
+// カテゴリ全体を走査し、登録済み各 WD の現在スタンプ名と同カテゴリ重複警告を算出する。
+async function populateStampInfo(wds: WdInfo[], labels: Map<string, string>): Promise<void> {
+  const basesByWd = await collectStampBases(wds);
+  const usage = buildStampUsage(wds, basesByWd);
+  for (const entry of wds) {
+    if (entry.registered) assignStampInfo(entry, basesByWd, usage, labels);
+  }
+}
+
 // WD フォルダを処理して WdInfo を返す（released=Windows/WSL の ReleasedVersion、
 // editing=WSL の編集中サブフォルダ）。両者を採番の兄弟集合として 1 リストに束ねる。
+// スタンプ名／重複警告はカテゴリ単位の後処理（populateStampInfo）で埋める。
 async function processWdFolder(wdName: string, catWslPath: string, catWinPath: string): Promise<WdInfo | null> {
   const match = wdName.match(WD_NAME_PATTERN);
   if (!match) return null;
@@ -248,6 +332,8 @@ async function processWdFolder(wdName: string, catWslPath: string, catWinPath: s
     hasCheckedOut: Boolean(lockedEditing),
     checkedOutVersion: lockedEditing?.version ?? null,
     registered,
+    stampNames: null,
+    stampConflicts: [],
     versions,
   };
 }
@@ -265,34 +351,38 @@ async function getWorkRootWin(): Promise<string> {
   return "D:\\SW_Doc\\Materials";
 }
 
-// WD 名一覧を WdInfo[] に変換
-async function resolveWdList(wdNames: string[], catWslPath: string, catWinPath: string): Promise<WdInfo[]> {
+// WD 名一覧を WdInfo[] に変換。stampLabels 非 null のときカテゴリ単位でスタンプ名／重複警告を算出する。
+async function resolveWdList(wdNames: string[], catWslPath: string, catWinPath: string, stampLabels: Map<string, string> | null): Promise<WdInfo[]> {
   const wds: WdInfo[] = [];
   for (const wdName of wdNames) {
     const wdInfo = await processWdFolder(wdName, catWslPath, catWinPath);
     if (wdInfo) wds.push(wdInfo);
   }
+  if (stampLabels) await populateStampInfo(wds, stampLabels);
   return wds;
 }
 
-// ルートフォルダをスキャンして CategoryInfo[] を返す
-async function scanRoot(workRootWin: string): Promise<CategoryInfo[]> {
+// ルートフォルダをスキャンして CategoryInfo[] を返す。
+// withStamps=true のときだけ、登録済み WD の現在設定中スタンプ名を算出する
+// （作業ファイル選択画面のスキャンだけが要求。他の内部呼び出しは余計な Stamps 走査を避ける）。
+async function scanRoot(workRootWin: string, opts?: { withStamps?: boolean }): Promise<CategoryInfo[]> {
   const wslRoot = windowsToWsl(workRootWin);
   const allDirNames = await listDirs(wslRoot);
   const uncategorizedWds = allDirNames.filter((dirName) => WD_ROOT_PATTERN.test(dirName));
   const categoryDirs = allDirNames.filter((dirName) => !WD_ROOT_PATTERN.test(dirName));
   const categories: CategoryInfo[] = [];
+  const stampLabels = opts?.withStamps ? await readStampLabels(path.join(workspacePath, STAMPS_DIR_REL)) : null;
 
   for (const catName of categoryDirs) {
     const catWslPath = path.join(wslRoot, catName);
     const catWinPath = `${workRootWin}\\${catName}`;
     const wdNames = await listDirs(catWslPath);
-    const wds = await resolveWdList(wdNames, catWslPath, catWinPath);
+    const wds = await resolveWdList(wdNames, catWslPath, catWinPath, stampLabels);
     if (wds.length > 0) categories.push({ name: catName, wds });
   }
 
   if (uncategorizedWds.length > 0) {
-    const wds = await resolveWdList(uncategorizedWds, wslRoot, workRootWin);
+    const wds = await resolveWdList(uncategorizedWds, wslRoot, workRootWin, stampLabels);
     if (wds.length > 0) categories.push({ name: "（未分類）", wds });
   }
 
@@ -334,7 +424,7 @@ export async function resolveWdWindowsPath(wdId: string): Promise<string | null>
 router.get(API_ROUTES.work.scan, async (req, res) => {
   try {
     const workRootWin = await getWorkRootWin();
-    const categories = await scanRoot(workRootWin);
+    const categories = await scanRoot(workRootWin, { withStamps: true });
     res.json({ categories, rootPath: workRootWin });
   } catch (err) {
     log.error("workFiles.scan", "scan failed", { err });

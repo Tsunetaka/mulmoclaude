@@ -47,6 +47,28 @@
             <span class="font-mono text-xs text-blue-700 bg-blue-50 px-1 rounded">{{ wd.id }}</span>
             <span class="text-sm font-medium truncate">{{ wd.title }}</span>
             <span class="ml-auto flex items-center gap-1.5">
+              <!-- 現在設定中のスタンプ名（登録済みのみ）。緑フォルダマークの左隣に出す。
+                   null=読取不可で非表示、[]=未選択で赤字「(スタンプ未選択)」、複数は「、」連結。 -->
+              <span
+                v-if="wd.registered && wd.stampNames && wd.stampNames.length > 0"
+                class="text-xs text-gray-500 truncate max-w-[10rem]"
+                :title="`選択中のスタンプ：${wd.stampNames.join('、')}`"
+                >{{ wd.stampNames.join("、") }}</span
+              >
+              <span
+                v-else-if="wd.registered && wd.stampNames && wd.stampNames.length === 0"
+                class="text-xs text-red-600"
+                title="このフォルダにスタンプが設定されていません"
+                >(スタンプ未選択)</span
+              >
+              <!-- 重複警告：同一カテゴリ内で同じスタンプを使う他 WD があるとき琥珀色の警告アイコン。 -->
+              <span
+                v-if="wd.registered && wd.stampConflicts.length > 0"
+                class="material-icons text-base text-amber-500"
+                :title="stampConflictTip(wd)"
+                aria-label="スタンプ重複"
+                >warning</span
+              >
               <!-- 登録済み（WSL に作業フォルダあり）マーカー：折りたたみ表示でも識別できる -->
               <span v-if="wd.registered" class="material-icons text-base text-green-600" title="登録済み — WSL に作業フォルダがあります" aria-label="登録済み"
                 >folder</span
@@ -544,6 +566,10 @@ interface WdInfo {
   hasCheckedOut: boolean;
   checkedOutVersion: string | null;
   registered: boolean;
+  // 現在設定中のスタンプ花名。null=非表示（未登録/読取不可）、[]=未選択（赤字）、[名前…]=設定済み。
+  stampNames: string[] | null;
+  // 同一カテゴリ内で同じスタンプを使う他 WD がある場合の重複警告（空=重複なし）。
+  stampConflicts: { name: string; siblings: { id: string; title: string }[] }[];
   versions: VersionInfo[];
 }
 
@@ -1027,6 +1053,16 @@ function stampThumbUrl(relPath: string): string {
   return `${API_ROUTES.files.raw}?path=${encodeURIComponent(relPath)}`;
 }
 
+// 重複警告アイコンのツールチップ：どのスタンプを、同カテゴリのどの WD と重複使用しているか。
+function stampConflictTip(wdInfo: WdInfo): string {
+  return wdInfo.stampConflicts
+    .map((conflict) => {
+      const others = conflict.siblings.map((sibling) => sibling.title || sibling.id).join("、");
+      return `「${conflict.name}」を ${others} と重複使用`;
+    })
+    .join(" / ");
+}
+
 // 使用中バッジのツールチップ（使用している同列 WD 名を列挙）。
 function siblingTip(stamp: StampInfo): string {
   const siblings = stamp.usedBySiblings.map((sibling) => sibling.title || sibling.id);
@@ -1082,8 +1118,12 @@ async function applyStamp(): Promise<void> {
     }
     const flower = selectedStampFlower.value;
     const flowerSuffix = flower ? `（${flower}）` : "";
+    // 一覧の「選択中のスタンプ」表示を即時更新（適用は全消し→1ペアなので設定後は必ず1件）。
+    modal.wd.stampNames = [flower || stampId];
     setSyncNote(modal.wd.id, `✓ スタンプを設定しました${flowerSuffix}`);
     closeStampModal();
+    // 重複警告は同カテゴリの他 WD にも影響するため、全体を再スキャンして正確に反映する。
+    void scanFiles();
   } finally {
     stampApplying.value = false;
     setWdBusy(modal.wd.id, false);
