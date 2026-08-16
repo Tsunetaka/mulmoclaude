@@ -275,6 +275,30 @@ describe("shouldCopyHistory (pure) — HISTORY.md D:↔WSL 同期", () => {
   });
 });
 
+describe("interpretHistoryGate (pure) — リリース前の改訂履歴ゲート判定", () => {
+  it("blocks on STALE (exit 2) and extracts the reason", async () => {
+    const { interpretHistoryGate } = await import("../../server/api/routes/workFiles.js");
+    const res = interpretHistoryGate(2, "GATE:STALE:版セット不一致（不足=['v017'] 余剰=なし）\n");
+    assert.equal(res.proceed, false);
+    assert.match(res.reason, /版セット不一致/);
+  });
+  it("blocks when STALE text present even if exit code is odd", async () => {
+    const { interpretHistoryGate } = await import("../../server/api/routes/workFiles.js");
+    assert.equal(interpretHistoryGate(0, "GATE:STALE:概要セクションがありません").proceed, false);
+  });
+  it("passes on OK (exit 0 + GATE:OK)", async () => {
+    const { interpretHistoryGate } = await import("../../server/api/routes/workFiles.js");
+    const res = interpretHistoryGate(0, "GATE:OK\n");
+    assert.equal(res.proceed, true);
+    assert.equal(res.reason, "ok");
+  });
+  it("fails open (proceed) on tool error / unexpected output", async () => {
+    const { interpretHistoryGate } = await import("../../server/api/routes/workFiles.js");
+    assert.deepEqual(interpretHistoryGate(1, "Traceback: ModuleNotFoundError"), { proceed: true, reason: "unverified" });
+    assert.equal(interpretHistoryGate(null, "").proceed, true, "spawn 異常でも恒久ロックしない");
+  });
+});
+
 describe("POST /api/work/released-thumbs — mirrors ReleasedVersion from D: (D: master)", () => {
   it("copies D:-only versions into WSL and deletes WSL extras", async () => {
     // D: (fake Windows) holds v003 + v004, both OLD-mtime so thumbs stay fresh

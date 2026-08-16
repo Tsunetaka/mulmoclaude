@@ -1559,6 +1559,34 @@ async function runUpdateCoverMeta(wdId: string, version: string, fields: string,
   });
 }
 
+// history_md.py gate（改訂履歴・edit-slide §12-5）の終了コード＋出力を判定する（純粋・テスト対象）。
+// GATE:STALE（exit 2）→ ブロック。GATE:OK（exit 0）→ 通過。それ以外（ツール異常）→
+// フェイルオープン（reason="unverified"）＝リリースを恒久ロックしない。
+export function interpretHistoryGate(code: number | null, out: string): { proceed: boolean; reason: string } {
+  const stale = out.match(/GATE:STALE:(.*)/);
+  if (code === 2 || stale) {
+    return { proceed: false, reason: (stale?.[1] ?? "改訂履歴が未更新です").trim() };
+  }
+  if (code === 0 && /GATE:OK/.test(out)) return { proceed: true, reason: "ok" };
+  return { proceed: true, reason: "unverified" }; // 想定外＝検証不能。続行（警告は呼び出し側）。
+}
+
+// history_md.py gate を spawn して改訂履歴の未更新を検査する（COM 非依存）。
+// proceed=false のとき combine（リリース）を中止する。ツール異常時はフェイルオープン。
+async function runHistoryGate(wdId: string, version: string): Promise<{ proceed: boolean; reason: string }> {
+  const versionDir = path.join(workspacePath, "data/work", wdId, version);
+  const scriptPath = path.join(workspacePath, "data/work/tools/history_md.py");
+  const gateArgs = [scriptPath, "gate", "--wd", wdId, "--version-dir", versionDir];
+  return await new Promise((resolve) => {
+    let out = "";
+    const proc = spawn("python3", gateArgs, { env: { ...process.env } });
+    proc.stdout?.on("data", (chunk: Buffer) => (out += chunk.toString()));
+    proc.stderr?.on("data", (chunk: Buffer) => (out += chunk.toString()));
+    proc.on("close", (code) => resolve(interpretHistoryGate(code, out)));
+    proc.on("error", () => resolve({ proceed: true, reason: "unverified" }));
+  });
+}
+
 // sw-com.sh を spawn して SSE に流す。成功(0)なら（onSuccess があれば実行してから）
 // DONE、それ以外は ERROR を送る。onSuccess は成功時の後処理（例: gen_thumbs）。
 async function runComScript(args: string[], wdId: string, send: (line: string) => void, onSuccess?: () => Promise<void>): Promise<void> {
@@ -1668,7 +1696,7 @@ router.post(API_ROUTES.work.split, async (req, res) => {
 
 // POST /api/work/:wd/:version/combine — .pages を COM 結合して ReleasedVersion へ（SSE）
 router.post(API_ROUTES.work.combine, async (req, res) => {
-  const { outFilename, dedupMasters } = req.body as { outFilename?: string; dedupMasters?: boolean };
+  const { outFilename, dedupMasters, force } = req.body as { outFilename?: string; dedupMasters?: boolean; force?: boolean };
   if (!outFilename || !isSafePptxFilename(outFilename)) {
     res.status(400).json({ error: "valid outFilename (*.pptx) required" });
     return;
@@ -1679,6 +1707,20 @@ router.post(API_ROUTES.work.combine, async (req, res) => {
   }
   const ctx = beginComStream(req, res);
   if (!ctx) return;
+  // 改訂履歴ゲート（§12-5）：改訂履歴頁が無い / 概要セクションが無い / 版セット不一致なら
+  // リリース（結合）を中止する。force=true で回避可（緊急用・UI 非公開）。
+  if (force === true) {
+    ctx.send("⚠ force 指定により改訂履歴ゲートをスキップしました");
+  } else {
+    const gate = await runHistoryGate(ctx.wd, ctx.version);
+    if (!gate.proceed) {
+      ctx.send(`⛔ リリースを中止しました：改訂履歴が未更新です（${gate.reason}）。`);
+      ctx.send("　→ 「改訂履歴を更新して」を実行し、概要セクション先頭の改訂履歴頁を最新化してから、もう一度リリースしてください。");
+      res.end();
+      return;
+    }
+    ctx.send(gate.reason === "unverified" ? "⚠ 改訂履歴ゲートを検証できませんでした（続行します）" : "✅ 改訂履歴ゲート: OK");
+  }
   const args = ["combine", ctx.wd, ctx.version, outFilename];
   if (dedupMasters === false) args.push("nodedup");
   // リリース時は結合前に表紙の日付（リリース日）を更新する（バージョン番号は新版作成時に確定済み）。
