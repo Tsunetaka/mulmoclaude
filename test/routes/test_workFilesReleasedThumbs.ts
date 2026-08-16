@@ -257,6 +257,24 @@ describe("diffReleasedMirror (pure)", () => {
   });
 });
 
+describe("shouldCopyHistory (pure) — HISTORY.md D:↔WSL 同期", () => {
+  it("copies when source exists and dest is missing", async () => {
+    const { shouldCopyHistory } = await import("../../server/api/routes/workFiles.js");
+    assert.equal(shouldCopyHistory(100, null), true, "dest 欠落 → コピー");
+  });
+  it("copies only when source is strictly newer", async () => {
+    const { shouldCopyHistory } = await import("../../server/api/routes/workFiles.js");
+    assert.equal(shouldCopyHistory(200, 100), true, "新しい → コピー");
+    assert.equal(shouldCopyHistory(100, 100), false, "同じ → スキップ");
+    assert.equal(shouldCopyHistory(100, 200), false, "古い → スキップ");
+  });
+  it("never copies when source is missing", async () => {
+    const { shouldCopyHistory } = await import("../../server/api/routes/workFiles.js");
+    assert.equal(shouldCopyHistory(null, null), false, "src 無し → 何もしない");
+    assert.equal(shouldCopyHistory(null, 100), false, "src 無し（dest 有り）→ 削除しない");
+  });
+});
+
 describe("POST /api/work/released-thumbs — mirrors ReleasedVersion from D: (D: master)", () => {
   it("copies D:-only versions into WSL and deletes WSL extras", async () => {
     // D: (fake Windows) holds v003 + v004, both OLD-mtime so thumbs stay fresh

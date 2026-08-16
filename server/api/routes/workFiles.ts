@@ -14,6 +14,9 @@ const router = Router();
 
 const PPTX_PATTERN = /\.pptx$/i;
 const PPTX_VERSION_DATE_PATTERN = /_(\d{8})_v(\d+)\.pptx$/i;
+// 改訂履歴（edit-slide §12-5）。pptx ではないが ReleasedVersion に同居し、
+// pptx と同じく D:↔WSL の両方向で同期する（削除はしない＝維持されるべき成果物）。
+const HISTORY_FILENAME = "HISTORY.md";
 const PPTX_VERSION_PATTERN = /_v(\d+)\.pptx$/i;
 const WD_NAME_PATTERN = /^([A-Z]+-\d+)\s+(\S.*)$/;
 const WD_ROOT_PATTERN = /^[A-Z]+-\d{5}\s+/;
@@ -948,6 +951,28 @@ async function mirrorDelete(dir: string, names: string[]): Promise<string[]> {
   return done;
 }
 
+/** HISTORY.md をコピーすべきか（src が存在し、dest 欠落 or src が新しい）。純粋・テスト対象。 */
+export function shouldCopyHistory(srcMtime: number | null, destMtime: number | null): boolean {
+  if (srcMtime === null) return false;
+  return destMtime === null || srcMtime > destMtime;
+}
+
+// ReleasedVersion 直下の HISTORY.md を src→dest へ、新しければコピーする（削除はしない）。
+// pptx ミラー／プッシュと同じ両方向で呼ぶ。コピーしたら true。
+async function mirrorHistoryFile(srcDir: string, destDir: string): Promise<boolean> {
+  const src = path.join(srcDir, HISTORY_FILENAME);
+  const dest = path.join(destDir, HISTORY_FILENAME);
+  if (!isContainedChild(dest, destDir, HISTORY_FILENAME)) return false;
+  if (!shouldCopyHistory(await getMtime(src), await getMtime(dest))) return false;
+  try {
+    await fsp.mkdir(destDir, { recursive: true });
+    await fsp.copyFile(src, dest);
+    return true;
+  } catch {
+    return false; // 個別失敗は無視（次回再試行）
+  }
+}
+
 // Windows D: を正として WSL data/work/<wd>/ReleasedVersion を D: の ReleasedVersion に一致させる。
 // D: に有って WSL に無い/古い pptx をコピー、WSL に有って D: に無い pptx を削除（完全一致）。
 // D: 側 ReleasedVersion が存在しない or pptx 0 件のときは WSL を温存し何もしない（誤削除防止の安全弁）。
@@ -968,8 +993,9 @@ async function syncReleasedFromWindows(wdId: string, windowsWdPath: string | nul
 
   const copied = await mirrorCopy(winReleasedDir, wslReleasedDir, toCopy);
   const deleted = await mirrorDelete(wslReleasedDir, toDelete);
-  if (copied.length || deleted.length) {
-    log.info("workFiles.syncReleased", "mirrored ReleasedVersion from Windows (D: master)", { wdId, copied, deleted });
+  const historyCopied = await mirrorHistoryFile(winReleasedDir, wslReleasedDir);
+  if (copied.length || deleted.length || historyCopied) {
+    log.info("workFiles.syncReleased", "mirrored ReleasedVersion from Windows (D: master)", { wdId, copied, deleted, historyCopied });
   }
   return { copied, deleted };
 }
@@ -988,8 +1014,9 @@ async function pushReleasedToWindows(wdId: string, windowsWdPath: string | null)
   const winFiles = await statPptxList(winReleasedDir);
   const { toCopy } = diffReleasedMirror(wslFiles, winFiles); // WSL を正＝新/更新分のみ
   const copied = await mirrorCopy(wslReleasedDir, winReleasedDir, toCopy);
-  if (copied.length) {
-    log.info("workFiles.pushReleased", "pushed ReleasedVersion to Windows (WSL→D:)", { wdId, copied });
+  const historyCopied = await mirrorHistoryFile(wslReleasedDir, winReleasedDir);
+  if (copied.length || historyCopied) {
+    log.info("workFiles.pushReleased", "pushed ReleasedVersion to Windows (WSL→D:)", { wdId, copied, historyCopied });
   }
   return { copied };
 }
