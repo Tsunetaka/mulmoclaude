@@ -335,7 +335,9 @@ bindRoute(
 bindRoute(
   router,
   API_ROUTES.assetPicker.dispatch,
-  wrapPluginExecute<Parameters<typeof executeAssetPicker>[1]>((req) => executeAssetPicker(null as never, req.body)),
+  // executeAssetPicker は context を読まない（引数だけで tab / query を決める）ので、
+  // 他ルートと同じサーバ既定コンテキストを渡す。
+  wrapPluginExecute<Parameters<typeof executeAssetPicker>[1]>((req) => executeAssetPicker(SERVER_TOOL_CONTEXT, req.body)),
 );
 
 // presentCollection — render a collection (or one item) as an inline,

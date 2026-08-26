@@ -195,10 +195,12 @@ describe("GET /api/work/stamps — list + usage", () => {
       ["aaa", "bbb"],
       "sorted by base name",
     );
-    assert.equal(stamps[0].flower, "アアア", "flower label stripped from index label");
-    assert.equal(stamps[0].thumbPath, "data/work/stamps/compressed/aaa_completed.png");
-    assert.equal(stamps[0].usedByCurrent, false);
-    assert.equal(stamps[0].usedBySiblings.length, 0);
+    const [firstStamp] = stamps;
+    assert.ok(firstStamp, "first stamp present");
+    assert.equal(firstStamp.flower, "アアア", "flower label stripped from index label");
+    assert.equal(firstStamp.thumbPath, "data/work/stamps/compressed/aaa_completed.png");
+    assert.equal(firstStamp.usedByCurrent, false);
+    assert.equal(firstStamp.usedBySiblings.length, 0);
   });
 
   it("excludes a stamp whose incompleted pair is missing", async () => {
@@ -358,13 +360,13 @@ describe("GET /api/work/scan — stampConflicts (same-category duplicate warning
     const current = scannedWd(state.body, CURRENT_WD);
     const sibling = scannedWd(state.body, SIBLING_WD);
     assert.equal(current?.stampConflicts.length, 1);
-    assert.equal(current?.stampConflicts[0].name, "アアア");
+    assert.equal(current?.stampConflicts[0]?.name, "アアア");
     assert.deepEqual(
-      current?.stampConflicts[0].siblings.map((entry) => entry.id),
+      current?.stampConflicts[0]?.siblings.map((entry) => entry.id),
       [SIBLING_WD],
     );
     assert.deepEqual(
-      sibling?.stampConflicts[0].siblings.map((entry) => entry.id),
+      sibling?.stampConflicts[0]?.siblings.map((entry) => entry.id),
       [CURRENT_WD],
     );
   });

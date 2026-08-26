@@ -1139,12 +1139,15 @@ import {
   canMoveSection,
   sectionInsertSlots,
   validateNewSectionName,
+  isSlideStructure,
+  isSlideManifest,
   type SlideStructure,
   type SlideManifest,
   type DeckModel,
   type DeckPage,
 } from "../utils/slides/slideDeck";
 import { SLIDE_ROLE_ID } from "../utils/slides/newDeck";
+import { isRecord } from "../utils/types";
 import AssetPickerGallery from "./AssetPickerGallery.vue";
 import { formatAssetSelection, type AssetItem } from "../utils/assetPicker/catalog";
 
@@ -1263,15 +1266,21 @@ interface ChatMessage {
   text: string;
 }
 
+/** text-response の toolResult.data か（role が user / assistant で text は文字列か未設定）。 */
+function isTextResponseData(data: unknown): data is { role: "user" | "assistant"; text?: string } {
+  if (!isRecord(data)) return false;
+  if (data.role !== "user" && data.role !== "assistant") return false;
+  return data.text === undefined || typeof data.text === "string";
+}
+
 function isTextResponseEntry(result: { toolName: string; data?: unknown }): boolean {
-  if (result.toolName !== "text-response") return false;
-  const roleData = result.data as { role?: string } | undefined;
-  return roleData?.role === "user" || roleData?.role === "assistant";
+  return result.toolName === "text-response" && isTextResponseData(result.data);
 }
 
 function toTextResponseMessage(result: { uuid: string; message: string; data?: unknown }): ChatMessage {
-  const roleData = result.data as { role: string; text?: string };
-  return { uuid: result.uuid, role: roleData.role as "user" | "assistant", text: roleData.text ?? result.message ?? "" };
+  // isTextResponseEntry で絞った後だけ呼ばれるので data は必ず通るが、型としては絞り直す。
+  const roleData = isTextResponseData(result.data) ? result.data : null;
+  return { uuid: result.uuid, role: roleData?.role ?? "assistant", text: roleData?.text ?? result.message ?? "" };
 }
 
 /** アクティブセッションから最新20件のテキストメッセージを返す */
@@ -1531,7 +1540,8 @@ function askAddSection(): void {
   const slots = sectionInsertSlots(deck.value);
   sectionModalMode.value = "add";
   sectionNameInput.value = "";
-  sectionInsertIndex.value = slots.length ? slots[slots.length - 1].index : 1;
+  const lastSlot = slots[slots.length - 1];
+  sectionInsertIndex.value = lastSlot ? lastSlot.index : 1;
   sectionModalOpen.value = true;
 }
 
@@ -1877,9 +1887,11 @@ async function errorLineFromResponse(res: Response): Promise<string> {
   let serverMsg = "";
   let locked = false;
   try {
-    const data = (await res.json()) as { error?: string; locked?: boolean };
-    if (typeof data.error === "string") serverMsg = data.error;
-    locked = data.locked === true;
+    const data: unknown = await res.json();
+    if (isRecord(data)) {
+      if (typeof data.error === "string") serverMsg = data.error;
+      locked = data.locked === true;
+    }
   } catch {
     /* JSON 本文が無い / パース不能 → status への縮退にフォールバック */
   }
@@ -2019,16 +2031,16 @@ function todayYmd(): string {
  *  由来（サーバーの resolveWdTitle）。解決失敗時は `<WD>_<YYYYMMDD>_<version>.pptx` に縮退。 */
 async function buildDefaultReleaseName(): Promise<string> {
   const wdVal = wdId.value ?? "";
-  let title = "";
+  let wdTitle = "";
   try {
     const res = await apiGet<{ title: string | null }>(fillRoute(API_ROUTES.work.wdTitle, wdVal, ""));
     if (res.ok && res.data.title) {
-      ({ title } = res.data as { title: string });
+      wdTitle = res.data.title;
     }
   } catch {
     /* タイトル解決失敗は WD-ID のみに縮退（機能は継続） */
   }
-  const base = title ? `${wdVal} ${title}` : wdVal;
+  const base = wdTitle ? `${wdVal} ${wdTitle}` : wdVal;
   return `${base}_${todayYmd()}_${version.value}.pptx`;
 }
 
@@ -2231,7 +2243,7 @@ function scanAssetPickerResults(open: boolean): void {
   for (const result of results) {
     if (result.toolName !== "presentAssetPicker" || seenAssetPickerResults.has(result.uuid)) continue;
     seenAssetPickerResults.add(result.uuid);
-    const payload = result.data as { tab?: "icons" | "images"; query?: string } | undefined;
+    const payload = isRecord(result.data) ? result.data : null;
     pending = { tab: payload?.tab === "images" ? "images" : "icons", query: typeof payload?.query === "string" ? payload.query : "" };
   }
   if (open && pending) openAssetPickerModal(pending.tab, pending.query);
@@ -2274,11 +2286,14 @@ async function discoverVersion(wdDir: string): Promise<string | null> {
   return versions[0] ?? null;
 }
 
-async function fetchJson<T>(path: string): Promise<T | null> {
+/** workspace の JSON ファイルを読み、渡した型ガードを通ったものだけ返す。
+ *  読めない・パース不能・形が違う のいずれも null（＝呼び側の「無かった」経路）。 */
+async function fetchJson<T>(path: string, isValid: (value: unknown) => value is T): Promise<T | null> {
   const res = await apiGet<{ kind: string; content: string }>(`${API_ROUTES.files.content}?path=${encodeURIComponent(path)}`);
   if (!res.ok) return null;
   try {
-    return JSON.parse(res.data.content) as T;
+    const parsed: unknown = JSON.parse(res.data.content);
+    return isValid(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -2291,9 +2306,9 @@ async function fetchJson<T>(path: string): Promise<T | null> {
  */
 async function applyDeck(wdDir: string, ver: string, opts?: { preserve?: boolean }): Promise<boolean> {
   const base = `data/work/${wdDir}/${ver}`;
-  const structure = await fetchJson<SlideStructure>(`${base}/.pages/structure.json`);
+  const structure = await fetchJson<SlideStructure>(`${base}/.pages/structure.json`, isSlideStructure);
   if (!structure) return false;
-  const manifest = await fetchJson<SlideManifest>(`${base}/.thumbcache/manifest.json`);
+  const manifest = await fetchJson<SlideManifest>(`${base}/.thumbcache/manifest.json`, isSlideManifest);
   version.value = ver;
   sourcePptx.value = structure.source?.from ?? "";
   sourceKind.value = structure.source?.kind ?? "";

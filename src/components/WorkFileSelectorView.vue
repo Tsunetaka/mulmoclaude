@@ -547,6 +547,7 @@ import { API_ROUTES } from "../config/apiRoutes";
 import { PAGE_ROUTES } from "../router/pageRoutes";
 import { nextIncrement, nextBranch, allowedOps, hasDescendantVersion, type VersionOp } from "../utils/slides/versioning";
 import { NEW_DECK_THEMES } from "../utils/slides/newDeck";
+import { isRecord } from "../utils/types";
 
 interface VersionInfo {
   version: string;
@@ -747,7 +748,7 @@ function openVersionModal(wdInfo: WdInfo, verInfo: VersionInfo): void {
     siblings: wdInfo.versions.map((ver) => ver.version),
   };
   const ops = allowedOps(verInfo.kind);
-  selectedOp.value = ops.includes("increment") ? "increment" : ops[0];
+  selectedOp.value = ops.includes("increment") ? "increment" : (ops[0] ?? "increment");
   modalPhase.value = "choose";
   modalLog.value = [];
   doneVersion.value = null;
@@ -817,8 +818,8 @@ async function runModalSse(url: string, body: Record<string, unknown>): Promise<
     if (!res.ok || !res.body) {
       let msg = `HTTP ${res.status}`;
       try {
-        const errBody = (await res.json()) as { error?: string };
-        if (errBody?.error) msg = errBody.error;
+        const errBody: unknown = await res.json();
+        if (isRecord(errBody) && typeof errBody.error === "string" && errBody.error) msg = errBody.error;
       } catch {
         // レスポンスが JSON でない場合はステータスコードのみ
       }

@@ -223,7 +223,9 @@ const { scanning } = workFileSelector;
 const themes = NEW_DECK_THEMES;
 
 function onThemeChange(event: Event): void {
-  const next = (event.target as HTMLSelectElement).value;
+  const { target } = event;
+  if (!(target instanceof HTMLSelectElement)) return;
+  const next = target.value;
   if (next === UNAPPLIED_THEME) return; // 「（未適用）」は選択不可（適用済みは戻せない）
   slideEditor.triggerApplyTheme(next);
 }
@@ -243,7 +245,8 @@ async function loadTemplates(): Promise<void> {
 onMounted(() => void loadTemplates());
 
 function onTemplateChange(event: Event): void {
-  const sel = event.target as HTMLSelectElement;
+  const sel = event.target;
+  if (!(sel instanceof HTMLSelectElement)) return;
   const tid = sel.value;
   sel.value = TEMPLATE_ACTION_NONE; // アクション型：選択は保持しない
   if (tid === TEMPLATE_ACTION_NONE) return;
@@ -308,7 +311,7 @@ const RIBBON_BUTTONS: RibbonButton[] = [
 const visibleButtons = computed<RibbonButton[]>(() => {
   const current = route.name;
   if (typeof current !== "string") return [];
-  return RIBBON_BUTTONS.filter((btn) => btn.pages.includes(current as PageRouteName));
+  return RIBBON_BUTTONS.filter((btn) => btn.pages.some((page) => page === current));
 });
 </script>
 

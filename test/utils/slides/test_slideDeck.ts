@@ -165,11 +165,13 @@ describe("buildDeck — merge", () => {
   it("survives a missing manifest (null → empty fields, no throw)", () => {
     const deck = buildDeck(makeStructure(), null);
     assert.equal(deck.totalPages, 3);
-    assert.equal(deck.pages[0].title, "");
-    assert.equal(deck.pages[0].thumb, null);
-    assert.equal(deck.pages[0].canvas, null);
+    const [firstPage, secondPage] = deck.pages;
+    assert.ok(firstPage && secondPage, "first two pages present");
+    assert.equal(firstPage.title, "");
+    assert.equal(firstPage.thumb, null);
+    assert.equal(firstPage.canvas, null);
     // lock still comes from structure
-    assert.equal(deck.pages[1].checkedOut, true);
+    assert.equal(secondPage.checkedOut, true);
   });
 
   it("appends orphan pages (not in any section) into a trailing 未分類 section", () => {

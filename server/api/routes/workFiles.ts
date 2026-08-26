@@ -7,10 +7,41 @@ import { log } from "../../system/logger/index.js";
 import { API_ROUTES } from "../../../src/config/apiRoutes.js";
 import { ONE_HOUR_MS, ONE_MINUTE_MS, ONE_SECOND_MS } from "../../utils/time.js";
 import { spawnSystemWorker, type SpawnSystemWorkerResult } from "./agent.js";
+import { requestBodyRecord } from "../../utils/requestBody.js";
+import { getOptionalStringQuery } from "../../utils/request.js";
+import { readJsonOrNull } from "../../utils/files/json.js";
+import { isRecord } from "../../utils/types.js";
 import { versionSegments } from "../../../src/utils/slides/slideDeck.js";
 import { hasDescendantVersion } from "../../../src/utils/slides/versioning.js";
 
 const router = Router();
+
+// ── リクエスト読み出しヘルパー ────────────────────────────────────────────────
+// `req.params` / `req.body` は express の型では「何が入っているか未検証」なので、
+// as で形を主張せず（#2692）ここで narrow する。パスに含まれる :wd / :version は
+// 実際には常に文字列だが、欠けたら空文字にして各ハンドラの
+// isValidWorkWdId / isValidWorkVersion による 400 に載せる。
+
+function wdVersionOf(req: Request): { wd: string; version: string } {
+  const { wd, version } = req.params;
+  return { wd: typeof wd === "string" ? wd : "", version: typeof version === "string" ? version : "" };
+}
+
+function wdOf(req: Request): string {
+  const { wd } = req.params;
+  return typeof wd === "string" ? wd : "";
+}
+
+/** narrow 済み body から文字列フィールドを読む（非文字列・未設定は undefined）。 */
+function bodyString(body: Record<string, unknown>, key: string): string | undefined {
+  const value = body[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** narrow 済み body から真偽フィールドを読む（`true` 以外はすべて false）。 */
+function bodyBoolean(body: Record<string, unknown>, key: string): boolean {
+  return body[key] === true;
+}
 
 const PPTX_PATTERN = /\.pptx$/i;
 const PPTX_VERSION_DATE_PATTERN = /_(\d{8})_v(\d+)\.pptx$/i;
@@ -106,12 +137,12 @@ async function getMtime(filePath: string): Promise<number | null> {
 // PPTX ファイル名からバージョン情報を抽出
 function parsePptxVersion(filename: string): { version: string; versionNum: number; date: string } | null {
   const matchWithDate = filename.match(PPTX_VERSION_DATE_PATTERN);
-  if (matchWithDate) {
+  if (matchWithDate?.[1] && matchWithDate[2]) {
     const verNum = parseInt(matchWithDate[2], 10);
     return { version: `v${String(verNum).padStart(3, "0")}`, versionNum: verNum, date: matchWithDate[1] };
   }
   const matchNoDate = filename.match(PPTX_VERSION_PATTERN);
-  if (matchNoDate) {
+  if (matchNoDate?.[1]) {
     const verNum = parseInt(matchNoDate[1], 10);
     return { version: `v${String(verNum).padStart(3, "0")}`, versionNum: verNum, date: "" };
   }
@@ -121,9 +152,8 @@ function parsePptxVersion(filename: string): { version: string; versionNum: numb
 // manifest.json から dirty フラグを確認
 async function checkDirtyFlag(manifestPath: string): Promise<boolean> {
   try {
-    const raw = await fsp.readFile(manifestPath, "utf-8");
-    const manifest = JSON.parse(raw) as { pages?: Record<string, { dirty?: boolean }> };
-    return manifest.pages ? Object.values(manifest.pages).some((page) => page.dirty === true) : false;
+    const manifest = await readJsonOrNull<{ pages?: Record<string, { dirty?: boolean }> }>(manifestPath);
+    return manifest?.pages ? Object.values(manifest.pages).some((page) => page.dirty === true) : false;
   } catch {
     return false;
   }
@@ -195,12 +225,8 @@ interface StructureLite {
 
 // 編集中サブフォルダ 1 つを VersionInfo に変換する。structure.json が読めなければ null。
 async function readEditingVersion(workDir: string, name: string): Promise<VersionInfo | null> {
-  let struct: StructureLite;
-  try {
-    struct = JSON.parse(await fsp.readFile(path.join(workDir, name, ".pages", "structure.json"), "utf-8")) as StructureLite;
-  } catch {
-    return null;
-  }
+  const struct = await readJsonOrNull<StructureLite>(path.join(workDir, name, ".pages", "structure.json"));
+  if (!struct) return null;
   const locked = struct.pages ? Object.values(struct.pages).some((page) => page.checked_out === true) : false;
   const dirty = await checkDirtyFlag(path.join(workDir, name, ".thumbcache", "manifest.json"));
   const statuses = ["editing"];
@@ -321,6 +347,7 @@ async function processWdFolder(wdName: string, catWslPath: string, catWinPath: s
   if (!match) return null;
 
   const [, wdId, title] = match;
+  if (wdId === undefined || title === undefined) return null;
   const wdWinPath = `${catWinPath}\\${wdName}`;
   const released = await scanReleasedVersions(path.join(catWslPath, wdName));
   const editing = await scanEditingVersions(wdId);
@@ -344,13 +371,8 @@ async function processWdFolder(wdName: string, catWslPath: string, catWinPath: s
 // settings.json から workRootPath を読む
 async function getWorkRootWin(): Promise<string> {
   const settingsPath = path.join(workspacePath, "config/settings.json");
-  try {
-    const raw = await fsp.readFile(settingsPath, "utf-8");
-    const settings = JSON.parse(raw) as { workRootPath?: string };
-    if (settings.workRootPath) return settings.workRootPath;
-  } catch {
-    // use default
-  }
+  const settings = await readJsonOrNull<{ workRootPath?: string }>(settingsPath);
+  if (settings?.workRootPath) return settings.workRootPath;
   return "D:\\SW_Doc\\Materials";
 }
 
@@ -470,11 +492,9 @@ interface AssetCatalogItem {
 // 以外) and id-less rows are dropped. Missing / unreadable index → [].
 async function readAssetIndex(subdir: "icons" | "images", kind: "icon" | "image"): Promise<AssetCatalogItem[]> {
   const indexPath = path.join(workspacePath, "data/work", subdir, "index.json");
-  let parsed: AssetIndexFile;
-  try {
-    parsed = JSON.parse(await fsp.readFile(indexPath, "utf-8")) as AssetIndexFile;
-  } catch (err) {
-    log.warn("workFiles.assetCatalog", "index read failed", { subdir, err });
+  const parsed = await readJsonOrNull<AssetIndexFile>(indexPath);
+  if (!parsed) {
+    log.warn("workFiles.assetCatalog", "index read failed", { subdir, indexPath });
     return [];
   }
   const items: AssetCatalogItem[] = [];
@@ -671,13 +691,13 @@ async function runThumbnails(workDir: string, send: (line: string) => void): Pro
   const withVersions = pptxFiles
     .map((fname) => ({ fname, mat: fname.match(PPTX_VERSION_PATTERN) }))
     .filter((item): item is { fname: string; mat: RegExpMatchArray } => item.mat !== null)
-    .sort((itemA, itemB) => parseInt(itemB.mat[1], 10) - parseInt(itemA.mat[1], 10));
-
-  if (withVersions.length === 0) return;
+    .sort((itemA, itemB) => parseInt(itemB.mat[1] ?? "0", 10) - parseInt(itemA.mat[1] ?? "0", 10));
 
   const [topItem] = withVersions;
+  if (!topItem) return;
+
   const targetPptx = topItem.fname;
-  const vNum = parseInt(topItem.mat[1], 10);
+  const vNum = parseInt(topItem.mat[1] ?? "0", 10);
   const vStr = `v${String(vNum).padStart(3, "0")}`;
   const cacheDir = path.join(workDir, ".thumbcache", vStr);
   await fsp.mkdir(cacheDir, { recursive: true });
@@ -705,7 +725,7 @@ async function runThumbnails(workDir: string, send: (line: string) => void): Pro
 // checkout なしで slide editor に入ったとき（既存 WD を直接開いた場合など）に
 // フロントエンドから自動呼び出しされる。
 router.post(API_ROUTES.work.thumbnails, async (req, res) => {
-  const { wdId } = req.body as { wdId?: string };
+  const wdId = bodyString(requestBodyRecord(req.body), "wdId");
 
   if (!wdId) {
     res.status(400).json({ error: "wdId required" });
@@ -1004,7 +1024,7 @@ async function syncReleasedFromWindows(wdId: string, windowsWdPath: string | nul
 // diffReleasedMirror(WSL を正) で新/更新の pptx のみコピー。D: 側の他版は削除しない（安全側）。
 // WSL 側 ReleasedVersion が空のときは no-op（誤コピー防止の安全弁）。
 async function pushReleasedToWindows(wdId: string, windowsWdPath: string | null): Promise<{ copied: string[] }> {
-  const empty = { copied: [] as string[] };
+  const empty: { copied: string[] } = { copied: [] };
   if (!isValidWorkWdId(wdId) || !windowsWdPath) return empty;
   const wslReleasedDir = path.join(workspacePath, "data/work", wdId, "ReleasedVersion");
   const wslFiles = await statPptxList(wslReleasedDir);
@@ -1174,7 +1194,9 @@ async function isWdRegistered(wdId: string): Promise<boolean> {
 // 未登録（WSL に data/work/<wd>/ が無い）WD では一切ミラー・生成しない（勝手に WD を実体化しない）。
 // 素材フォルダには触れない（D: の素材の取り込みは「登録」と「同期」だけが行う）。
 router.post(API_ROUTES.work.releasedThumbs, async (req, res) => {
-  const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
+  const reqBody = requestBodyRecord(req.body);
+  const wdId = bodyString(reqBody, "wdId");
+  const windowsWdPath = bodyString(reqBody, "windowsWdPath");
 
   if (!wdId || !isValidWorkWdId(wdId) || !windowsWdPath) {
     res.status(400).json({ error: "wdId (valid WD-ID) and windowsWdPath required" });
@@ -1199,7 +1221,9 @@ router.post(API_ROUTES.work.releasedThumbs, async (req, res) => {
 // data/work/<wd>/ を作成（空 WD でも登録できるよう mkdir）し、D: を正に素材・
 // ReleasedVersion をミラーしてリリース済サムネまで生成する。body `{ wdId, windowsWdPath }`。
 router.post(API_ROUTES.work.register, async (req, res) => {
-  const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
+  const reqBody = requestBodyRecord(req.body);
+  const wdId = bodyString(reqBody, "wdId");
+  const windowsWdPath = bodyString(reqBody, "windowsWdPath");
 
   if (!wdId || !isValidWorkWdId(wdId) || !windowsWdPath) {
     res.status(400).json({ error: "wdId (valid WD-ID) and windowsWdPath required" });
@@ -1224,7 +1248,9 @@ router.post(API_ROUTES.work.register, async (req, res) => {
 // .checkedoutpages には一切触れない（役割分離＝リリースは release-to-windows、頁は sw-page-checkin）。
 // 未登録 WD は 409（先に「登録」が必要）。body `{ wdId, windowsWdPath }`。
 router.post(API_ROUTES.work.syncMaterials, async (req, res) => {
-  const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
+  const reqBody = requestBodyRecord(req.body);
+  const wdId = bodyString(reqBody, "wdId");
+  const windowsWdPath = bodyString(reqBody, "windowsWdPath");
 
   if (!wdId || !isValidWorkWdId(wdId) || !windowsWdPath) {
     res.status(400).json({ error: "wdId (valid WD-ID) and windowsWdPath required" });
@@ -1302,9 +1328,8 @@ async function listStampBases(compressedDir: string): Promise<string[]> {
 async function readStampLabels(stampsDir: string): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   try {
-    const raw = await fsp.readFile(path.join(stampsDir, STAMPS_INDEX_FILENAME), "utf-8");
-    const parsed = JSON.parse(raw) as { assets?: StampIndexEntry[] };
-    for (const asset of parsed.assets ?? []) {
+    const parsed = await readJsonOrNull<{ assets?: StampIndexEntry[] }>(path.join(stampsDir, STAMPS_INDEX_FILENAME));
+    for (const asset of parsed?.assets ?? []) {
       if (asset.id && asset.label) map.set(asset.id, asset.label);
     }
   } catch {
@@ -1410,7 +1435,10 @@ router.get(API_ROUTES.work.stamps, async (req, res) => {
 // POST /api/work/stamp-apply — 選択スタンプのペアを WD の Windows 側 Stamps へ
 // 「全消し→コピー」する。body `{ wdId, stampId, windowsWdPath? }`。
 router.post(API_ROUTES.work.stampApply, async (req, res) => {
-  const { wdId, stampId, windowsWdPath } = req.body as { wdId?: string; stampId?: string; windowsWdPath?: string };
+  const reqBody = requestBodyRecord(req.body);
+  const wdId = bodyString(reqBody, "wdId");
+  const stampId = bodyString(reqBody, "stampId");
+  const windowsWdPath = bodyString(reqBody, "windowsWdPath");
   if (!wdId || !isValidWorkWdId(wdId) || !stampId || !isSafeStampBase(stampId)) {
     res.status(400).json({ error: "wdId (valid WD-ID) と stampId が必要です" });
     return;
@@ -1445,7 +1473,7 @@ router.post(API_ROUTES.work.stampApply, async (req, res) => {
 // 編集中バージョンが 1 つでも残っていれば 409 で拒否（編集中は WSL にしか無く失われるため）。
 // Windows(D:) 側には一切触れない（D: が正。再登録でいつでも復元できる）。body `{ wdId }`。
 router.post(API_ROUTES.work.unregister, async (req, res) => {
-  const { wdId } = req.body as { wdId?: string };
+  const wdId = bodyString(requestBodyRecord(req.body), "wdId");
 
   if (!wdId || !isValidWorkWdId(wdId)) {
     res.status(400).json({ error: "wdId (valid WD-ID) required" });
@@ -1472,7 +1500,9 @@ router.post(API_ROUTES.work.unregister, async (req, res) => {
 // POST /api/work/release-to-windows — WSL の ReleasedVersion を Windows(D:) へ push（逆同期）。
 // windowsWdPath 省略時は D: フォルダ名スキャン（resolveWdWindowsPath）で解決する。JSON。
 router.post(API_ROUTES.work.releaseToWindows, async (req, res) => {
-  const { wdId, windowsWdPath } = req.body as { wdId?: string; windowsWdPath?: string };
+  const reqBody = requestBodyRecord(req.body);
+  const wdId = bodyString(reqBody, "wdId");
+  const windowsWdPath = bodyString(reqBody, "windowsWdPath");
   if (!wdId || !isValidWorkWdId(wdId)) {
     res.status(400).json({ error: "wdId (valid WD-ID) required" });
     return;
@@ -1620,7 +1650,7 @@ async function runComScript(args: string[], wdId: string, send: (line: string) =
 // COM 系エンドポイント共通の前処理（パラメータ検証 ＋ SSE ヘッダ）。
 // 不正なら 400 を返して null、OK なら send 関数を返す。
 function beginComStream(req: Request, res: Response): { wd: string; version: string; send: (line: string) => void } | null {
-  const { wd, version } = req.params as { wd: string; version: string };
+  const { wd, version } = wdVersionOf(req);
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return null;
@@ -1645,10 +1675,11 @@ async function resolveSplitSource(wdId: string, requested: string): Promise<{ na
     return { name: requested, note: "" };
   }
   const pptxs = await listFiles(releasedDir, PPTX_PATTERN);
-  if (pptxs.length === 1) {
+  const [onlyPptx] = pptxs;
+  if (pptxs.length === 1 && onlyPptx !== undefined) {
     return {
-      name: pptxs[0],
-      note: `⚠ 要求されたソース「${requested}」が見つからないため、ReleasedVersion 内の唯一の pptx「${pptxs[0]}」を使用します（ブラウザが古い一覧の可能性。再読込を推奨）`,
+      name: onlyPptx,
+      note: `⚠ 要求されたソース「${requested}」が見つからないため、ReleasedVersion 内の唯一の pptx「${onlyPptx}」を使用します（ブラウザが古い一覧の可能性。再読込を推奨）`,
     };
   }
   if (pptxs.length === 0) {
@@ -1659,7 +1690,10 @@ async function resolveSplitSource(wdId: string, requested: string): Promise<{ na
 
 // POST /api/work/:wd/:version/split — ReleasedVersion 由来の新版を COM 分割（SSE）
 router.post(API_ROUTES.work.split, async (req, res) => {
-  const { sourceFilename, sourceKind, sourceFrom } = req.body as { sourceFilename?: string; sourceKind?: string; sourceFrom?: string };
+  const reqBody = requestBodyRecord(req.body);
+  const sourceFilename = bodyString(reqBody, "sourceFilename");
+  const sourceKind = bodyString(reqBody, "sourceKind");
+  const sourceFrom = bodyString(reqBody, "sourceFrom");
   if (!sourceFilename || !isSafePptxFilename(sourceFilename)) {
     res.status(400).json({ error: "valid sourceFilename (*.pptx) required" });
     return;
@@ -1696,13 +1730,16 @@ router.post(API_ROUTES.work.split, async (req, res) => {
 
 // POST /api/work/:wd/:version/combine — .pages を COM 結合して ReleasedVersion へ（SSE）
 router.post(API_ROUTES.work.combine, async (req, res) => {
-  const { outFilename, dedupMasters, force } = req.body as { outFilename?: string; dedupMasters?: boolean; force?: boolean };
+  const reqBody = requestBodyRecord(req.body);
+  const outFilename = bodyString(reqBody, "outFilename");
+  const dedupMasters = bodyBoolean(reqBody, "dedupMasters");
+  const force = bodyBoolean(reqBody, "force");
   if (!outFilename || !isSafePptxFilename(outFilename)) {
     res.status(400).json({ error: "valid outFilename (*.pptx) required" });
     return;
   }
   {
-    const { wd, version } = req.params as { wd: string; version: string };
+    const { wd, version } = wdVersionOf(req);
     if (isValidWorkWdId(wd) && isValidWorkVersion(version) && (await blockIfLockedForBulk(wd, version, res))) return;
   }
   const ctx = beginComStream(req, res);
@@ -1743,7 +1780,7 @@ router.post(API_ROUTES.work.combine, async (req, res) => {
 
 // POST /api/work/:wd/:version/canvas-refresh — .pages を COM でページ単位 canvas 再生成（SSE）
 router.post(API_ROUTES.work.canvasRefresh, async (req, res) => {
-  const { full } = req.body as { full?: boolean };
+  const full = bodyBoolean(requestBodyRecord(req.body), "full");
   const ctx = beginComStream(req, res);
   if (!ctx) return;
   const args = ["canvas", ctx.wd, ctx.version];
@@ -1818,8 +1855,9 @@ async function preflightFork(wdId: string, targetVersion: string, sourceVersion:
 
 // フォーク先 structure.json の version/source を新版へ書き換える。
 async function patchForkStructure(structPath: string, wdId: string, targetVersion: string, sourceVersion: string): Promise<void> {
-  const raw = await fsp.readFile(structPath, "utf-8");
-  const patched = buildForkedStructure(JSON.parse(raw) as Record<string, unknown>, wdId, targetVersion, sourceVersion, jstIsoNow());
+  const parsed = await readJsonOrNull<unknown>(structPath);
+  if (!isRecord(parsed)) throw new Error(`structure.json を読めませんでした: ${structPath}`);
+  const patched = buildForkedStructure(parsed, wdId, targetVersion, sourceVersion, jstIsoNow());
   await fsp.writeFile(structPath, `${JSON.stringify(patched, null, 2)}\n`, "utf-8");
 }
 
@@ -1831,8 +1869,9 @@ async function copyForkThumbcache(srcDir: string, dstDir: string, targetVersion:
   await fsp.cp(srcThumb, dstThumb, { recursive: true });
   const manifestPath = path.join(dstThumb, "manifest.json");
   if (await pathExists(manifestPath)) {
-    const raw = await fsp.readFile(manifestPath, "utf-8");
-    const patched = buildForkedManifest(JSON.parse(raw) as Record<string, unknown>, targetVersion);
+    const parsed = await readJsonOrNull<unknown>(manifestPath);
+    if (!isRecord(parsed)) throw new Error(`manifest.json を読めませんでした: ${manifestPath}`);
+    const patched = buildForkedManifest(parsed, targetVersion);
     await fsp.writeFile(manifestPath, `${JSON.stringify(patched, null, 2)}\n`, "utf-8");
   }
   return true;
@@ -1885,11 +1924,16 @@ async function performFork(wdId: string, targetVersion: string, sourceVersion: s
 /** new_deck.py の --theme に渡せるテーマ ID（純粋定数・フロントの 12 択と一致）。 */
 export const NEW_DECK_THEME_IDS = ["cool", "warm", "vivid", "dark", "plain", "earth", "neutral", "soft", "forest", "premium", "tropical", "marine"] as const;
 
+/** 受け取った値がテーマ ID カタログに載っているか（未知・非文字列は false）。 */
+function isNewDeckThemeId(value: unknown): boolean {
+  return NEW_DECK_THEME_IDS.some((themeId) => themeId === value);
+}
+
 /** new-deck body の純粋検証。問題があればエラーメッセージ、無ければ null。 */
 export function validateNewDeckBody(body: { title?: unknown; theme?: unknown }): string | null {
   if (typeof body.title !== "string" || !body.title.trim()) return "title は必須です";
   if (body.title.length > 200) return "title が長すぎます（200 文字以内）";
-  if (typeof body.theme !== "string" || !(NEW_DECK_THEME_IDS as readonly string[]).includes(body.theme)) {
+  if (!isNewDeckThemeId(body.theme)) {
     return `theme は ${NEW_DECK_THEME_IDS.join("/")} のいずれかを指定してください`;
   }
   return null;
@@ -1959,8 +2003,8 @@ async function runNewDeck(
 
 // POST /api/work/:wd/:version/new-deck — 新規デッキ作成（SSE）
 router.post(API_ROUTES.work.newDeck, async (req, res) => {
-  const { wd, version } = req.params as { wd: string; version: string };
-  const body = req.body as { title?: string; theme?: string; confidential?: boolean; windowsWdPath?: string };
+  const { wd, version } = wdVersionOf(req);
+  const body = requestBodyRecord(req.body);
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return;
@@ -1978,11 +2022,15 @@ router.post(API_ROUTES.work.newDeck, async (req, res) => {
   const ctx = beginComStream(req, res);
   if (!ctx) return;
   // 先に D: 側の WD フォルダ構成（素材・ReleasedVersion）を WSL へミラーしてから v001 を生成する。
-  await mirrorWindowsWdFolder(wd, body.windowsWdPath ?? null, ctx.send);
+  await mirrorWindowsWdFolder(wd, bodyString(body, "windowsWdPath") ?? null, ctx.send);
   await runNewDeck(
     wd,
     version,
-    { title: body.title ?? "", theme: body.theme ?? "cool", ...(body.confidential !== undefined ? { confidential: body.confidential } : {}) },
+    {
+      title: bodyString(body, "title") ?? "",
+      theme: bodyString(body, "theme") ?? "cool",
+      ...(body.confidential !== undefined ? { confidential: bodyBoolean(body, "confidential") } : {}),
+    },
     ctx.send,
   );
   res.end();
@@ -1995,7 +2043,7 @@ router.post(API_ROUTES.work.newDeck, async (req, res) => {
 
 /** theme body の純粋検証。問題があればエラーメッセージ、無ければ null。 */
 export function validateThemeBody(body: { theme?: unknown }): string | null {
-  if (typeof body.theme !== "string" || !(NEW_DECK_THEME_IDS as readonly string[]).includes(body.theme)) {
+  if (!isNewDeckThemeId(body.theme)) {
     return `theme は ${NEW_DECK_THEME_IDS.join("/")} のいずれかを指定してください`;
   }
   return null;
@@ -2039,8 +2087,8 @@ async function runApplyTheme(wdId: string, version: string, theme: string, send:
 
 // POST /api/work/:wd/:version/theme — デッキ全ページにテーマ再適用（SSE）
 router.post(API_ROUTES.work.theme, async (req, res) => {
-  const { wd, version } = req.params as { wd: string; version: string };
-  const body = req.body as { theme?: string };
+  const { wd, version } = wdVersionOf(req);
+  const body = requestBodyRecord(req.body);
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return;
@@ -2059,7 +2107,7 @@ router.post(API_ROUTES.work.theme, async (req, res) => {
   if (await blockIfLockedForBulk(wd, version, res)) return;
   const ctx = beginComStream(req, res);
   if (!ctx) return;
-  await runApplyTheme(wd, version, body.theme ?? "cool", ctx.send);
+  await runApplyTheme(wd, version, bodyString(body, "theme") ?? "cool", ctx.send);
   res.end();
 });
 
@@ -2098,8 +2146,8 @@ router.get(API_ROUTES.work.templates, async (_req, res) => {
 // スライド編集画面の「リリース」ボタンが既定ファイル名を組み立てるために使う。
 // 解決失敗（D: 走査不可・未登録）は 200 + { title: null }（呼び出し側で WD-ID のみに縮退）。
 router.get(API_ROUTES.work.wdTitle, async (req, res) => {
-  const { wd } = req.params as { wd: string };
-  const title = await resolveWdTitle(wd);
+  const wdId = wdOf(req);
+  const title = await resolveWdTitle(wdId);
   res.json({ title });
 });
 
@@ -2108,7 +2156,7 @@ export function validateApplyTemplateBody(body: { template?: unknown; theme?: un
   if (body.template !== undefined && (typeof body.template !== "string" || !TEMPLATE_ID_RE.test(body.template))) {
     return "template は英数・._- のみのテンプレ ID を指定してください";
   }
-  if (body.theme !== undefined && (typeof body.theme !== "string" || !(NEW_DECK_THEME_IDS as readonly string[]).includes(body.theme))) {
+  if (body.theme !== undefined && !isNewDeckThemeId(body.theme)) {
     return `theme は ${NEW_DECK_THEME_IDS.join("/")} のいずれかを指定してください`;
   }
   return null;
@@ -2166,8 +2214,8 @@ async function runApplyTemplate(
 
 // POST /api/work/:wd/:version/apply-template — 全ページをテンプレ土台に作り替え（SSE）
 router.post(API_ROUTES.work.applyTemplate, async (req, res) => {
-  const { wd, version } = req.params as { wd: string; version: string };
-  const body = req.body as { template?: string; theme?: string };
+  const { wd, version } = wdVersionOf(req);
+  const body = requestBodyRecord(req.body);
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return;
@@ -2177,8 +2225,10 @@ router.post(API_ROUTES.work.applyTemplate, async (req, res) => {
     res.status(400).json({ error: bodyError });
     return;
   }
-  if (body.template && !(await listTemplateIds()).includes(body.template)) {
-    res.status(404).json({ error: `テンプレートが見つかりません: ${body.template}` });
+  const template = bodyString(body, "template");
+  const theme = bodyString(body, "theme");
+  if (template && !(await listTemplateIds()).includes(template)) {
+    res.status(404).json({ error: `テンプレートが見つかりません: ${template}` });
     return;
   }
   // preflight: structure.json が無ければ 404（SSE flush 前に JSON で返す）
@@ -2190,14 +2240,14 @@ router.post(API_ROUTES.work.applyTemplate, async (req, res) => {
   if (await blockIfLockedForBulk(wd, version, res)) return;
   const ctx = beginComStream(req, res);
   if (!ctx) return;
-  await runApplyTemplate(wd, version, body.template, body.theme, ctx.send);
+  await runApplyTemplate(wd, version, template, theme, ctx.send);
   res.end();
 });
 
 // POST /api/work/:wd/:version/fork-from — 編集中由来の新版を .pages コピーで作成（SSE）
 router.post(API_ROUTES.work.forkFrom, async (req, res) => {
-  const { wd, version } = req.params as { wd: string; version: string };
-  const { sourceVersion } = req.body as { sourceVersion?: string };
+  const { wd, version } = wdVersionOf(req);
+  const sourceVersion = bodyString(requestBodyRecord(req.body), "sourceVersion");
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return;
@@ -2236,9 +2286,8 @@ router.post(API_ROUTES.work.forkFrom, async (req, res) => {
 // structure.json が無い／壊れている場合は「ロック無し」とみなす（後始末は許可）。
 async function hasLockedPages(versionDir: string): Promise<boolean> {
   try {
-    const raw = await fsp.readFile(path.join(versionDir, ".pages", "structure.json"), "utf-8");
-    const struct = JSON.parse(raw) as { pages?: Record<string, { checked_out?: boolean }> };
-    return struct.pages ? Object.values(struct.pages).some((page) => page.checked_out === true) : false;
+    const struct = await readJsonOrNull<{ pages?: Record<string, { checked_out?: boolean }> }>(path.join(versionDir, ".pages", "structure.json"));
+    return struct?.pages ? Object.values(struct.pages).some((page) => page.checked_out === true) : false;
   } catch {
     return false;
   }
@@ -2299,7 +2348,7 @@ async function deleteVersionSubfolder(wdId: string, version: string, force = fal
 
 // DELETE /api/work/:wd/:version — 編集中バージョンの WSL サブフォルダ限定削除（N1・D: 不変）
 router.delete(API_ROUTES.work.version, async (req, res) => {
-  const { wd: wdId, version } = req.params as { wd: string; version: string };
+  const { wd: wdId, version } = wdVersionOf(req);
 
   if (!isValidWorkWdId(wdId) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
@@ -2307,8 +2356,8 @@ router.delete(API_ROUTES.work.version, async (req, res) => {
   }
 
   // ?force=1（UI の確認ダイアログ経由）でロック中でも強行削除する。
-  const query = (req.query ?? {}) as { force?: string };
-  const force = query.force === "1" || query.force === "true";
+  const forceParam = getOptionalStringQuery(req, "force");
+  const force = forceParam === "1" || forceParam === "true";
   try {
     const result = await deleteVersionSubfolder(wdId, version, force);
     if (!result.ok) {
@@ -2348,8 +2397,8 @@ interface PageOpCtx {
 // structure.json の pages マップを読む（ページ ID → {file, checked_out}）。無ければ null。
 async function readStructurePagesMap(versionDir: string): Promise<Record<string, StructPageEntry> | null> {
   try {
-    const raw = await fsp.readFile(path.join(versionDir, ".pages", "structure.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { pages?: Record<string, StructPageEntry> };
+    const parsed = await readJsonOrNull<{ pages?: Record<string, StructPageEntry> }>(path.join(versionDir, ".pages", "structure.json"));
+    if (!parsed) return null; // 読めない＝「バージョンに structure.json が無い」（呼び側で 404）
     return parsed.pages ?? {};
   } catch {
     return null;
@@ -2412,7 +2461,7 @@ async function blockIfLockedForBulk(wdId: string, version: string, res: Response
 
 // リクエストからページ操作コンテキストを組み立てる。検証失敗時は res にエラーを返して null。
 async function buildPageOpCtx(req: Request, res: Response): Promise<PageOpCtx | null> {
-  const { wd, version } = req.params as { wd: string; version: string };
+  const { wd, version } = wdVersionOf(req);
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return null;
@@ -2430,7 +2479,7 @@ async function buildPageOpCtx(req: Request, res: Response): Promise<PageOpCtx | 
 
 // POST /api/work/:wd/:version/page-checkout — 選択ページを Windows へ出す（SSE）
 router.post(API_ROUTES.work.pageCheckout, async (req, res) => {
-  const pageIds = validateRequiredPageIds((req.body as { pageIds?: unknown }).pageIds);
+  const pageIds = validateRequiredPageIds(requestBodyRecord(req.body).pageIds);
   if (!pageIds) {
     res.status(400).json({ error: "pageIds（p-XXXXXXXX の配列）が必要です" });
     return;
@@ -2480,7 +2529,7 @@ async function pushCheckedoutToWindows(ctx: PageOpCtx, files: string[]): Promise
 
 // POST /api/work/:wd/:version/page-checkin — チェックアウト中ページを戻す/破棄する（SSE）
 router.post(API_ROUTES.work.pageCheckin, async (req, res) => {
-  const body = req.body as { apply?: unknown; discard?: unknown };
+  const body = requestBodyRecord(req.body);
   const apply = validateOptionalPageIds(body.apply);
   const discard = validateOptionalPageIds(body.discard);
   if (apply === null || discard === null) {
@@ -2496,7 +2545,7 @@ router.post(API_ROUTES.work.pageCheckin, async (req, res) => {
 // checkin 本体：apply 群（pull→存在検証→取り込み→掃除）と discard 群（ロック解除のみ）。
 async function runPageCheckin(ctx: PageOpCtx, apply: string[], discard: string[]): Promise<void> {
   // apply/discard 両省略時は、現在ロック中の全ページを apply とみなす。
-  const applyIds = apply.length === 0 && discard.length === 0 ? Object.keys(ctx.pages).filter((pageId) => ctx.pages[pageId].checked_out) : apply;
+  const applyIds = apply.length === 0 && discard.length === 0 ? Object.keys(ctx.pages).filter((pageId) => ctx.pages[pageId]?.checked_out) : apply;
   const winPath = await resolveWdWindowsPath(ctx.wdId);
   try {
     const appliedAny = await checkinApplyGroup(ctx, applyIds, winPath);
@@ -2590,8 +2639,8 @@ export interface PageMoveBody {
 }
 // page-move body の検証。不正なら null。
 export function validatePageMoveBody(body: unknown): PageMoveBody | null {
-  if (typeof body !== "object" || body === null) return null;
-  const { pageId, toSection, toIndex } = body as Record<string, unknown>;
+  if (!isRecord(body)) return null;
+  const { pageId, toSection, toIndex } = body;
   if (typeof pageId !== "string" || !PAGE_ID_RE.test(pageId)) return null;
   if (!isValidSectionName(toSection)) return null;
   if (typeof toIndex !== "number" || !Number.isInteger(toIndex) || toIndex < 0) return null;
@@ -2605,12 +2654,12 @@ export interface PageAddBody {
 }
 // page-add body の検証。不正なら null。
 export function validatePageAddBody(body: unknown): PageAddBody | null {
-  if (typeof body !== "object" || body === null) return null;
-  const { section, toIndex, template } = body as Record<string, unknown>;
+  if (!isRecord(body)) return null;
+  const { section, toIndex, template } = body;
   if (!isValidSectionName(section)) return null;
   if (typeof toIndex !== "number" || !Number.isInteger(toIndex) || toIndex < 0) return null;
   if (template !== undefined && (typeof template !== "string" || template.length > 200)) return null;
-  return { section, toIndex, ...(template !== undefined ? { template: template as string } : {}) };
+  return { section, toIndex, ...(typeof template === "string" ? { template } : {}) };
 }
 
 export interface SetTitleBody {
@@ -2619,8 +2668,8 @@ export interface SetTitleBody {
 }
 // page-set-title body の検証。不正なら null。空タイトル（クリア）は許可・改行不可・500 文字以内。
 export function validateSetTitleBody(body: unknown): SetTitleBody | null {
-  if (typeof body !== "object" || body === null) return null;
-  const { pageId, title } = body as Record<string, unknown>;
+  if (!isRecord(body)) return null;
+  const { pageId, title } = body;
   if (typeof pageId !== "string" || !PAGE_ID_RE.test(pageId)) return null;
   if (typeof title !== "string" || title.length > 500 || /[\r\n]/.test(title)) return null;
   return { pageId, title };
@@ -2661,8 +2710,8 @@ export interface SetTextboxBody {
 }
 // page-set-textbox body の検証。不正なら null。空テキスト（クリア）は許可・改行可・5000 文字以内。
 export function validateSetTextboxBody(body: unknown): SetTextboxBody | null {
-  if (typeof body !== "object" || body === null) return null;
-  const { pageId, shapeId, text } = body as Record<string, unknown>;
+  if (!isRecord(body)) return null;
+  const { pageId, shapeId, text } = body;
   if (typeof pageId !== "string" || !PAGE_ID_RE.test(pageId)) return null;
   if (typeof shapeId !== "number" || !Number.isInteger(shapeId) || shapeId < 0) return null;
   if (typeof text !== "string" || text.length > TEXTBOX_TEXT_MAX) return null;
@@ -2680,16 +2729,14 @@ export function parseTextboxesOutput(out: string): TextboxesResult {
   const line = out.split(/\r?\n/).find((entry) => entry.startsWith(marker));
   if (!line) return { editable: false, boxes: [] };
   try {
-    const parsed = JSON.parse(line.slice(marker.length)) as {
-      editable?: unknown;
-      boxes?: unknown;
-    };
+    const parsed: unknown = JSON.parse(line.slice(marker.length));
+    if (!isRecord(parsed)) return { editable: false, boxes: [] };
     const editable = parsed.editable === true;
     const rawBoxes = Array.isArray(parsed.boxes) ? parsed.boxes : [];
     const boxes: TextboxInfo[] = [];
     for (const raw of rawBoxes) {
-      if (typeof raw !== "object" || raw === null) continue;
-      const { id, rect, text } = raw as Record<string, unknown>;
+      if (!isRecord(raw)) continue;
+      const { id, rect, text } = raw;
       if (typeof id !== "number" || !Number.isInteger(id)) continue;
       if (!isValidRect(rect)) continue;
       if (typeof text !== "string") continue;
@@ -2710,8 +2757,8 @@ export interface SectionAddBody {
   toIndex: number;
 }
 export function validateSectionAddBody(body: unknown): SectionAddBody | null {
-  if (typeof body !== "object" || body === null) return null;
-  const { name, toIndex } = body as Record<string, unknown>;
+  if (!isRecord(body)) return null;
+  const { name, toIndex } = body;
   if (!isValidSectionName(name)) return null;
   if (typeof toIndex !== "number" || !Number.isInteger(toIndex) || toIndex < 1) return null;
   return { name, toIndex };
@@ -2722,8 +2769,8 @@ export interface SectionMoveBody {
   direction: "up" | "down";
 }
 export function validateSectionMoveBody(body: unknown): SectionMoveBody | null {
-  if (typeof body !== "object" || body === null) return null;
-  const { name, direction } = body as Record<string, unknown>;
+  if (!isRecord(body)) return null;
+  const { name, direction } = body;
   if (!isValidSectionName(name)) return null;
   if (direction !== "up" && direction !== "down") return null;
   return { name, direction };
@@ -2733,8 +2780,8 @@ export interface SectionDeleteBody {
   name: string;
 }
 export function validateSectionDeleteBody(body: unknown): SectionDeleteBody | null {
-  if (typeof body !== "object" || body === null) return null;
-  const { name } = body as Record<string, unknown>;
+  if (!isRecord(body)) return null;
+  const { name } = body;
   if (!isValidSectionName(name)) return null;
   return { name };
 }
@@ -2744,8 +2791,8 @@ export interface SectionRenameBody {
   toName: string;
 }
 export function validateSectionRenameBody(body: unknown): SectionRenameBody | null {
-  if (typeof body !== "object" || body === null) return null;
-  const { name, toName } = body as Record<string, unknown>;
+  if (!isRecord(body)) return null;
+  const { name, toName } = body;
   if (!isValidSectionName(name) || !isValidSectionName(toName)) return null;
   return { name, toName };
 }
@@ -2780,7 +2827,7 @@ async function runPageOpsCapture(args: string[]): Promise<{ code: number; out: s
 
 // wd/version 検証 → ロックゲート（409）→ SSE 開始。失敗時は res へ返して null。
 async function beginStructEdit(req: Request, res: Response): Promise<StructEditCtx | null> {
-  const { wd, version } = req.params as { wd: string; version: string };
+  const { wd, version } = wdVersionOf(req);
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return null;
@@ -2805,7 +2852,7 @@ async function finishStructEdit(ctx: StructEditCtx, code: number, label: string)
 
 // POST /api/work/:wd/:version/page-delete — 頁を削除する（SSE）
 router.post(API_ROUTES.work.pageDelete, async (req, res) => {
-  const pageIds = validateRequiredPageIds((req.body as { pageIds?: unknown }).pageIds);
+  const pageIds = validateRequiredPageIds(requestBodyRecord(req.body).pageIds);
   if (!pageIds) {
     res.status(400).json({ error: "pageIds（p-XXXXXXXX の配列）が必要です" });
     return;
@@ -2857,8 +2904,8 @@ router.post(API_ROUTES.work.pageAdd, async (req, res) => {
 // GET /api/work/:wd/:version/page-title?pageId=... — 現在頁のタイトルを返す（編集 UI 初期値）
 // 読み取り専用（get-title・固定/ロック判定なし）。SSE ではなく stdout を捕捉して JSON で返す。
 router.get(API_ROUTES.work.pageTitle, async (req, res) => {
-  const { wd, version } = req.params as { wd: string; version: string };
-  const { pageId } = req.query as { pageId?: unknown };
+  const { wd, version } = wdVersionOf(req);
+  const pageId = getOptionalStringQuery(req, "pageId");
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return;
@@ -2895,8 +2942,8 @@ router.post(API_ROUTES.work.pageSetTitle, async (req, res) => {
 // 読み取り専用（get-textboxes）。SSE ではなく stdout を捕捉して JSON で返す。編集対象外の頁は
 // editable:false・boxes:[] を返す（表紙・Thank You・未分類・チェックアウト中）。
 router.get(API_ROUTES.work.pageTextboxes, async (req, res) => {
-  const { wd, version } = req.params as { wd: string; version: string };
-  const { pageId } = req.query as { pageId?: unknown };
+  const { wd, version } = wdVersionOf(req);
+  const pageId = getOptionalStringQuery(req, "pageId");
   if (!isValidWorkWdId(wd) || !isValidWorkVersion(version)) {
     res.status(400).json({ error: "invalid wd or version" });
     return;
@@ -3031,8 +3078,10 @@ export function isAllowedIndexCategory(category: unknown, categories: { name: st
  *  （記入を飛ばして空欄の CSV を書くより、余分に 1 回走らせるほうが安全）。 */
 export function parsePendingCount(lines: string[]): number | null {
   for (let index = lines.length - 1; index >= 0; index--) {
-    const matched = /^PENDING:\s*(\d+)$/.exec(lines[index].trim());
-    if (matched) return parseInt(matched[1], 10);
+    const line = lines[index];
+    if (line === undefined) continue;
+    const matched = /^PENDING:\s*(\d+)$/.exec(line.trim());
+    if (matched?.[1]) return parseInt(matched[1], 10);
   }
   return null;
 }
@@ -3222,7 +3271,7 @@ export async function runBuildIndex(ctx: BuildIndexContext, send: (line: string)
 
 // POST /api/work/build-index — カテゴリの教材索引 CSV を生成する（SSE）
 router.post(API_ROUTES.work.buildIndex, async (req, res) => {
-  const { category } = req.body as { category?: unknown };
+  const { category } = requestBodyRecord(req.body);
   const workRootWin = await getWorkRootWin();
   const categories = await scanRoot(workRootWin);
   if (!isAllowedIndexCategory(category, categories)) {

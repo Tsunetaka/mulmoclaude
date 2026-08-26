@@ -12,6 +12,8 @@
 // The merge + version discovery are pure so they can be unit-tested
 // without a browser.
 
+import { isRecord } from "../types";
+
 // ── structure.json (`.pages/`) — source of truth ─────────────────────────────
 
 export interface StructurePage {
@@ -58,6 +60,18 @@ export interface SlideManifest {
   generated_at: string;
   structure_rev?: string;
   pages: Record<string, ManifestPage>;
+}
+
+/** structure.json として読めるか（top-level の形だけを見る浅い判定）。buildDeck が
+ *  必要とするのは `sections` 配列と `pages` オブジェクトだけで、欠けた頁フィールドは
+ *  そこで既定値に落ちる。壊れた JSON を弾いて「読めなかった」に縮退させるのが目的。 */
+export function isSlideStructure(value: unknown): value is SlideStructure {
+  return isRecord(value) && Array.isArray(value.sections) && isRecord(value.pages);
+}
+
+/** manifest.json として読めるか（表示キャッシュなので `pages` があれば足りる）。 */
+export function isSlideManifest(value: unknown): value is SlideManifest {
+  return isRecord(value) && isRecord(value.pages);
 }
 
 // ── merged view model ─────────────────────────────────────────────────────────
@@ -122,8 +136,9 @@ export function isEditableSection(sectionIndex: number, sectionName: string): bo
  */
 export function canEditTitle(deck: DeckModel, pageId: string): boolean {
   const sectionIndex = deck.sections.findIndex((sec) => sec.pages.some((page) => page.id === pageId));
-  if (sectionIndex < 0) return false;
-  return isEditableSection(sectionIndex, deck.sections[sectionIndex].name);
+  const section = deck.sections[sectionIndex];
+  if (!section) return false;
+  return isEditableSection(sectionIndex, section.name);
 }
 
 /**
@@ -133,9 +148,10 @@ export function canEditTitle(deck: DeckModel, pageId: string): boolean {
  */
 export function canEditTextboxes(deck: DeckModel, pageId: string): boolean {
   const sectionIndex = deck.sections.findIndex((sec) => sec.pages.some((page) => page.id === pageId));
-  if (sectionIndex < 0) return false;
-  if (!isEditableSection(sectionIndex, deck.sections[sectionIndex].name)) return false;
-  const page = deck.sections[sectionIndex].pages.find((entry) => entry.id === pageId);
+  const section = deck.sections[sectionIndex];
+  if (!section) return false;
+  if (!isEditableSection(sectionIndex, section.name)) return false;
+  const page = section.pages.find((entry) => entry.id === pageId);
   return page ? !page.checkedOut : false;
 }
 
@@ -169,6 +185,7 @@ export function computeMoveTarget(deck: DeckModel, pageId: string, direction: -1
   // 隣接頁と入れ替える＝移動対象は隣接頁のスロット（セクション＋セクション内位置）へ。
   // toIndex は隣接頁の元のセクション内位置（移動対象を取り除いた後の挿入位置と一致する）。
   const neighbor = editable[dest];
+  if (!neighbor) return null;
   return { toSection: neighbor.sec, toIndex: neighbor.localIndex };
 }
 
@@ -232,16 +249,13 @@ export interface SectionInsertSlot {
 export function sectionInsertSlots(deck: DeckModel): SectionInsertSlot[] {
   const { sections } = deck;
   const count = sections.length;
-  let upper = count;
-  for (let i = 1; i < count; i++) {
-    if (isFixedSection(i, sections[i].name)) {
-      upper = i;
-      break;
-    }
-  }
+  const firstFixed = sections.findIndex((sec, i) => i >= 1 && isFixedSection(i, sec.name));
+  const upper = firstFixed < 0 ? count : firstFixed;
   const slots: SectionInsertSlot[] = [];
   for (let index = 1; index <= upper; index++) {
-    slots.push({ index, afterName: sections[index - 1].name, beforeName: sections[index]?.name ?? null });
+    const after = sections[index - 1];
+    if (!after) continue;
+    slots.push({ index, afterName: after.name, beforeName: sections[index]?.name ?? null });
   }
   return slots;
 }
@@ -254,9 +268,9 @@ const BRANCH_SEGMENT = /^\d+$/;
 
 /** True when `name` is a version folder name (`v001`, `v002-001`, …). */
 export function isVersionName(name: string): boolean {
-  const segments = name.split("-");
-  if (!BASE_SEGMENT.test(segments[0])) return false;
-  return segments.slice(1).every((seg) => BRANCH_SEGMENT.test(seg));
+  const [base, ...branches] = name.split("-");
+  if (base === undefined || !BASE_SEGMENT.test(base)) return false;
+  return branches.every((seg) => BRANCH_SEGMENT.test(seg));
 }
 
 /** Numeric segment array for a version name (`v002-001` → [2, 1]). */

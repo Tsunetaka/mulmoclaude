@@ -173,6 +173,7 @@ describe("POST /api/work/released-thumbs — orchestration", () => {
     const thumbs = state.body?.thumbs ?? [];
     assert.equal(thumbs.length, 1);
     const [entry] = thumbs;
+    assert.ok(entry, "one thumb entry");
     assert.equal(entry.version, "v001");
     assert.equal(entry.generated, false, "fresh thumb is not regenerated");
     assert.equal(entry.error, undefined);

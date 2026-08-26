@@ -39,7 +39,8 @@ function maxAtDepth(siblings: string[], prefix: number[], depth: number, pos: nu
     if (!isVersionName(name)) continue;
     const segs = versionSegments(name);
     if (segs.length !== depth || !sharesPrefix(segs, prefix)) continue;
-    if (segs[pos] > max) max = segs[pos];
+    const value = segs[pos] ?? 0;
+    if (value > max) max = value;
   }
   return max;
 }
@@ -54,7 +55,7 @@ export function nextIncrement(base: string, siblings: string[]): string {
   const prefix = segs.slice(0, -1);
   const lastPos = segs.length - 1;
   const siblingMax = maxAtDepth(siblings, prefix, segs.length, lastPos);
-  const max = Math.max(siblingMax, segs[lastPos]);
+  const max = Math.max(siblingMax, segs[lastPos] ?? 0);
   return formatVersion([...prefix, max + 1]);
 }
 
@@ -100,8 +101,8 @@ const RELEASED_NO_DATE = /_v(\d+)\.pptx$/i;
 /** Extract the version name (`v013`) from a released pptx filename, or null. */
 export function releasedVersionFromFilename(filename: string): string | null {
   const withDate = filename.match(RELEASED_WITH_DATE);
-  if (withDate) return `v${String(parseInt(withDate[2], 10)).padStart(3, "0")}`;
+  if (withDate?.[2]) return `v${String(parseInt(withDate[2], 10)).padStart(3, "0")}`;
   const noDate = filename.match(RELEASED_NO_DATE);
-  if (noDate) return `v${String(parseInt(noDate[1], 10)).padStart(3, "0")}`;
+  if (noDate?.[1]) return `v${String(parseInt(noDate[1], 10)).padStart(3, "0")}`;
   return null;
 }
