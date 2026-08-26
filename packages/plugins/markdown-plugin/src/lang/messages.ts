@@ -8,10 +8,12 @@ export interface Messages {
   loadFailed: string;
   refreshFailed: string;
   noContent: string;
+  reload: string;
   pdf: string;
   pdfFailedShort: string;
   editSource: string;
   livePreview: string;
+  autoSave: string;
   saving: string;
   applyChanges: string;
   cancel: string;
@@ -28,4 +30,6 @@ export interface Messages {
   marpSplitEditorLabel: string;
   mermaidLoadFailed: string;
   mermaidRenderFailed: string;
+  bookmarkRailLabel: string;
+  bookmarkJump: string;
 }

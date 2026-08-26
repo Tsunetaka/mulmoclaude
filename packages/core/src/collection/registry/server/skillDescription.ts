@@ -31,41 +31,45 @@ const isOnlyTrailingComment = (rest: string): boolean => {
 const DOUBLE_QUOTE_ESCAPES: Record<string, string> = { n: "\n", t: "\t" };
 const unescapeDoubleQuote = (next: string): string => DOUBLE_QUOTE_ESCAPES[next] ?? next;
 
-// Double-quoted scalar: walk to the closing unescaped quote. Returns null for a
-// malformed scalar (no closing quote, or trailing non-comment text) so the caller
-// degrades to "" — matching the host's js-yaml behavior.
-function parseDoubleQuoted(value: string): string | null {
+// The text a two-character escape pair at `index` stands for, or null when the
+// pair isn't an escape — which makes `index` an ordinary character (possibly the
+// closing quote). Both YAML quoted forms differ only in this one rule.
+type EscapeReader = (value: string, index: number) => string | null;
+
+// Walk a quoted scalar from just past its opening quote to the closing one.
+// Returns null for a malformed scalar (no closing quote, or trailing non-comment
+// text) so the caller degrades to "" — matching the host's js-yaml behavior.
+function scanQuotedScalar(value: string, quote: string, readEscape: EscapeReader): string | null {
   const out: string[] = [];
+  // `charAt` (not `value[i]`) so the scanner reads a plain `string`: every
+  // index below is in range, and an out-of-range read would be "" either way.
   for (let i = 1; i < value.length; i += 1) {
-    const char = value[i];
-    if (char === "\\" && i + 1 < value.length) {
-      out.push(unescapeDoubleQuote(value[i + 1]));
+    const escaped = readEscape(value, i);
+    if (escaped !== null) {
+      out.push(escaped);
       i += 1;
       continue;
     }
-    if (char === '"') return isOnlyTrailingComment(value.slice(i + 1)) ? out.join("") : null;
+    const char = value.charAt(i);
+    if (char === quote) return isOnlyTrailingComment(value.slice(i + 1)) ? out.join("") : null;
     out.push(char);
   }
   return null; // unterminated
 }
 
-// Single-quoted scalar: the only escape is a doubled quote (''). Same
-// malformed-rejection contract as parseDoubleQuoted.
+// A trailing backslash has nothing to escape, so it stays a literal backslash.
+const readDoubleQuoteEscape: EscapeReader = (value, index) =>
+  value.charAt(index) === "\\" && index + 1 < value.length ? unescapeDoubleQuote(value.charAt(index + 1)) : null;
+
+// The only escape in a single-quoted scalar is a doubled quote ('').
+const readSingleQuoteEscape: EscapeReader = (value, index) => (value.charAt(index) === "'" && value[index + 1] === "'" ? "'" : null);
+
+function parseDoubleQuoted(value: string): string | null {
+  return scanQuotedScalar(value, '"', readDoubleQuoteEscape);
+}
+
 function parseSingleQuoted(value: string): string | null {
-  const out: string[] = [];
-  for (let i = 1; i < value.length; i += 1) {
-    const char = value[i];
-    if (char === "'") {
-      if (value[i + 1] === "'") {
-        out.push("'");
-        i += 1;
-        continue;
-      }
-      return isOnlyTrailingComment(value.slice(i + 1)) ? out.join("") : null;
-    }
-    out.push(char);
-  }
-  return null; // unterminated
+  return scanQuotedScalar(value, "'", readSingleQuoteEscape);
 }
 
 // Plain scalar: a "#" preceded by whitespace (or at the start) begins a YAML
@@ -83,15 +87,18 @@ function stripPlainComment(value: string): string {
 export function parseSkillDescription(raw: string): string {
   const lines = raw.split(/\r?\n/);
   if (lines[0]?.trim() !== FENCE) return "";
-  for (let i = 1; i < lines.length; i += 1) {
-    const line = lines[i];
+  for (const line of lines.slice(1)) {
     if (line.trim() === FENCE) return ""; // end of envelope, key not found
     if (!line.startsWith(KEY)) continue;
-    const value = line.slice(KEY.length).trim();
-    if (value === "" || BLOCK_SCALAR_INDICATORS.has(value)) return "";
-    if (value.startsWith('"')) return parseDoubleQuoted(value) ?? "";
-    if (value.startsWith("'")) return parseSingleQuoted(value) ?? "";
-    return stripPlainComment(value).trim();
+    return resolveScalar(line.slice(KEY.length).trim());
   }
   return "";
+}
+
+/** Resolve the raw text after `description:` to its scalar value. */
+function resolveScalar(value: string): string {
+  if (value === "" || BLOCK_SCALAR_INDICATORS.has(value)) return "";
+  if (value.startsWith('"')) return parseDoubleQuoted(value) ?? "";
+  if (value.startsWith("'")) return parseSingleQuoted(value) ?? "";
+  return stripPlainComment(value).trim();
 }

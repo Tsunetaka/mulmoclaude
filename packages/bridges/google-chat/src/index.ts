@@ -20,7 +20,7 @@ import crypto from "crypto";
 import express, { type Request, type Response } from "express";
 import { configureTrustProxy, createWebhookRateLimit } from "@mulmobridge/webhook-runtime";
 import { createBridgeClient } from "@mulmobridge/client";
-import { isRecord } from "@mulmoclaude/common";
+import { isRecord, splitJwtSegments } from "@mulmoclaude/common";
 
 const TRANSPORT_ID = "google-chat";
 const PORT = Number(process.env.GOOGLE_CHAT_BRIDGE_PORT) || 3005;
@@ -99,17 +99,18 @@ interface JwtParts {
 }
 
 function parseJwtParts(token: string): JwtParts | null {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
+  const segments = splitJwtSegments(token);
+  if (segments === null) return null;
+  const { headerSegment, payloadSegment, signatureSegment } = segments;
   try {
-    const header: unknown = JSON.parse(base64UrlDecode(parts[0]).toString());
-    const payload: unknown = JSON.parse(base64UrlDecode(parts[1]).toString());
+    const header: unknown = JSON.parse(base64UrlDecode(headerSegment).toString());
+    const payload: unknown = JSON.parse(base64UrlDecode(payloadSegment).toString());
     if (!isRecord(header) || !isRecord(payload)) return null;
     return {
       header,
       payload,
-      signatureInput: `${parts[0]}.${parts[1]}`,
-      signature: base64UrlDecode(parts[2]),
+      signatureInput: `${headerSegment}.${payloadSegment}`,
+      signature: base64UrlDecode(signatureSegment),
     };
   } catch {
     return null;

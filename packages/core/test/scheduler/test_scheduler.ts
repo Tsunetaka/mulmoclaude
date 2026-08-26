@@ -51,6 +51,34 @@ test("tick runs due interval tasks", async () => {
   assert.deepEqual(ran, ["a"]);
 });
 
+// #2937: the interval check counted from UTC midnight, so a 168h task was due
+// at 00:00 every single day. It must fire on its own epoch-anchored window.
+test("a 168h task fires on its weekly window, not every midnight", async () => {
+  const ran: string[] = [];
+  const register = (manager: ITaskManager) =>
+    manager.registerTask({
+      id: "weekly",
+      schedule: { type: SCHEDULE_TYPES.interval, intervalMs: 168 * 60 * 60 * 1000 },
+      run: async () => {
+        ran.push("weekly");
+      },
+    });
+
+  // 2026-08-06T00:00Z is a multiple of 168h from the epoch; the days around it
+  // are not, and used to fire all the same.
+  const onWindow = createTaskManager({ tickMs: 60_000, now: () => new Date(Date.UTC(2026, 7, 6, 0, 0, 0)) });
+  register(onWindow);
+  await onWindow.tick();
+  assert.deepEqual(ran, ["weekly"]);
+
+  for (const day of [5, 7, 8]) {
+    const offWindow = createTaskManager({ tickMs: 60_000, now: () => new Date(Date.UTC(2026, 7, day, 0, 0, 0)) });
+    register(offWindow);
+    await offWindow.tick();
+  }
+  assert.deepEqual(ran, ["weekly"], "the weekly task fired on a day that is not its window");
+});
+
 test("dependsOn enforces ordering within a tick; dependent skipped if dep fails", async () => {
   const order: string[] = [];
   const manager = createTaskManager({ tickMs: 60_000, now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, 0)) });
@@ -249,9 +277,94 @@ test("initScheduler registers system tasks with the task-manager and exposes the
     assert.deepEqual(registered, ["system:journal"]);
     const states = getSchedulerTasks();
     assert.equal(states.length, 1);
-    assert.equal(states[0].id, "system:journal");
+    const [journalState] = states;
+    assert.ok(journalState);
+    assert.equal(journalState.id, "system:journal");
     // state.json directory was created under the injected workspace root.
     assert.ok(existsSync(path.join(root, "config", "scheduler")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The tick path refuses to fire an unusable schedule, but catch-up runs FIRST
+// and enumerates windows from the persisted lastRunAt. For an interval of 0
+// those windows come back NaN, `listMissedWindows` fills to its cap, and the
+// first `new Date(NaN)` throws — so one bad task aborted startup for all of
+// them. Reported by Codex on #2955.
+/** Register `tasks` and hand back the run thunk the adapter gave the manager,
+ *  plus the ids it registered. */
+async function initAndCapture(tasks: SystemTaskDef[]): Promise<{ run: TaskDefinition["run"] | undefined; registered: string[] }> {
+  const registered: string[] = [];
+  const captured: { run?: TaskDefinition["run"] } = {};
+  const fakeTm = stubTm({
+    registerTask: (def: TaskDefinition) => {
+      registered.push(def.id);
+      captured.run = def.run;
+    },
+  });
+  await initScheduler(fakeTm, tasks);
+  return { run: captured.run, registered };
+}
+
+/** Seed `state.json` so catch-up has a `lastRunAt` to enumerate windows from. */
+async function seedState(root: string, state: Record<string, unknown>): Promise<void> {
+  await mkdir(path.join(root, "config", "scheduler"), { recursive: true });
+  await writeFile(path.join(root, "config", "scheduler", "state.json"), JSON.stringify(state));
+}
+
+test("a task with an unusable interval does not take startup down with it", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "sched-"));
+  try {
+    configure(root);
+    await seedState(root, { broken: { taskId: "broken", lastRunAt: new Date(Date.now() - 86_400_000).toISOString(), totalRuns: 1 } });
+
+    let ran = 0;
+    const { registered } = await initAndCapture([
+      {
+        id: "broken",
+        name: "Broken",
+        description: "d",
+        schedule: { type: SCHEDULE_TYPES.interval, intervalMs: 0 },
+        missedRunPolicy: MISSED_RUN_POLICIES.runOnce,
+        run: async () => {
+          ran++;
+        },
+      },
+    ]);
+
+    assert.equal(ran, 0, "an unfireable task must not be caught up");
+    // Still registered: the task-manager is where the bad schedule is reported.
+    assert.deepEqual(registered, ["broken"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// `lastRunAt` is what catch-up measures the next windows from, so it has to be
+// the WINDOW the run belongs to, not the wall clock it happened to start at. A
+// daily task read a second past its minute used to persist the wall clock.
+// Raised by CodeRabbit on #2955.
+test("a scheduled run persists the window it belongs to, not the wall clock", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "sched-"));
+  try {
+    configure(root);
+    const { run: runThunk } = await initAndCapture([
+      {
+        id: "system:daily",
+        name: "Daily",
+        description: "d",
+        schedule: { type: SCHEDULE_TYPES.daily, time: "19:00" },
+        missedRunPolicy: MISSED_RUN_POLICIES.runOnce,
+        run: async () => {},
+      },
+    ]);
+    assert.ok(runThunk, "task-manager received a run thunk");
+
+    const windowMs = Date.UTC(2026, 7, 2, 19, 0, 0);
+    await runThunk({ taskId: "system:daily", now: new Date(windowMs + 1_500) });
+
+    assert.equal(getSchedulerTaskState("system:daily").lastRunAt, new Date(windowMs).toISOString());
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -328,8 +441,10 @@ test("recordExternalRun persists state + a log entry, readable via getSchedulerT
 
     const logs = await getSchedulerLogs({ taskId: "skill.news-filter" });
     assert.equal(logs.length, 1);
-    assert.equal(logs[0].trigger, "scheduled");
-    assert.equal(logs[0].chatSessionId, "chat-123");
+    const [scheduledLog] = logs;
+    assert.ok(scheduledLog);
+    assert.equal(scheduledLog.trigger, "scheduled");
+    assert.equal(scheduledLog.chatSessionId, "chat-123");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -355,9 +470,10 @@ test("recordExternalRun records a failed dispatch as an error run", async () => 
     assert.equal(state.lastRunResult, "error");
     assert.equal(state.lastErrorMessage, "too many background sessions");
     assert.equal(state.consecutiveFailures, 1);
-    const logs = await getSchedulerLogs({ taskId: "user.abc" });
-    assert.equal(logs[0].result, "error");
-    assert.equal(logs[0].errorMessage, "too many background sessions");
+    const [errorLog] = await getSchedulerLogs({ taskId: "user.abc" });
+    assert.ok(errorLog);
+    assert.equal(errorLog.result, "error");
+    assert.equal(errorLog.errorMessage, "too many background sessions");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -389,4 +505,46 @@ test("start(): a rejected tick is logged and later ticks keep running", async ()
 
   assert.ok(nowCalls >= 2, `interval stopped after the first rejection (${nowCalls} tick(s))`);
   assert.ok(errors.includes("tick failed"), `expected a "tick failed" log, got ${JSON.stringify(errors)}`);
+});
+
+// A daily task whose `time` isn't "HH:MM" is never due — safe, but until
+// #2765 it was also completely silent: no log, no error, and `registerTask`
+// accepted it. "The task I scheduled has never run once" is the worst
+// failure mode to have to debug from nothing. The manager now says so; it
+// still registers the task, because throwing would turn a consumer's
+// long-dead task into a boot crash.
+test("a daily task with a malformed time is reported, not silently dead (#2765)", async () => {
+  const errors: { message: string; data?: unknown }[] = [];
+  const manager = createTaskManager({
+    tickMs: 60_000,
+    now: () => new Date(Date.UTC(2026, 0, 1, 9, 0, 0)),
+    log: { info: () => {}, warn: () => {}, error: (message, data) => errors.push({ message, data }) },
+  });
+
+  const ran: string[] = [];
+  manager.registerTask({ id: "typo", schedule: { type: SCHEDULE_TYPES.daily, time: "9" }, run: async () => void ran.push("typo") });
+
+  assert.equal(errors.length, 1, "registering a malformed daily time must report it");
+  assert.match(errors[0]?.message ?? "", /never run|never fire/i);
+  assert.deepEqual(errors[0]?.data, { id: "typo", time: "9" });
+
+  // Behaviour is unchanged: still registered, still never due.
+  await manager.tick();
+  assert.deepEqual(ran, [], "a malformed daily time must stay never-due");
+});
+
+test("updateSchedule reports a malformed daily time too (#2765)", () => {
+  const errors: unknown[] = [];
+  const manager = createTaskManager({
+    tickMs: 60_000,
+    now: () => new Date(Date.UTC(2026, 0, 1, 9, 0, 0)),
+    log: { info: () => {}, warn: () => {}, error: (_message, data) => errors.push(data) },
+  });
+  manager.registerTask({ id: "ok", schedule: { type: SCHEDULE_TYPES.daily, time: "09:00" }, run: async () => {} });
+  assert.deepEqual(errors, [], "a well-formed time must not be reported");
+
+  // The override path (`applyScheduleOverride`) reaches this at run time, so
+  // checking only at registration would miss a bad value applied later.
+  manager.updateSchedule("ok", { type: SCHEDULE_TYPES.daily, time: "0900" });
+  assert.deepEqual(errors, [{ id: "ok", time: "0900" }]);
 });

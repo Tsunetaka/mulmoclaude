@@ -42,9 +42,11 @@ after(() => {
 
 // Helper for tests that follow up an entry-write with a read — drain
 // any background rebuild before asserting so we don't race the
-// snapshot writer.
-async function drainRebuilds(bookId: string): Promise<void> {
-  await awaitRebuildIdle(bookId);
+// snapshot writer. The root is required: a rebuild queue is keyed by
+// (root, bookId), so draining without one waits on a queue nobody
+// scheduled and returns while the real rebuild is still writing.
+async function drainRebuilds(bookId: string, root: string): Promise<void> {
+  await awaitRebuildIdle(bookId, root);
 }
 
 describe("createBook id validation", () => {
@@ -158,7 +160,9 @@ describe("books lifecycle", () => {
     assert.equal(afterDelete.deletedBookId, second.book.id);
     const remaining = await listBooks(root);
     assert.equal(remaining.books.length, 1);
-    assert.equal(remaining.books[0].id, first.book.id);
+    const [survivor] = remaining.books;
+    assert.ok(survivor);
+    assert.equal(survivor.id, first.book.id);
   });
   it("deleting the last book empties the workspace; ops without a bookId throw 400", async () => {
     const root = makeTmp();
@@ -199,7 +203,9 @@ describe("books lifecycle", () => {
     const initial = await createBook({ name: "Tokyo Books", currency: "JPY", country: "JP" }, root);
     assert.equal(initial.book.country, "JP");
     const list = await listBooks(root);
-    assert.equal(list.books[0].country, "JP");
+    const [listedBook] = list.books;
+    assert.ok(listedBook);
+    assert.equal(listedBook.country, "JP");
     const updated = await updateBook({ bookId: initial.book.id, country: "US" }, root);
     assert.equal(updated.book.country, "US");
     // Cleared via empty-string sentinel — drops the field entirely.
@@ -294,7 +300,9 @@ describe("addEntries / listEntries", () => {
       },
       root,
     );
-    assert.equal(result.entries[0].kind, "normal");
+    const [addedEntry] = result.entries;
+    assert.ok(addedEntry);
+    assert.equal(addedEntry.kind, "normal");
     const list = await listEntries({ bookId }, root);
     assert.equal(list.entries.length, 1);
     await assert.rejects(
@@ -345,7 +353,10 @@ describe("addEntries / listEntries", () => {
       root,
     );
     assert.equal(batch.entries.length, 2);
-    assert.notEqual(batch.entries[0].id, batch.entries[1].id);
+    const [firstBatched, secondBatched] = batch.entries;
+    assert.ok(firstBatched);
+    assert.ok(secondBatched);
+    assert.notEqual(firstBatched.id, secondBatched.id);
     // Both entries share the 2026-04 period — appendJournalBatch
     // concatenates same-period entries into a single appendFile
     // call (one O_APPEND syscall, atomic under PIPE_BUF), so a
@@ -354,7 +365,7 @@ describe("addEntries / listEntries", () => {
     const raw = await fsPromises.readFile(journalFile, "utf-8");
     const lines = raw.split("\n").filter((line) => line !== "");
     assert.equal(lines.length, 2, "same-period batch must land in one JSONL with both entries");
-    await drainRebuilds(bookId);
+    await drainRebuilds(bookId, root);
     const list = await listEntries({ bookId }, root);
     assert.equal(list.entries.length, 2);
   });
@@ -415,7 +426,7 @@ describe("addEntries / listEntries", () => {
         root,
       );
     await Promise.all([makeBatch(0), makeBatch(100), makeBatch(200)]);
-    await drainRebuilds(bookId);
+    await drainRebuilds(bookId, root);
     const list = await listEntries({ bookId }, root);
     assert.equal(list.entries.length, 15, "every entry from every concurrent batch must persist");
   });
@@ -473,11 +484,16 @@ describe("addEntries / listEntries", () => {
       },
       root,
     );
-    await drainRebuilds(bookId);
+    await drainRebuilds(bookId, root);
     const list = await listEntries({ bookId }, root);
     assert.equal(list.entries.length, 1);
-    assert.equal(list.entries[0].lines[0].taxRegistrationId, "T1234567890123");
-    assert.equal(list.entries[0].lines[1].taxRegistrationId, undefined);
+    const [storedEntry] = list.entries;
+    assert.ok(storedEntry);
+    const [taxedLine, plainLine] = storedEntry.lines;
+    assert.ok(taxedLine);
+    assert.ok(plainLine);
+    assert.equal(taxedLine.taxRegistrationId, "T1234567890123");
+    assert.equal(plainLine.taxRegistrationId, undefined);
   });
 
   it("rejects an entry whose taxRegistrationId exceeds the length cap", async () => {
@@ -527,6 +543,7 @@ describe("voidEntry", () => {
       root,
     );
     const [addedEntry] = added.entries;
+    assert.ok(addedEntry);
     await voidEntry({ bookId, entryId: addedEntry.id, reason: "typo" }, root);
     const list = await listEntries({ bookId }, root);
     // Original + reverse + marker = 3 rows
@@ -562,7 +579,9 @@ describe("voidEntry", () => {
       },
       root,
     );
-    const voided = await voidEntry({ bookId, entryId: added.entries[0].id, reason: "typo" }, root);
+    const [taxBearingEntry] = added.entries;
+    assert.ok(taxBearingEntry);
+    const voided = await voidEntry({ bookId, entryId: taxBearingEntry.id, reason: "typo" }, root);
     const reversedTaxLine = voided.reverseEntry.lines.find((line) => line.accountCode === "1400");
     assert.ok(reversedTaxLine, "reverse entry must contain the 1400 line");
     assert.equal(reversedTaxLine.taxRegistrationId, "T1234567890123");
@@ -593,6 +612,7 @@ describe("voidEntry", () => {
       root,
     );
     const [addedEntry] = added.entries;
+    assert.ok(addedEntry);
     await voidEntry({ bookId, entryId: addedEntry.id, reason: "typo" }, root);
     const filtered = await listEntries({ bookId, accountCode: "1000" }, root);
     // Void-marker has empty lines so it's filtered out; original + reverse remain.
@@ -639,7 +659,9 @@ describe("opening balances", () => {
     assert.equal(second.replacedExisting, true);
     opening = await getOpeningBalances({ bookId }, root);
     assert.ok(opening.opening);
-    assert.equal(opening.opening.lines[0].debit, 1500);
+    const [openingDebitLine] = opening.opening.lines;
+    assert.ok(openingDebitLine);
+    assert.equal(openingDebitLine.debit, 1500);
     // Now book a normal entry after opening, then try to set
     // opening again at a date that pre-dates the new entry — must
     // refuse.
@@ -765,7 +787,7 @@ describe("reports end-to-end", () => {
       },
       root,
     );
-    await drainRebuilds(bookId);
+    await drainRebuilds(bookId, root);
     const report = await getBalanceSheetReport({ bookId, period: { kind: "month", period: "2026-04" } }, root);
     assert.ok(Math.abs(report.balanceSheet.imbalance) < 0.0001, `imbalance was ${report.balanceSheet.imbalance}`);
     const equity = report.balanceSheet.sections.find((section) => section.type === "equity");
@@ -811,9 +833,11 @@ describe("reports end-to-end", () => {
       },
       root,
     );
-    await drainRebuilds(bookId);
+    await drainRebuilds(bookId, root);
     const balanceSheet = await getBalanceSheetReport({ bookId, period: { kind: "month", period: "2026-04" } }, root);
-    const cashRow = balanceSheet.balanceSheet.sections[0].rows.find((row) => row.accountCode === "1000");
+    const [assetSection] = balanceSheet.balanceSheet.sections;
+    assert.ok(assetSection);
+    const cashRow = assetSection.rows.find((row) => row.accountCode === "1000");
     assert.ok(cashRow);
     // Cash = 1000 (opening) + 200 (sales) - 70 (rent) = 1130
     assert.equal(cashRow.balance, 1130);

@@ -37,6 +37,14 @@ on:
       - '.github/workflows/dead-code-scan.yaml'
   workflow_dispatch:
 
+concurrency:
+  # The `github.run_id` fallback puts every non-PR run in a group of its own —
+  # only a superseded PR run should ever be cancelled. `run_attempt` keeps a
+  # manual re-run of an old run from cancelling the in-flight run of a newer
+  # commit on the same PR.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: ${{ github.run_attempt == '1' }}
+
 permissions:
   contents: read
 
@@ -46,15 +54,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # No git pushes from this job; don't leave the token in
           # .git/config (zizmor artipacked).
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22.x
+          # The cache key is node-cache-<os>-<arch>-yarn-<lockfile hash> — no
+          # node version in it — so this shares the entry lint_test already
+          # populates on ubuntu rather than adding a second 2.2 GB one.
+          cache: yarn
 
       # knip resolves imports through the real dependency graph, so the
       # workspaces have to be installed. `--frozen-lockfile` keeps CI honest

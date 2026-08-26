@@ -7,10 +7,17 @@ export interface FileRotationConfig {
   maxFiles: number;
 }
 
+/** `split` sends warn/error to stderr and the rest to stdout; `stderr` sends
+ *  everything to stderr. A process whose stdout is a protocol channel — the MCP
+ *  broker speaks JSON-RPC there — must pick `stderr`, or an ordinary `log.info`
+ *  lands between (or inside) protocol messages. */
+export type ConsoleStream = "split" | "stderr";
+
 export interface ConsoleSinkConfig {
   enabled: boolean;
   level: LogLevel;
   format: LogFormat;
+  stream: ConsoleStream;
 }
 
 export interface FileSinkConfig {
@@ -28,6 +35,8 @@ export interface TelemetrySinkConfig {
 }
 
 export interface LoggerConfig {
+  // Stamped onto every record this logger emits. See `LogRecord.source`.
+  source?: string;
   sinks: {
     console: ConsoleSinkConfig;
     file: FileSinkConfig;
@@ -40,7 +49,7 @@ const DEFAULT_MAX_FILES = 14;
 
 export const DEFAULT_CONFIG: LoggerConfig = {
   sinks: {
-    console: { enabled: true, level: "info", format: "text" },
+    console: { enabled: true, level: "info", format: "text", stream: "split" },
     file: {
       enabled: true,
       level: "debug",
@@ -70,12 +79,54 @@ function parseFormat(raw: string | undefined): LogFormat | undefined {
   return normalized === "text" || normalized === "json" ? normalized : undefined;
 }
 
+function parseConsoleStream(raw: string | undefined): ConsoleStream | undefined {
+  if (raw === undefined) return undefined;
+  const normalized = raw.toLowerCase();
+  return normalized === "split" || normalized === "stderr" ? normalized : undefined;
+}
+
 function parseBool(raw: string | undefined): boolean | undefined {
   if (raw === undefined) return undefined;
   const normalized = raw.toLowerCase();
   if (normalized === "true" || normalized === "1" || normalized === "yes") return true;
   if (normalized === "false" || normalized === "0" || normalized === "no") return false;
   return undefined;
+}
+
+/** What a process label may contain. An ALLOWLIST, because the denylist form
+ *  kept losing to characters nobody thinks of: C0 and DEL first, then C1, then
+ *  the Unicode line/paragraph separators (U+2028 / U+2029) and the bidi
+ *  overrides (U+202E), each of which can make one record render as several — or
+ *  in reversed order — in a Unicode-aware viewer. A name for a process needs
+ *  none of them, so enumerate what it does need and drop the rest. */
+const LABEL_CHAR = /[A-Za-z0-9._:/-]/;
+
+/** Longest label kept. A source names a process; anything longer is a mistake,
+ *  and bounding it also bounds what a bad value can push into every line. */
+const SOURCE_MAX = 32;
+
+// Returns a spreadable fragment rather than `string | undefined` so the branch
+// lives here instead of in `resolveConfig`, which is already at its complexity
+// ceiling.
+//
+// The text formatter interpolates the label verbatim, so a line break inside it
+// would end the line early and let the remainder pose as a second record —
+// `mcp-broker\n2026-01-01T00:00:00Z ERROR [auth] forged` reads as two entries
+// in the file (the JSON sink escapes it, so only text logs forge). Keeping only
+// `LABEL_CHAR` removes that whole class, and dropping the stray characters
+// rather than rejecting the whole value keeps the attribution this field exists
+// for: a mangled LOG_SOURCE must not make a broker's lines read as the parent
+// server's.
+//
+// Whitespace is not in the allowlist, so a whitespace-only value — a shell
+// accident like `LOG_SOURCE=$UNSET` rather than a process called " " — ends up
+// unset, and the record stays untagged rather than gaining an empty bracket.
+function sourceField(raw: string | undefined): { source?: string } {
+  const label = [...(raw ?? "")]
+    .filter((char) => LABEL_CHAR.test(char))
+    .join("")
+    .slice(0, SOURCE_MAX);
+  return label ? { source: label } : {};
 }
 
 function parsePositiveInt(raw: string | undefined): number | undefined {
@@ -92,11 +143,13 @@ export function resolveConfig(env: Env): LoggerConfig {
   const fileLevel = parseLevel(env.LOG_FILE_LEVEL) ?? coarseLevel;
 
   return {
+    ...sourceField(env.LOG_SOURCE),
     sinks: {
       console: {
         enabled: parseBool(env.LOG_CONSOLE_ENABLED) ?? DEFAULT_CONFIG.sinks.console.enabled,
         level: consoleLevel ?? DEFAULT_CONFIG.sinks.console.level,
         format: parseFormat(env.LOG_CONSOLE_FORMAT) ?? DEFAULT_CONFIG.sinks.console.format,
+        stream: parseConsoleStream(env.LOG_CONSOLE_STREAM) ?? DEFAULT_CONFIG.sinks.console.stream,
       },
       file: {
         enabled: parseBool(env.LOG_FILE_ENABLED) ?? DEFAULT_CONFIG.sinks.file.enabled,

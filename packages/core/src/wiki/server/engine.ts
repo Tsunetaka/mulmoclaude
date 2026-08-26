@@ -11,6 +11,7 @@
 import path from "node:path";
 import { parseWikiLink } from "../link.js";
 import { wikiSlugify } from "../slug.js";
+import { matchWikiSlug, slugByIndexTitle } from "../resolve.js";
 import { type WikiPageEntry, parseIndexEntries } from "../index-parse.js";
 import { findBrokenLinksInPage, findMissingFiles, findOrphanPages, findTagDrift } from "../lint.js";
 import { type WikiGraph, buildWikiGraph } from "../graph.js";
@@ -55,32 +56,35 @@ export function pickFuzzyMatch(slug: string, slugs: ReadonlyMap<string, string>)
   return bestIsTied ? null : bestFile;
 }
 
-/** Resolve a page name to an absolute `.md` path: exact slug → fuzzy →
- *  index-title fallback (for non-ASCII names that slugify to empty).
- *  `pageName` may carry the `[[target|display]]` form; `parseWikiLink`
- *  strips the display half so the lookup uses just the target. */
+/** File matching an index.md entry whose title equals `target` — the
+ *  last resort for a link written as the display title rather than
+ *  the page's own name. */
+function fileByIndexTitle(indexFile: string, target: string, slugs: ReadonlyMap<string, string>): string | undefined {
+  const entries = parseIndexEntries(readFileOrEmpty(indexFile));
+  const trimmed = target.trim();
+  const titleMatch = entries.find((entry) => entry.title === trimmed);
+  return titleMatch ? slugs.get(titleMatch.slug) : undefined;
+}
+
+/** Resolve a page name to an absolute `.md` path: known slug (literal
+ *  or slugified) → fuzzy → index-title fallback. `pageName` may carry
+ *  the `[[target|display]]` form; `parseWikiLink` strips the display
+ *  half so the lookup uses just the target. */
 export async function resolvePagePath(workspace: string, pageName: string): Promise<string | null> {
   const { pagesDir, indexFile } = wikiDirs(workspace);
   const { slugs } = await getPageIndex(pagesDir);
   if (slugs.size === 0) return null;
 
   const { target } = parseWikiLink(pageName);
-  const slug = wikiSlugify(target);
+  const matched = matchWikiSlug(target, slugs);
+  const matchedFile = matched === null ? undefined : slugs.get(matched);
+  if (matchedFile) return path.join(pagesDir, matchedFile);
 
-  if (slug.length > 0) {
-    const exact = slugs.get(slug);
-    if (exact) return path.join(pagesDir, exact);
-    const fuzzy = pickFuzzyMatch(slug, slugs);
-    if (fuzzy) return path.join(pagesDir, fuzzy);
-  }
+  const fuzzy = pickFuzzyMatch(wikiSlugify(target), slugs);
+  if (fuzzy) return path.join(pagesDir, fuzzy);
 
-  const entries = parseIndexEntries(readFileOrEmpty(indexFile));
-  const titleMatch = entries.find((entry) => entry.title === target);
-  if (titleMatch) {
-    const file = slugs.get(titleMatch.slug);
-    if (file) return path.join(pagesDir, file);
-  }
-  return null;
+  const titleFile = fileByIndexTitle(indexFile, target, slugs);
+  return titleFile ? path.join(pagesDir, titleFile) : null;
 }
 
 /** Raw `index.md` content + its parsed entries. */
@@ -114,17 +118,40 @@ export async function readWikiPage(workspace: string, pageName: string): Promise
   return { filePath, content, exists: Boolean(filePath), resolvedTitle };
 }
 
+/** Page body, or "" when the file vanished between indexing and reading. */
+async function readPageBody(pagesDir: string, fileName: string): Promise<string> {
+  return (await readTextSafe(path.join(pagesDir, fileName))) ?? "";
+}
+
 /** Read every page + the index and build the page→page link graph.
  *  No cache: the graph is requested explicitly and a content edit does
  *  not advance the pagesDir mtime the page index caches on. */
 export async function loadWikiGraph(workspace: string): Promise<WikiGraph> {
   const { pagesDir, indexFile } = wikiDirs(workspace);
   const { slugs } = await getPageIndex(pagesDir);
-  const fileEntries = [...slugs.entries()];
-  const contents = await Promise.all(fileEntries.map(async ([, fileName]) => (await readTextSafe(path.join(pagesDir, fileName))) ?? ""));
-  const pages = fileEntries.map(([slug], i) => ({ slug, content: contents[i] }));
+  const pages = await Promise.all([...slugs.entries()].map(async ([slug, fileName]) => ({ slug, content: await readPageBody(pagesDir, fileName) })));
   const indexEntries = parseIndexEntries(readFileOrEmpty(indexFile));
   return buildWikiGraph(pages, indexEntries);
+}
+
+export interface PageBody {
+  fileName: string;
+  content: string;
+}
+
+async function readPageBodies(pagesDir: string, fileNames: readonly string[]): Promise<PageBody[]> {
+  return Promise.all(fileNames.map(async (fileName) => ({ fileName, content: await readPageBody(pagesDir, fileName) })));
+}
+
+/** Frontmatter `tags:` per page, keyed for `findTagDrift`. Lowercased so
+ *  a `MyPage.md` filename matches an `entry.slug` of `mypage`, which is
+ *  what the drift rule looks up. */
+export function frontmatterTagIndex(bodies: readonly PageBody[]): Map<string, string[]> {
+  const tagsBySlug = new Map<string, string[]>();
+  bodies.forEach(({ fileName, content }) => {
+    tagsBySlug.set(fileName.replace(/\.md$/i, "").toLowerCase(), parseFrontmatterTags(content));
+  });
+  return tagsBySlug;
 }
 
 /** Run every lint rule over the on-disk wiki, returning issue strings. */
@@ -135,22 +162,13 @@ export async function collectLintIssues(workspace: string): Promise<string[]> {
     return ["- Wiki `pages/` directory does not exist yet. Start ingesting sources."];
   }
   const pageEntries = parseIndexEntries(readFileOrEmpty(indexFile));
-  const indexedSlugs = new Set(pageEntries.map((entry) => entry.slug));
-  const pageFiles = [...slugs.values()];
   const fileSlugs = new Set(slugs.keys());
-
-  const issues: string[] = [];
-  issues.push(...findOrphanPages(fileSlugs, indexedSlugs));
-  issues.push(...findMissingFiles(pageEntries, fileSlugs));
-  const contents = await Promise.all(pageFiles.map(async (fileName) => (await readTextSafe(path.join(pagesDir, fileName))) ?? ""));
-  const frontmatterTagsBySlug = new Map<string, string[]>();
-  for (let i = 0; i < pageFiles.length; i++) {
-    issues.push(...findBrokenLinksInPage(pageFiles[i], contents[i], fileSlugs));
-    // Lowercase the key so a `MyPage.md` filename matches an
-    // `entry.slug` of `mypage`; `findTagDrift` lowercases the lookup.
-    const slug = pageFiles[i].replace(/\.md$/i, "").toLowerCase();
-    frontmatterTagsBySlug.set(slug, parseFrontmatterTags(contents[i]));
-  }
-  issues.push(...findTagDrift(pageEntries, frontmatterTagsBySlug));
-  return issues;
+  const slugByTitle = slugByIndexTitle(pageEntries);
+  const bodies = await readPageBodies(pagesDir, [...slugs.values()]);
+  return [
+    ...findOrphanPages(fileSlugs, new Set(pageEntries.map((entry) => entry.slug))),
+    ...findMissingFiles(pageEntries, fileSlugs),
+    ...bodies.flatMap(({ fileName, content }) => findBrokenLinksInPage(fileName, content, fileSlugs, slugByTitle)),
+    ...findTagDrift(pageEntries, frontmatterTagIndex(bodies)),
+  ];
 }

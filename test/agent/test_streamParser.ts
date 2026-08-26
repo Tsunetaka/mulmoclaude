@@ -5,22 +5,25 @@ import { EVENT_TYPES } from "../../src/types/events.ts";
 
 describe("blockToEvent", () => {
   it("emits text event for text blocks", () => {
-    const result = blockToEvent({ type: "text", text: "hello" });
+    const result = blockToEvent({ type: "text", text: "hello" }, "assistant");
     assert.deepEqual(result, { type: EVENT_TYPES.text, message: "hello" });
   });
 
   it("emits toolCall for tool_use blocks", () => {
-    const result = blockToEvent({
-      type: "tool_use",
-      id: "t1",
-      name: "Bash",
-      input: { command: "ls" },
-    });
+    const result = blockToEvent(
+      {
+        type: "tool_use",
+        id: "t1",
+        name: "Bash",
+        input: { command: "ls" },
+      },
+      "assistant",
+    );
     assert.equal(result?.type, EVENT_TYPES.toolCall);
   });
 
   it("returns null for unknown block types", () => {
-    assert.equal(blockToEvent({ type: "thinking" }), null);
+    assert.equal(blockToEvent({ type: "thinking" }, "assistant"), null);
   });
 });
 
@@ -78,7 +81,9 @@ describe("createStreamParser — delta streaming", () => {
       session_id: "sess-1",
     });
     assert.equal(events.length, 1);
-    assert.equal(events[0].type, EVENT_TYPES.claudeSessionId);
+    const [event] = events;
+    assert.ok(event);
+    assert.equal(event.type, EVENT_TYPES.claudeSessionId);
   });
 });
 
@@ -91,7 +96,9 @@ describe("createStreamParser — no deltas (fallback)", () => {
     });
     const textEvents = events.filter((evt) => evt.type === EVENT_TYPES.text);
     assert.equal(textEvents.length, 1);
-    assert.equal(textEvents[0].message, "direct reply");
+    const [textEvent] = textEvents;
+    assert.ok(textEvent);
+    assert.equal(textEvent.message, "direct reply");
   });
 
   it("suppresses result text after assistant block emitted text", () => {
@@ -118,11 +125,13 @@ describe("createStreamParser — no deltas (fallback)", () => {
       session_id: "s1",
     });
     assert.equal(events.length, 2);
-    assert.deepEqual(events[0], {
+    const [textEvent, sessionIdEvent] = events;
+    assert.deepEqual(textEvent, {
       type: EVENT_TYPES.text,
       message: "fallback text",
     });
-    assert.equal(events[1].type, EVENT_TYPES.claudeSessionId);
+    assert.ok(sessionIdEvent);
+    assert.equal(sessionIdEvent.type, EVENT_TYPES.claudeSessionId);
   });
 });
 
@@ -146,7 +155,9 @@ describe("createStreamParser — multi-turn reset", () => {
     });
     const textEvents = events.filter((evt) => evt.type === EVENT_TYPES.text);
     assert.equal(textEvents.length, 1);
-    assert.equal(textEvents[0].message, "turn2");
+    const [textEvent] = textEvents;
+    assert.ok(textEvent);
+    assert.equal(textEvent.message, "turn2");
   });
 });
 

@@ -175,9 +175,8 @@ function bridgeTargetFromDataPath(workspaceRoot2, filePath) {
   const staging = path3.join(workspaceRoot2, DATA_SKILLS_DIR);
   const rel = path3.relative(staging, filePath);
   if (!rel || rel.startsWith("..") || path3.isAbsolute(rel)) return null;
-  const segments = rel.split(path3.sep);
-  if (segments.length < 2) return null;
-  const [slug, ...relSegments] = segments;
+  const [slug, ...relSegments] = rel.split(path3.sep);
+  if (!slug || relSegments.length === 0) return null;
   if (!SLUG_RE.test(slug)) return null;
   if (!isAllowlisted(relSegments)) return null;
   return {
@@ -188,7 +187,7 @@ function bridgeTargetFromDataPath(workspaceRoot2, filePath) {
 function slugFromRmCommand(command) {
   const match = RM_RE.exec(command);
   if (!match) return null;
-  const [, flags, slug] = match;
+  const [, flags = "", slug = ""] = match;
   if (!RECURSIVE_FLAG_RE.test(flags)) return null;
   return SLUG_RE.test(slug) ? slug : null;
 }
@@ -284,7 +283,7 @@ async function handleSkillBridge(payload) {
 // server/workspace/hooks/handlers/wikiSnapshot.ts
 import path5 from "node:path";
 
-// packages/core/dist/slug-CdN-pQX1.js
+// packages/core/dist/slug-BpjumQfe.js
 function isSafeSlug(slug) {
   if (slug.length === 0) return false;
   if (slug === "." || slug === "..") return false;

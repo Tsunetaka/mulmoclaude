@@ -27,6 +27,7 @@ import {
   hasTableRows,
   inputTypeFor,
   isExternalUrl,
+  isServerStamped,
   resolveCurrency,
   sortedRefOptions,
   stepForFieldType,
@@ -70,6 +71,24 @@ describe("inputTypeFor", () => {
     assert.equal(inputTypeFor("datetime"), "datetime-local");
     assert.equal(inputTypeFor("email"), "email");
     assert.equal(inputTypeFor("date"), "date");
+  });
+  it("does not offer a datetime-local for a value it cannot hold", () => {
+    // A shared collection can pin a `datetime` to the server's clock, and what reaches the UI is
+    // the canonical instant. `datetime-local` cannot hold that string, so the control would render
+    // EMPTY — and saving the record would then write the empty value over a field the rules refuse
+    // to see move, failing the whole update with a permission error that names nothing.
+    const stamped = "2026-08-15T23:05:54.605987654Z";
+    assert.equal(isServerStamped(stamped), true);
+    assert.equal(inputTypeFor("datetime", stamped), "text");
+    // A civil value an author typed is still edited as a datetime.
+    assert.equal(isServerStamped("2026-08-15T10:00"), false);
+    assert.equal(inputTypeFor("datetime", "2026-08-15T10:00"), "datetime-local");
+    assert.equal(inputTypeFor("datetime", ""), "datetime-local");
+    // And nothing else is affected by the value. The lock is read alongside the field's TYPE
+    // where it is rendered, because this input is shared with string / email / ref / image / file
+    // — a string field whose value happens to look canonical must stay editable.
+    assert.equal(inputTypeFor("date", stamped), "date");
+    assert.equal(inputTypeFor("string", stamped), "text");
   });
   it("falls back to text for everything else", () => {
     assert.equal(inputTypeFor("markdown"), "text");
@@ -240,8 +259,10 @@ describe("buildRefRecordMap", () => {
     const detail = makeDetail(schema, [{ id: "a", qty: 2, price: 10 }]);
     const map = buildRefRecordMap(detail);
     assert.deepEqual(Object.keys(map), ["a"]);
-    assert.equal(map.a.total, 20);
-    assert.equal(map.a.qty, 2);
+    const recordA = map.a;
+    assert.ok(recordA);
+    assert.equal(recordA.total, 20);
+    assert.equal(recordA.qty, 2);
   });
   it("skips items without a valid string primary key", () => {
     const schema = makeSchema({ id: field("text") });

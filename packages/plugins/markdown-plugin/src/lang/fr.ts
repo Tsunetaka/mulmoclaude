@@ -5,10 +5,12 @@ const fr: Messages = {
   loadFailed: "⚠ Échec du chargement du document : {error}",
   refreshFailed: "⚠ Échec de l'actualisation du document : {error} — affichage du dernier contenu chargé avec succès.",
   noContent: "Aucun contenu Markdown disponible",
+  reload: "Recharger depuis le disque",
   pdf: "PDF",
   pdfFailedShort: "⚠ Échec PDF",
   editSource: "Modifier la source Markdown",
   livePreview: "Aperçu en direct",
+  autoSave: "Enregistrement automatique",
   saving: "Enregistrement...",
   applyChanges: "Appliquer les modifications",
   cancel: "Annuler",
@@ -25,6 +27,8 @@ const fr: Messages = {
   marpSplitEditorLabel: "Source",
   mermaidLoadFailed: "⚠ Échec du chargement de Mermaid : {error}",
   mermaidRenderFailed: "⚠ Échec du rendu Mermaid : {error}",
+  bookmarkRailLabel: "Signets",
+  bookmarkJump: "Aller au signet : {label}",
 };
 
 export default fr;

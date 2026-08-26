@@ -296,10 +296,12 @@
               v-else-if="['string', 'email', 'number', 'date', 'datetime', 'ref', 'image', 'file'].includes(field.type)"
               :id="`collections-field-${key}`"
               v-model="editing.text[key]"
-              :type="render.inputTypeFor(field.type)"
+              :type="render.inputTypeFor(field.type, editing.text[key])"
               :step="render.stepFor(field.type)"
               :required="isFieldRequiredInUi(field)"
-              :disabled="field.primary === true && (editing.mode === 'edit' || isSingleton)"
+              :disabled="
+                (field.primary === true && (editing.mode === 'edit' || isSingleton)) || (field.type === 'datetime' && render.isServerStamped(editing.text[key]))
+              "
               class="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400 font-medium text-slate-700 transition-all"
               :data-testid="`collections-input-${key}`"
             />
@@ -544,8 +546,8 @@ import { useCollectionI18n } from "../lang";
 import CollectionBacklinksView from "./CollectionBacklinksView.vue";
 import CollectionEmbedView from "./CollectionEmbedView.vue";
 import { COMPUTED_TYPES, fieldVisible, resolveEnumColor, emptyRow } from "@mulmoclaude/core/collection";
-import { collectionUi } from "../uiContext";
-import { activateRefLink, activatePathLink } from "../refLink";
+import { useCollectionUi } from "../scopedUi";
+import { useRefLinkActivators } from "../refLink";
 import type { CollectionRendering } from "../useCollectionRendering";
 import type {
   CollectionAction,
@@ -556,10 +558,14 @@ import type {
   TableRowDraft,
 } from "@mulmoclaude/core/collection";
 
+// Link activation resolves the binding at click time, so a scoped card's plain
+// clicks navigate in the card's project — like the `href` beside them.
+const { activateRefLink, activatePathLink } = useRefLinkActivators();
+
 // The UI binding: ref/file navigation (router-optional) + the host's raw-file
 // `imageSrc`. `resolveImageSrc` keeps its local name so the template's `:src` is
 // unchanged.
-const cui = collectionUi();
+const cui = useCollectionUi();
 const resolveImageSrc = cui.imageSrc;
 
 const props = defineProps<{

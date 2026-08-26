@@ -8,11 +8,12 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import path from "path";
-import { tmpdir, homedir } from "os";
+import { homedir } from "os";
 import { loadReferenceDirs, validateReferenceDirs } from "../../server/workspace/reference-dirs.ts";
+import { makeTempDir } from "../helpers/tempDir.js";
 
 function tmpRoot(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "reference-dirs-"));
+  const dir = makeTempDir("reference-dirs-");
   mkdirSync(path.join(dir, "config"), { recursive: true });
   return dir;
 }
@@ -44,8 +45,10 @@ describe("loadReferenceDirs — non-string fields", () => {
     writeConfig(root, [{ hostPath: target, label: { text: "nope" } }]);
     const entries = loadReferenceDirs(root);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].label, path.basename(target));
-    assert.doesNotMatch(entries[0].label, /\[object Object\]/);
+    const [entry] = entries;
+    assert.ok(entry);
+    assert.equal(entry.label, path.basename(target));
+    assert.doesNotMatch(entry.label, /\[object Object\]/);
   });
 
   it("falls back to the basename when label is an array", () => {
@@ -54,7 +57,9 @@ describe("loadReferenceDirs — non-string fields", () => {
     writeConfig(root, [{ hostPath: target, label: ["a", "b"] }]);
     const entries = loadReferenceDirs(root);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].label, path.basename(target));
+    const [entry] = entries;
+    assert.ok(entry);
+    assert.equal(entry.label, path.basename(target));
   });
 
   it("keeps a string label as-is", () => {
@@ -63,7 +68,9 @@ describe("loadReferenceDirs — non-string fields", () => {
     writeConfig(root, [{ hostPath: target, label: "docs" }]);
     const entries = loadReferenceDirs(root);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].label, "docs");
+    const [entry] = entries;
+    assert.ok(entry);
+    assert.equal(entry.label, "docs");
   });
 
   it("rejects an entry whose hostPath is an object", () => {

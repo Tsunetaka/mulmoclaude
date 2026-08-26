@@ -3,7 +3,14 @@ export type { MarkdownToolData, MarkdownArgs } from "../plugins/markdown/definit
 export { TOOL_DEFINITION } from "../plugins/markdown/definition";
 export { pluginCore, executeDocument } from "./plugin";
 export { executeMarkdown } from "../plugins/markdown/core";
+// Debounce + serialise + cancellation rules behind the editor's auto save.
+export { createAutoSaver } from "../plugins/markdown/autoSaver";
+export type { AutoSaver, AutoSaverOptions } from "../plugins/markdown/autoSaver";
 export type { MarkdownExecuteContext } from "../plugins/markdown/core";
+// Source-editor bookmarks: the shipped default pattern (hosts reporting what
+// they resolved) and the pure scanner the View runs.
+export { DEFAULT_DOCUMENT_BOOKMARK_PATTERN, MAX_DOCUMENT_BOOKMARKS, compileBookmarkPattern, findDocumentBookmarks } from "../plugins/markdown/bookmarks";
+export type { DocumentBookmark } from "../plugins/markdown/bookmarks";
 export type { MarkdownHostApp, MarkdownDispatchArgs, MarkdownDispatchResult, ExportPdfOptions, MarpThemeEntry } from "../plugins/markdown/contract";
 export { isMarkdownDispatchArgs } from "../plugins/markdown/contract";
 // Hosts whose workspace file server is not `/api/files/raw` call this.

@@ -69,8 +69,12 @@ describe("createDevWatchIgnore — workspace IS the Vite root", () => {
   });
 
   it("keeps watching tracked repo directories that double as workspace dirs", () => {
-    assert.equal(ignore(`${ROOT}/config/tsconfig.packages.json`), false);
     assert.equal(ignore(`${ROOT}/.claude/skills/foo/SKILL.md`), false);
+  });
+
+  it("prunes config/, which holds only runtime data now that the build config moved out", () => {
+    assert.equal(ignore(`${ROOT}/config/scheduler/state.json`), true);
+    assert.equal(ignore(`${ROOT}/build-config/tsconfig.packages.json`), false);
   });
 
   it("matches whole segments only", () => {
@@ -134,12 +138,16 @@ describe("createDevWatchIgnore — path normalisation", () => {
 // than silently bringing the reload storms back.
 describe("createDevWatchIgnore — stays in sync with the real workspace layout", () => {
   const ignore = ignoreFor({ workspacePath: ROOT });
-  const topLevelOf = (workspaceRelative: string): string => workspaceRelative.split("/")[0];
+  const topLevelOf = (workspaceRelative: string): string => {
+    const [topLevel] = workspaceRelative.split("/");
+    if (topLevel === undefined) throw new Error(`cannot take the top level of ${workspaceRelative}`);
+    return topLevel;
+  };
 
-  // Top-level entries the watcher deliberately keeps watching: both are tracked
-  // repo directories here as well as workspace dirs, so pruning them would stop
-  // HMR for real source.
-  const DELIBERATELY_WATCHED = new Set(["config", ".claude"]);
+  // Top-level entries the watcher deliberately keeps watching: tracked repo
+  // directories here as well as workspace dirs, so pruning them would stop HMR
+  // for real source.
+  const DELIBERATELY_WATCHED = new Set([".claude"]);
 
   const unprunedTopLevels = (workspaceRelativePaths: string[]): string[] =>
     [...new Set(workspaceRelativePaths.map(topLevelOf))].filter((name) => !DELIBERATELY_WATCHED.has(name) && !ignore(`${ROOT}/${name}`)).sort();

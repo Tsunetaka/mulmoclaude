@@ -123,9 +123,55 @@ describe("parseIndexEntries — bullet formats", () => {
     // "Missing file" diagnostic downstream).
     const entries = parseIndexEntries("- [[keith-rabois-ai-pm-end|キース・ラボイス]] — first");
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].slug, "keith-rabois-ai-pm-end", "slug must come from the target half");
-    assert.equal(entries[0].title, "キース・ラボイス", "title must come from the display half");
-    assert.equal(entries[0].description, "first");
+    const [entry] = entries;
+    assert.ok(entry);
+    assert.equal(entry.slug, "keith-rabois-ai-pm-end", "slug must come from the target half");
+    assert.equal(entry.title, "キース・ラボイス", "title must come from the display half");
+    assert.equal(entry.description, "first");
+  });
+
+  it("keeps a non-ASCII `- [[…]]` target as the slug (#2944)", () => {
+    // The page file is named in Japanese, so the target IS the slug.
+    // Slugifying reduced it to `-4`, and the page was then reported as
+    // BOTH a missing index reference and an orphan file.
+    const entries = parseIndexEntries("- [[不耕起栽培-カバークロップ4年計画]] — 概要");
+    assert.equal(entries.length, 1);
+    const [entry] = entries;
+    assert.ok(entry);
+    assert.equal(entry.slug, "不耕起栽培-カバークロップ4年計画");
+    assert.equal(entry.title, "不耕起栽培-カバークロップ4年計画");
+  });
+
+  it("leaves an empty `- [[|display]]` target unresolved, whatever the script", () => {
+    // Borrowing the display half would let a malformed entry name a
+    // real page and vanish from the lint (Codex review on #2946).
+    assert.equal(parseIndexEntries("- [[|日本語]] — note")[0]?.slug, "");
+    assert.equal(parseIndexEntries("- [[|Sakura Internet]] — note")[0]?.slug, "");
+    assert.equal(parseIndexEntries("- [[|日本語]] — note")[0]?.title, "日本語", "the display half still titles the entry");
+  });
+
+  it("skips `- [[]]` — a zero-length body is not a bullet wiki link", () => {
+    // index.md is freeform markdown: an unrecognised row is skipped,
+    // the same as a heading or a prose paragraph.
+    assert.deepEqual(parseIndexEntries("- [[]] — note"), []);
+  });
+
+  it("keeps slugifying an ASCII `- [[…]]` target", () => {
+    const entries = parseIndexEntries("- [[Sakura Internet]] — note");
+    assert.equal(entries[0]?.slug, "sakura-internet");
+  });
+
+  it("falls back to a non-ASCII TITLE when the href names no page", () => {
+    // An external URL yields no href slug; the title is all there is.
+    const entries = parseIndexEntries("- [不耕起栽培](https://example.com) — note");
+    assert.equal(entries[0]?.slug, "不耕起栽培");
+  });
+
+  it("still slugifies a name that could not be a filename", () => {
+    // `wikiPageStem` returns null here, so the old slug remains the
+    // best guess rather than an empty entry.
+    const entries = parseIndexEntries("- [[../secret]] — note");
+    assert.equal(entries[0]?.slug, "secret");
   });
 
   it("prefers slug from href when title is non-ASCII", () => {
@@ -135,7 +181,9 @@ describe("parseIndexEntries — bullet formats", () => {
     // empty.
     const entries = parseIndexEntries("- [さくらインターネット](pages/sakura-net.md) — note");
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].slug, "sakura-net");
-    assert.equal(entries[0].title, "さくらインターネット");
+    const [entry] = entries;
+    assert.ok(entry);
+    assert.equal(entry.slug, "sakura-net");
+    assert.equal(entry.title, "さくらインターネット");
   });
 });

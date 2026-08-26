@@ -11,12 +11,8 @@
     <!-- CSP-blocked-resource notice (#1989) — a sandboxed view tried to load a
          host not allowed by config/csp.json. Tells the user the exact host +
          directive so they can extend the policy (if they trust it). -->
-    <div
-      v-if="cspViolations.length > 0"
-      class="shrink-0 flex items-start gap-3 bg-amber-50 text-amber-900 text-xs px-3 py-2 border-b border-amber-200"
-      role="alert"
-    >
-      <span class="flex-1 min-w-0">{{ $t("cspViolation.notice", { host: cspViolations[0].host, directive: cspViolations[0].directive }) }}</span>
+    <div v-if="firstCspViolation" class="shrink-0 flex items-start gap-3 bg-amber-50 text-amber-900 text-xs px-3 py-2 border-b border-amber-200" role="alert">
+      <span class="flex-1 min-w-0">{{ $t("cspViolation.notice", { host: firstCspViolation.host, directive: firstCspViolation.directive }) }}</span>
       <button class="shrink-0 underline hover:no-underline" @click="dismissCspViolations()">{{ $t("cspViolation.dismiss") }}</button>
     </div>
     <!-- Global top bar — shown in every view mode -->
@@ -428,6 +424,7 @@ import { useDebugBeat } from "./composables/useDebugBeat";
 import { useChatScroll } from "./composables/useChatScroll";
 import { useFileDropZone } from "./composables/useFileDropZone";
 import { useViewLayout } from "./composables/useViewLayout";
+import { useChatDrafts } from "./composables/useChatDrafts";
 import { useSessionSync } from "./composables/useSessionSync";
 import { useSessionLifecycle } from "./composables/useSessionLifecycle";
 import { useSessionDerived } from "./composables/useSessionDerived";
@@ -442,7 +439,7 @@ import { useCurrentRole } from "./composables/useCurrentRole";
 import { useShortcuts } from "./composables/useShortcuts";
 import type { Shortcut } from "./types/shortcuts";
 import { useTranslatedQueries } from "./composables/useTranslatedQueries";
-import { BUILTIN_ROLE_IDS, type Role } from "./config/roles";
+import { BUILTIN_ROLE_IDS, ROLES, type Role } from "./config/roles";
 import { usePubSub } from "./composables/usePubSub";
 import { sessionChannel } from "./config/pubsubChannels";
 import ConfirmModal from "./components/ConfirmModal.vue";
@@ -512,8 +509,13 @@ const { currentRoleId } = useCurrentRole(roles);
 // list and passes it down; the launcher stays presentational.
 const { shortcuts } = useShortcuts();
 
-const userInput = ref("");
-const pastedFiles = ref<PastedFile[]>([]);
+// Unsent composer state — draft text and staged attachments — keyed by
+// session (#2811). Reads/writes look like plain refs, but each session
+// keeps its own, and the text is mirrored into sessionStorage so a
+// reload restores what the user was typing. Every place that assigns
+// `userInput.value` therefore also updates storage — including the
+// clears in sendMessage.
+const { userInput, pastedFiles, restoreDraft, dropDraft: dropSessionDraft } = useChatDrafts(currentSessionId);
 // Messages the user sends while a run is in flight queue here instead of
 // dispatching, keyed by the session they belong to so concurrent runs in
 // different sessions never mix. `currentBufferedMessages` is the displayed
@@ -555,19 +557,20 @@ const sessionRoleIcon = computed(() => {
   return roleIcon(roles.value, roleId);
 });
 
+// The role a given conversation runs under. `roles` always carries the
+// built-ins (merge keeps them), so its first entry is the effective
+// default; ROLES[0] only covers the type.
+function roleOfSession(session: ActiveSession | undefined): Role {
+  const match = session?.roleId ? roles.value.find((role) => role.id === session.roleId) : undefined;
+  return match ?? roles.value[0] ?? ROLES[0];
+}
+
 // Role of the conversation in progress. Drives the suggested-query
 // list, the right-sidebar role-prompt, and the MCP tool filter so
 // they all match the active session (not the role-selector
 // dropdown — which is owned by SessionHeaderControls and whose
 // selection only matters at "+" / role-change time).
-const sessionRole = computed<Role>(() => {
-  const sessionRoleId = activeSession.value?.roleId;
-  if (sessionRoleId) {
-    const match = roles.value.find((role) => role.id === sessionRoleId);
-    if (match) return match;
-  }
-  return roles.value[0];
-});
+const sessionRole = computed<Role>(() => roleOfSession(activeSession.value));
 
 // Translated suggested-query strings for the active session's role.
 // Falls back to the role's English source until /api/translation
@@ -699,6 +702,7 @@ const { removeCurrentIfEmpty, createNewSession, onRoleChange, loadSession, refre
   ensureSessionSubscription,
   focusChatInput,
   collapseChatSuggestions: () => chatInputRef.value?.collapseSuggestions(),
+  dropSessionDraft,
 });
 
 const { markSessionRead, refreshSessionStates } = useSessionSync({
@@ -711,6 +715,10 @@ const { markSessionRead, refreshSessionStates } = useSessionSync({
   // loadSession by spinning up a fresh session so the user lands on a
   // working /chat instead of a blank pane.
   onCurrentSessionDeleted: () => createNewSession(),
+  // Covers deletions from this tab too: the server broadcasts every
+  // hard delete on the sessions channel, so this is the one place a
+  // deleted session's draft has to be forgotten.
+  onSessionDeleted: dropSessionDraft,
 });
 
 // External URL changes (back/forward button, typed URL) → update ref.
@@ -889,6 +897,9 @@ async function refreshGoogleMapsApiKey(): Promise<void> {
 void refreshGoogleMapsApiKey();
 void loadCspExtra();
 installCspViolationListener();
+// The banner names one blocked host; the rest of the list is deduped
+// behind it and surfaces once the user extends the policy.
+const firstCspViolation = computed(() => cspViolations.value[0]);
 
 function googleMapKeyFor(toolName: string | undefined): string | null {
   return toolName === TOOL_NAMES.mapControl ? googleMapsApiKey.value : null;
@@ -920,16 +931,25 @@ watch(currentSessionId, (sessionId) => {
     }
   }
   previousSessionId = sessionId;
+});
 
-  // Clear unread in both sessionMap and sessions list (for badge count),
+// Clearing unread keys off the transcript arriving, not off the click.
+// currentSessionId now moves ahead of the fetch (#2809), so a session
+// whose load then fails would otherwise lose its unread badge without
+// ever having been read — and a transcript that 500s while its meta
+// sidecar is healthy leaves the server happy to accept the mark-read.
+// activeSession only becomes defined once the session is in sessionMap,
+// which covers both switching to an already-loaded session and a
+// just-completed load.
+watch(activeSession, (session) => {
+  if (!session) return;
+  // Clear in both sessionMap and the sessions list (for badge count),
   // then tell the server so other tabs see it too.
-  const summary = sessions.value.find((entry) => entry.id === sessionId);
-  const wasUnread = (session && session.hasUnread) || (summary && summary.hasUnread);
-  if (wasUnread) {
-    if (session) session.hasUnread = false;
-    if (summary) summary.hasUnread = false;
-    markSessionRead(sessionId);
-  }
+  const summary = sessions.value.find((entry) => entry.id === session.id);
+  if (!(session.hasUnread || summary?.hasUnread)) return;
+  session.hasUnread = false;
+  if (summary) summary.hasUnread = false;
+  markSessionRead(session.id);
 });
 
 const { handleCanvasKeydown, handleKeyNavigation } = useKeyNavigation({
@@ -1112,17 +1132,26 @@ async function sendMessage(text?: string) {
   const filesSnapshot = [...pastedFiles.value];
   pastedFiles.value = [];
 
+  // Uploading the attachments is a real round trip, so the user can be
+  // looking at another session by the time it resolves. Everything past
+  // this point addresses the session the message was composed in: a
+  // failed send must not overwrite the displayed session's draft, and a
+  // successful one must not land in the conversation the user happens
+  // to be reading — under that session's role, at that.
+  const originSessionId = currentSessionId.value;
   const resolved = await resolveAttachments(filesSnapshot);
   if (resolved !== null && "error" in resolved) {
-    userInput.value = message;
-    pastedFiles.value = filesSnapshot;
-    const recoverySession = sessionMap.get(currentSessionId.value);
-    if (recoverySession) pushErrorMessage(recoverySession, t("chatInput.attachImageFailed", { error: resolved.error }));
+    // Gone means deleted mid-upload: its draft was dropped with it, and
+    // handing one back would strand text nothing can ever display.
+    const recoverySession = sessionMap.get(originSessionId);
+    if (!recoverySession) return;
+    restoreDraft(originSessionId, message, filesSnapshot);
+    pushErrorMessage(recoverySession, t("chatInput.attachImageFailed", { error: resolved.error }));
     return;
   }
   const attachments = resolved?.attachments;
 
-  const session = sessionMap.get(currentSessionId.value);
+  const session = sessionMap.get(originSessionId);
   if (!session) return;
 
   beginUserTurn(session, message, attachments);
@@ -1131,7 +1160,7 @@ async function sendMessage(text?: string) {
   const result = await postAgentRun(
     buildAgentRequestBody({
       message,
-      role: sessionRole.value,
+      role: roleOfSession(session),
       chatSessionId: session.id,
       attachments,
     }),

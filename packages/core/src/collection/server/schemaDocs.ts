@@ -11,6 +11,45 @@
 //   - "all"    → the historical full dump, for callers that insist
 import { defangForPrompt } from "../core/promptSafety";
 
+/** Fenced authoring variants inside the reference doc.
+ *
+ *  A collection's authoring LOCATION depends on the root it lives in, and the
+ *  doc is served to the agent by both hosts:
+ *
+ *  - a MANAGED workspace gates writes into `.claude/` and runs a skill-bridge
+ *    hook, so the agent authors under `data/skills/<slug>/` and the hook
+ *    mirrors it across (`staged`);
+ *  - a plain project root has neither gate nor bridge, so `data/skills/` is
+ *    never discovered — writing there produces nothing, silently — and the
+ *    agent must author under `.claude/skills/<slug>/` (`direct`).
+ *
+ *  The two variants are fenced in the markdown so everything else stays shared
+ *  and the doc keeps reading as one document. Fence lines are removed with
+ *  their newline, so the `staged` render is byte-identical to the doc as it was
+ *  before the fences existed — which is what protects the single-workspace
+ *  host. */
+const VARIANT_FENCE = /^<!-- \/?authoring:(staged|direct) -->$/;
+
+export type AuthoringVariant = "staged" | "direct";
+
+/** Strip the fences and drop whichever variant's body doesn't apply. Runs
+ *  BEFORE section parsing, so a variant may contain headings or code fences. */
+export function applyAuthoringVariant(doc: string, variant: AuthoringVariant): string {
+  if (!doc.includes("<!-- authoring:")) return doc;
+  const kept: string[] = [];
+  let dropping: string | null = null;
+  for (const line of doc.split("\n")) {
+    const match = VARIANT_FENCE.exec(line.trim());
+    if (match) {
+      const [, name = ""] = match;
+      dropping = line.trim().startsWith("<!-- /") ? null : name === variant ? null : name;
+      continue;
+    }
+    if (dropping === null) kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 /** A doc at/below this size is returned whole — sectioning something the
  *  agent can read in one gulp only costs round-trips. This is also what
  *  keeps short user-authored workspace copies (config/helps) verbatim. */
@@ -67,6 +106,8 @@ const normalize = (text: string): string => text.toLowerCase().replace(/`/g, "")
 
 const sliceLines = (lines: string[], from: number, until: number): string => lines.slice(from, until).join("\n").trim();
 
+const HEADING_PATTERN = /^(#{1,3}) (.+)$/;
+
 /** All `#`–`###` headings, skipping fenced code blocks (a `# comment`
  *  inside an example must not become a section boundary). */
 function headingLines(lines: string[]): { index: number; level: number; heading: string }[] {
@@ -74,8 +115,11 @@ function headingLines(lines: string[]): { index: number; level: number; heading:
   let fenced = false;
   lines.forEach((line, index) => {
     if (line.trimStart().startsWith("```")) fenced = !fenced;
-    const match = fenced ? null : /^(#{1,3}) (.+)$/.exec(line);
-    if (match) found.push({ index, level: match[1].length, heading: match[2].trim() });
+    if (fenced) return;
+    const match = HEADING_PATTERN.exec(line);
+    if (!match) return;
+    const [, hashes = "", heading = ""] = match;
+    found.push({ index, level: hashes.length, heading: heading.trim() });
   });
   return found;
 }
@@ -172,7 +216,8 @@ function renderTopic(lines: string[], sections: DocSection[], topic: string): st
  *  up outside any single piece's budget, and the ceiling must hold no
  *  matter what shape of document arrives. Only the explicit \`"all"\`
  *  opt-in and the small-doc verbatim path may exceed it. */
-export function renderSchemaDocs(doc: string, topic?: string): string {
+export function renderSchemaDocs(rawDoc: string, topic?: string, variant: AuthoringVariant = "staged"): string {
+  const doc = applyAuthoringVariant(rawDoc, variant);
   const requested = topic?.trim() ?? "";
   if (normalize(requested) === "all") return doc;
   if (doc.length <= SCHEMA_DOCS_VERBATIM_LIMIT) return doc;

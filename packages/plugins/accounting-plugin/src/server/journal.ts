@@ -42,8 +42,8 @@ export interface ValidationError {
 export interface ParsedEntry {
   date: string;
   lines: JournalLine[];
-  memo?: string;
-  replacesEntryId?: string;
+  memo?: string | undefined;
+  replacesEntryId?: string | undefined;
 }
 
 export type EntryParseResult = { ok: true; entry: ParsedEntry } | { ok: false; errors: ValidationError[] };
@@ -81,6 +81,7 @@ export function localDateString(now: Date = new Date()): string {
 export function isValidCalendarDate(date: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
   const [year, month, day] = date.split("-").map((segment) => parseInt(segment, 10));
+  if (year === undefined || month === undefined || day === undefined) return false;
   const parsed = new Date(Date.UTC(year, month - 1, day));
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
 }
@@ -274,9 +275,9 @@ export function parseEntry(raw: unknown, accounts: readonly Account[]): EntryPar
 export function makeEntry(input: {
   date: string;
   lines: readonly JournalLine[];
-  memo?: string;
-  kind?: JournalEntry["kind"];
-  replacesEntryId?: string;
+  memo?: string | undefined;
+  kind?: JournalEntry["kind"] | undefined;
+  replacesEntryId?: string | undefined;
 }): JournalEntry {
   const entry: JournalEntry = {
     id: randomUUID(),

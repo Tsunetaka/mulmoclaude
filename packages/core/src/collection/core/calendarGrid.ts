@@ -4,6 +4,14 @@
 // function takes its inputs explicitly so the logic is unit-testable
 // without faking the clock. All internal arithmetic runs in UTC (which
 // has no DST), so fixed 86_400_000 ms steps never skip or double a day.
+//
+// ONE deliberate exception, `localCivilOf`: a server-stamped instant is a point
+// in time rather than a wall clock, so asking which day it lands on is a
+// question about the reader's zone and cannot be answered in UTC without
+// answering it wrongly for most readers. It is the only function here whose
+// result depends on the environment, and its tests pin TZ.
+
+import { serverTimeMillis } from "./serverTime";
 
 const MS_PER_DAY = 86_400_000;
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -102,15 +110,39 @@ export function parseIsoDateTime(value: unknown): { ymd: Ymd; minutes: number } 
   return { ymd, minutes };
 }
 
-/** Civil date from either a `YYYY-MM-DD` or a `YYYY-MM-DDTHH:MM` value, so the
- *  month grid buckets date-only and datetime anchors alike. */
+/** A server-stamped instant as the civil time it happened at HERE.
+ *
+ *  `parseIsoDateTime` stays strict and stays civil: it is what the grid, the
+ *  trigger and the spawn code parse, and teaching it to swallow an absolute
+ *  instant would mean placing an instant on a civil grid with no zone — the
+ *  thing its strictness prevents. So the conversion happens at the placement
+ *  instead, and it happens ONCE.
+ *
+ *  LOCAL rather than UTC, deliberately. An instant is a point in time, and the
+ *  question the grid answers is "which of MY days was that". A Tokyo evening
+ *  booking sits on the correct day for the person in Tokyo and on the previous
+ *  one in UTC. The cost is that two people in different zones can see the same
+ *  record on different days — which is what an absolute instant honestly means,
+ *  where a civil `YYYY-MM-DDTHH:MM` means the same wall clock for everyone. */
+function localCivilOf(value: unknown): { ymd: Ymd; minutes: number } | null {
+  const millis = serverTimeMillis(value);
+  if (millis === null) return null;
+  const instant = new Date(millis);
+  return {
+    ymd: { year: instant.getFullYear(), month: instant.getMonth() + 1, day: instant.getDate() },
+    minutes: instant.getHours() * 60 + instant.getMinutes(),
+  };
+}
+
+/** Civil date from a `YYYY-MM-DD`, a `YYYY-MM-DDTHH:MM`, or a server-stamped
+ *  instant, so the month grid buckets all three alike. */
 export function dateOf(value: unknown): Ymd | null {
-  return parseIsoDate(value) ?? parseIsoDateTime(value)?.ymd ?? null;
+  return parseIsoDate(value) ?? parseIsoDateTime(value)?.ymd ?? localCivilOf(value)?.ymd ?? null;
 }
 
 /** Minutes-of-day from a datetime value, or null for date-only / invalid. */
 function timeOf(value: unknown): number | null {
-  return parseIsoDateTime(value)?.minutes ?? null;
+  return parseIsoDateTime(value)?.minutes ?? localCivilOf(value)?.minutes ?? null;
 }
 
 /** Parse a free-form time-string field into start/end minutes-of-day.
@@ -129,7 +161,8 @@ export function parseTimeRange(value: unknown): { startMin: number | null; endMi
   const minutesOf = (match: RegExpMatchArray): number | null => clockToMinutes(Number(match[1]), Number(match[2]));
   // No separator → a single point in time (start only).
   if (!RANGE_SEP_RE.test(text)) {
-    const startMin = minutesOf(tokens[0]);
+    const [firstToken] = tokens;
+    const startMin = firstToken ? minutesOf(firstToken) : null;
     return startMin === null ? null : { startMin, endMin: null };
   }
   // Separator present → assign each token to the side of the first separator.
@@ -291,34 +324,65 @@ export interface LaneAssignment {
   lanes: number;
 }
 
-export function assignLanes(blocks: readonly LaneSpan[]): LaneAssignment[] {
-  const order = [...blocks.keys()].sort((left, right) => blocks[left].startMin - blocks[right].startMin || blocks[left].endMin - blocks[right].endMin);
-  const result: LaneAssignment[] = blocks.map(() => ({ lane: 0, lanes: 1 }));
-  let cluster: number[] = [];
-  let clusterEnd = Number.NEGATIVE_INFINITY;
-  const laneEnds: number[] = [];
-  const flush = (): void => {
-    for (const index of cluster) result[index].lanes = laneEnds.length;
-    cluster = [];
-    laneEnds.length = 0;
-    clusterEnd = Number.NEGATIVE_INFINITY;
-  };
-  for (const index of order) {
-    const block = blocks[index];
-    if (cluster.length > 0 && block.startMin >= clusterEnd) flush();
-    let lane = laneEnds.findIndex((end) => end <= block.startMin);
-    if (lane === -1) {
-      lane = laneEnds.length;
-      laneEnds.push(block.endMin);
-    } else {
-      laneEnds[lane] = block.endMin;
+/** One input block paired with its position in the caller's array, so lane
+ *  assignment can sort freely and still report back in input order. */
+interface PositionedSpan {
+  index: number;
+  span: LaneSpan;
+}
+
+function sortByStart(blocks: readonly LaneSpan[]): PositionedSpan[] {
+  return [...blocks.entries()]
+    .map(([index, span]) => ({ index, span }))
+    .sort((left, right) => left.span.startMin - right.span.startMin || left.span.endMin - right.span.endMin);
+}
+
+interface ClusterState {
+  /** Clusters already closed. */
+  done: PositionedSpan[][];
+  /** The cluster still accepting blocks. */
+  current: PositionedSpan[];
+  /** Latest end minute seen in `current` — the cutoff for the next block. */
+  end: number;
+}
+
+/** Cut the start-ordered blocks into overlap clusters: a new cluster begins at
+ *  the first block that starts at or after every earlier block has ended. */
+function splitClusters(ordered: readonly PositionedSpan[]): PositionedSpan[][] {
+  // Appends into the accumulator's arrays rather than rebuilding them. The
+  // spread form read well but copied both arrays on every block, so a day
+  // whose blocks all overlap cost O(n²) allocations to lay out (#2765).
+  const initial: ClusterState = { done: [], current: [], end: Number.NEGATIVE_INFINITY };
+  const state = ordered.reduce<ClusterState>((acc, block) => {
+    if (acc.current.length > 0 && block.span.startMin >= acc.end) {
+      acc.done.push(acc.current);
+      return { done: acc.done, current: [block], end: block.span.endMin };
     }
-    result[index].lane = lane;
-    cluster.push(index);
-    clusterEnd = Math.max(clusterEnd, block.endMin);
-  }
-  flush();
-  return result;
+    acc.current.push(block);
+    return { done: acc.done, current: acc.current, end: Math.max(acc.end, block.span.endMin) };
+  }, initial);
+  if (state.current.length > 0) state.done.push(state.current);
+  return state.done;
+}
+
+/** Greedy lane packing inside one cluster: reuse the first lane already free at
+ *  this block's start, else open a new one. Every member reports the cluster's
+ *  final lane count so a renderer can size each block to `1 / lanes`. */
+function packCluster(cluster: readonly PositionedSpan[]): [number, LaneAssignment][] {
+  const laneEnds: number[] = [];
+  const placed = cluster.map(({ index, span }) => {
+    const reusable = laneEnds.findIndex((end) => end <= span.startMin);
+    const lane = reusable === -1 ? laneEnds.length : reusable;
+    laneEnds[lane] = span.endMin;
+    return { index, lane };
+  });
+  return placed.map(({ index, lane }) => [index, { lane, lanes: laneEnds.length }]);
+}
+
+export function assignLanes(blocks: readonly LaneSpan[]): LaneAssignment[] {
+  const clusters = splitClusters(sortByStart(blocks));
+  const assignments = new Map<number, LaneAssignment>(clusters.flatMap(packCluster));
+  return blocks.map((_, index) => assignments.get(index) ?? { lane: 0, lanes: 1 });
 }
 
 /** Month label key inputs — returns the 1st of the month as a `Date` so the

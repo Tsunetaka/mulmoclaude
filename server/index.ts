@@ -42,6 +42,7 @@ import filesRoutes from "./api/routes/files.js";
 import configRoutes from "./api/routes/config.js";
 import configRefreshRoutes from "./api/routes/config-refresh.js";
 import hookLogRoutes from "./api/routes/hookLog.js";
+import mcpBrokerReadyRoutes from "./api/routes/mcpBrokerReady.js";
 import skillsRoutes from "./api/routes/skills.js";
 import workFilesRoutes from "./api/routes/workFiles.js";
 import collectionsRoutes, { makeViewActionRateLimiter } from "./api/routes/collections.js";
@@ -712,6 +713,7 @@ app.use(filesRoutes);
 app.use(configRoutes);
 app.use(configRefreshRoutes);
 app.use(hookLogRoutes);
+app.use(mcpBrokerReadyRoutes);
 app.use(skillsRoutes);
 app.use(collectionsRoutes);
 app.use(collectionsRegistryRoutes);
@@ -1162,6 +1164,19 @@ function initEventPublishers(pubsub: IPubSub): void {
   // near the route mount; only the pub/sub instance is wired here.
   initAccountingEventPublisher(pubsub);
   initCollectionChangePublisher(pubsub);
+  // Shared (firestore-backed) collections are NOT bound here, deliberately.
+  //
+  // They live in a project repository, one app.json per repo (the shareable
+  // collection design's D5). This host is a single managed workspace holding
+  // unrelated collections side by side, so one roster would govern all of
+  // them — "the person you shared the client list with can read the blood
+  // test results". MulmoTerminal, whose roots ARE project repositories, is
+  // the host for them; it declares `sharedCollections: true` in its own host
+  // binding and wires its own accessor.
+  //
+  // Nothing else is needed to keep them out: without a declared capability the
+  // engine refuses a firestore-storage schema at the acceptance gate, with a
+  // reason rather than a silent skip.
   initPhotoLocationsChangePublisher(pubsub);
   // MulmoScript generation events → plugin pubsub channel (the extracted
   // presentMulmoScript View's spinner/reload signal).

@@ -5,7 +5,7 @@
 
 import type { MinimalLogger } from "@mulmoclaude/common";
 import type { FileOps } from "gui-chat-protocol";
-import type { MulmoScriptGenerationEvent } from "../core/contract";
+import type { MulmoScriptChangedEvent, MulmoScriptGenerationEvent } from "../core/contract";
 
 export interface OpFailure {
   ok: false;
@@ -24,6 +24,13 @@ export interface GenerateOpArgs {
   force?: boolean | undefined;
   chatSessionId?: string | undefined;
 }
+
+/** `GenerateOpArgs` with `K` promoted to genuinely required. `Required<Pick<…>>`
+ *  does NOT work here: under `exactOptionalPropertyTypes` the `-?` modifier drops
+ *  only the `?`, leaving the explicitly declared `| undefined` in place, so the
+ *  op body still sees `T | undefined`. `Omit` for the rest, because intersecting
+ *  the whole interface would re-introduce the optional declaration. */
+export type GenerateOpArgsWith<K extends keyof GenerateOpArgs> = { [P in K]-?: Exclude<GenerateOpArgs[P], undefined> } & Omit<GenerateOpArgs, K>;
 
 export type MovieGenerationResult = { ok: true; outputPath: string } | { ok: false; error: string };
 export type PdfGenerationResult = { ok: true; outputPath: string } | { ok: false; error: string };
@@ -63,5 +70,10 @@ export interface MulmoScriptServerBackend {
    * session. The package keeps the in-flight snapshot itself.
    */
   onGenerationEvent?: (chatSessionId: string | undefined, event: MulmoScriptGenerationEvent) => void;
+  /**
+   * A script was written. Every open View reloads from disk, which is what makes an agent's
+   * edit appear without the user reopening the canvas.
+   */
+  onScriptChanged?: (event: MulmoScriptChangedEvent) => void;
   log?: MulmoScriptServerLog;
 }

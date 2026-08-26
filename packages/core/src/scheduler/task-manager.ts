@@ -5,11 +5,10 @@
 // runs in sequence within one tick.
 
 import type { MinimalLogger } from "@mulmoclaude/common";
-import { SCHEDULE_TYPES } from "@receptron/task-scheduler";
+import { isScheduleDueAt, unfireableScheduleReason, type TaskSchedule } from "./schedule-window.js";
 
 const ONE_SECOND_MS = 1000;
 const ONE_MINUTE_MS = 60 * ONE_SECOND_MS;
-const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
 
 // Gap between the START of each independently-due task within one tick. When
 // many tasks come due at the same minute (system journal + feed-refresh + a few
@@ -43,7 +42,9 @@ export type SchedulerLogger = MinimalLogger;
 
 const NOOP_LOG: SchedulerLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
-export type TaskSchedule = { type: typeof SCHEDULE_TYPES.interval; intervalMs: number } | { type: typeof SCHEDULE_TYPES.daily; time: string }; // time: "HH:MM" in UTC
+// Re-exported, not redefined: the schedule shape belongs with the window
+// arithmetic that interprets it, and hosts have always imported it from here.
+export type { TaskSchedule } from "./schedule-window.js";
 
 export interface TaskRunContext {
   taskId: string;
@@ -93,22 +94,18 @@ export interface TaskManagerOptions {
 }
 
 function isDue(now: Date, schedule: TaskSchedule, tickMs: number): boolean {
-  if (schedule.type === SCHEDULE_TYPES.interval) {
-    const msSinceMidnight = now.getUTCHours() * ONE_HOUR_MS + now.getUTCMinutes() * ONE_MINUTE_MS + now.getUTCSeconds() * ONE_SECOND_MS;
-    // Round down to tick boundary, then check if it aligns with the interval
-    const rounded = Math.floor(msSinceMidnight / tickMs) * tickMs;
-    return rounded % schedule.intervalMs === 0;
-  }
+  return isScheduleDueAt(schedule, now.getTime(), tickMs);
+}
 
-  if (schedule.type === SCHEDULE_TYPES.daily) {
-    const [hours, minutes] = schedule.time.split(":").map(Number);
-    const targetMs = hours * ONE_HOUR_MS + minutes * ONE_MINUTE_MS;
-    const msSinceMidnight = now.getUTCHours() * ONE_HOUR_MS + now.getUTCMinutes() * ONE_MINUTE_MS + now.getUTCSeconds() * ONE_SECOND_MS;
-    const rounded = Math.floor(msSinceMidnight / tickMs) * tickMs;
-    return rounded === targetMs;
-  }
-
-  return false;
+/** Say out loud that this schedule can never fire. The task is still accepted —
+ *  `isDue` answers false forever, which is the safe outcome — but silence here
+ *  is what made "the task I scheduled has never run once" a bug with no
+ *  evidence anywhere to start from (#2765). Deliberately not a throw: a
+ *  consumer whose task has been quietly dead would get a boot crash instead. */
+function reportUnfireable(log: SchedulerLogger, taskId: string, schedule: TaskSchedule): void {
+  const reason = unfireableScheduleReason(schedule);
+  if (reason === null) return;
+  log.error(`schedule has an unusable ${reason.field} — this task will never run`, { id: taskId, [reason.field]: reason.value });
 }
 
 /** Split the due tasks into those that may run immediately and those gated
@@ -246,6 +243,7 @@ export function createTaskManager(options?: TaskManagerOptions): ITaskManager {
       if (registry.has(def.id)) {
         throw new Error(`[task-manager] Task "${def.id}" is already registered`);
       }
+      reportUnfireable(log, def.id, def.schedule);
       registry.set(def.id, def);
       log.info("registered", { id: def.id });
     },
@@ -253,6 +251,9 @@ export function createTaskManager(options?: TaskManagerOptions): ITaskManager {
     updateSchedule(taskId: string, schedule: TaskSchedule): boolean {
       const def = registry.get(taskId);
       if (!def) return false;
+      // Checked here as well as at registration: an override applied at run
+      // time (`applyScheduleOverride`) never passes through `registerTask`.
+      reportUnfireable(log, taskId, schedule);
       def.schedule = schedule;
       log.info("schedule updated", { id: taskId });
       return true;

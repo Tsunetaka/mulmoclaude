@@ -156,7 +156,22 @@ export type CollectionCustomView = z.infer<typeof CustomViewZ>;
  *  collection's data endpoint. `read` returns enriched records (getItems
  *  semantics); `write` validates-and-stores rows (putItems semantics).
  *  There is deliberately no `delete` — a view can never do more than the
- *  agent's own `manageCollection` tool. */
+ *  agent's own `manageCollection` tool.
+ *
+ *  TWO HOST INVARIANTS ride on this token, and both are easy to break in a
+ *  multi-root host:
+ *
+ *  1. **The token carries an OPAQUE scope, never a path.** A collection's
+ *     identity is `(root, slug)`, so a token minted in a multi-root host has to
+ *     say which root — but the token is signed, not encrypted, and is handed to
+ *     an LLM-authored iframe. An absolute root in the payload publishes the
+ *     user's home directory to that iframe. Mint an opaque project id and
+ *     resolve it host-side.
+ *  2. **The scope goes in the TOKEN, not on `dataUrl`.** `__MC_VIEW.dataUrl` is
+ *     a bare base URL that views concatenate onto (`+ "?fields=…"`,
+ *     `+ "/query"`, `+ "/actions/…"`, `+ "/image?path=…"` — see
+ *     `assets/helps/custom-view.md`). A host that appends its own query
+ *     parameter there to carry the project breaks every one of those calls. */
 export type CollectionViewCapability = NonNullable<CollectionCustomView["capabilities"]>[number];
 
 /** How a `spawn` advances the source item's `triggerField` date to
@@ -220,7 +235,7 @@ export type CollectionStorage = z.infer<typeof StorageZ>;
  *  default (`dataPath`); `csv` is implied by `dataSource`; other kinds are
  *  named explicitly via `storage.type`. The server's store factory registry
  *  (`server/store.ts`) is keyed by this. */
-export type CollectionStorageKind = "file" | "csv" | "sqlite";
+export type CollectionStorageKind = "file" | "csv" | "sqlite" | "firestore";
 
 /** Which storage backend serves this schema's records. Derived, not stored:
  *  existing schemas carry no `storage` key and must keep resolving exactly
@@ -257,6 +272,13 @@ export interface CollectionSummary {
    *  know which collection change-channel(s) to watch for a live icon
    *  update (see `useDynamicShortcutIcons`). */
   iconSources?: string[];
+  /** The app a SHARED collection belongs to — present iff the schema declares
+   *  `storage.type: "firestore"`. A client needs it to subscribe to the right
+   *  live-change channel: a shared collection publishes on
+   *  `collection:app/<aid>/<cid>`, and a subscriber that keys on the name alone
+   *  listens to the LOCAL channel, so the refetch never arrives. Not a secret —
+   *  it is committed in the repository every clone reads. */
+  appId?: string;
 }
 
 export interface CollectionDetail extends CollectionSummary {

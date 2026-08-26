@@ -32,7 +32,7 @@
         </tr>
       </thead>
       <tbody>
-        <tr v-for="account in bsAccounts" :key="account.code" class="border-b border-gray-100">
+        <tr v-for="{ account, row } in accountRows" :key="account.code" class="border-b border-gray-100">
           <td class="py-1 px-2">
             <span class="font-mono text-[10px] text-gray-400 mr-2">{{ account.code }}</span>
             <span>{{ account.name }}</span>
@@ -40,7 +40,7 @@
           </td>
           <td class="py-1 px-2">
             <input
-              v-model.number="rows[account.code].debit"
+              v-model.number="row.debit"
               type="number"
               :step="step"
               min="0"
@@ -51,7 +51,7 @@
           </td>
           <td class="py-1 px-2">
             <input
-              v-model.number="rows[account.code].credit"
+              v-model.number="row.credit"
               type="number"
               :step="step"
               min="0"
@@ -93,11 +93,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useAccountingI18n } from "../lang";
-import { getOpeningBalances, setOpeningBalances, type Account, type JournalEntry, type JournalLine } from "../api";
+import { useAccountingApi, type Account, type JournalEntry, type JournalLine } from "../api";
 import { formatAmount, inputStepFor, localDateString } from "../../shared";
 import { useLatestRequest } from "./useLatestRequest";
 import AccountsModal from "./AccountsModal.vue";
 import { errorMessage } from "../../shared/errors";
+
+const api = useAccountingApi();
 
 const { t } = useAccountingI18n();
 
@@ -129,12 +131,25 @@ function ensureRows(): void {
   }
 }
 
+// Pair each visible account with its row so the template never indexes
+// `rows`. The paired `row` is the reactive object itself, so `v-model`
+// still writes through; a missing row is skipped, matching the
+// `if (!row) continue` the rest of this file already uses.
+const accountRows = computed(() =>
+  bsAccounts.value.flatMap((account) => {
+    const row = rows.value[account.code];
+    return row ? [{ account, row }] : [];
+  }),
+);
+
 function onDebitInput(code: string): void {
   const row = rows.value[code];
+  if (!row) return;
   if (row.debit !== null && row.debit !== 0) row.credit = null;
 }
 function onCreditInput(code: string): void {
   const row = rows.value[code];
+  if (!row) return;
   if (row.credit !== null && row.credit !== 0) row.debit = null;
 }
 
@@ -203,7 +218,7 @@ async function loadExisting(): Promise<void> {
   // opening doesn't inherit the previous book's draft values.
   const token = beginLoad();
   const next = freshRows();
-  const result = await getOpeningBalances(props.bookId);
+  const result = await api.getOpeningBalances(props.bookId);
   // Drop the result if the user has switched books since this
   // call started — otherwise stale rows would land on the new
   // book's form.
@@ -231,7 +246,7 @@ async function onSubmit(): Promise<void> {
   error.value = null;
   successMessage.value = null;
   try {
-    const result = await setOpeningBalances({ bookId: props.bookId, asOfDate: asOfDate.value, lines: toApiLines() });
+    const result = await api.setOpeningBalances({ bookId: props.bookId, asOfDate: asOfDate.value, lines: toApiLines() });
     if (!result.ok) {
       error.value = result.error;
       return;

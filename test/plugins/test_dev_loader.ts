@@ -2,7 +2,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -15,6 +15,7 @@ import {
   validateDevPluginPath,
 } from "../../server/plugins/dev-loader.js";
 import type { RuntimePlugin } from "../../server/plugins/runtime-loader.js";
+import { makeTempDir } from "../helpers/tempDir.js";
 
 interface FixtureOpts {
   /** Override the package.json's `name`. Default `@fixture/dev-plugin`. */
@@ -28,7 +29,7 @@ interface FixtureOpts {
 }
 
 function makeDevPluginFixture(opts: FixtureOpts = {}): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "mulmo-dev-plugin-"));
+  const dir = makeTempDir("mulmo-dev-plugin-");
   if (!opts.omitPackageJson) {
     const pkg: Record<string, unknown> = {
       version: "0.1.0",
@@ -73,18 +74,23 @@ describe("parseDevPluginsEnv", () => {
     const value = [inputA, inputB].join(path.delimiter);
     const result = parseDevPluginsEnv(value, cwd);
     assert.equal(result.length, 2);
-    assert.equal(result[0].rawInput, inputA);
-    assert.equal(result[0].absPath, inputA);
-    assert.equal(result[1].rawInput, inputB);
-    assert.equal(result[1].absPath, inputB);
+    const [entryA, entryB] = result;
+    assert.ok(entryA);
+    assert.ok(entryB);
+    assert.equal(entryA.rawInput, inputA);
+    assert.equal(entryA.absPath, inputA);
+    assert.equal(entryB.rawInput, inputB);
+    assert.equal(entryB.absPath, inputB);
   });
 
   it("resolves relative paths against the supplied cwd", () => {
     const cwd = path.resolve("/tmp/cwd");
     const result = parseDevPluginsEnv("./local", cwd);
     assert.equal(result.length, 1);
-    assert.equal(result[0].rawInput, "./local");
-    assert.equal(result[0].absPath, path.resolve(cwd, "local"));
+    const [entry] = result;
+    assert.ok(entry);
+    assert.equal(entry.rawInput, "./local");
+    assert.equal(entry.absPath, path.resolve(cwd, "local"));
   });
 
   it("ignores empty segments (consecutive delimiters)", () => {
@@ -112,7 +118,7 @@ describe("validateDevPluginPath", () => {
   });
 
   it("rejects a path that is a file, not a directory", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "mulmo-dev-plugin-file-"));
+    const dir = makeTempDir("mulmo-dev-plugin-file-");
     const filePath = path.join(dir, "not-a-dir");
     writeFileSync(filePath, "");
     const result = await validateDevPluginPath(filePath);
@@ -151,9 +157,11 @@ describe("loadDevPlugins", () => {
     const { plugins, errors } = await loadDevPlugins([{ rawInput: dir, absPath: dir }]);
     assert.deepEqual(errors, []);
     assert.equal(plugins.length, 1);
-    assert.equal(plugins[0].name, "@fixture/dev-plugin");
-    assert.equal(plugins[0].version, DEV_VERSION);
-    assert.equal(plugins[0].cachePath, dir);
+    const [loaded] = plugins;
+    assert.ok(loaded);
+    assert.equal(loaded.name, "@fixture/dev-plugin");
+    assert.equal(loaded.version, DEV_VERSION);
+    assert.equal(loaded.cachePath, dir);
   });
 
   it("collects errors for invalid inputs without throwing", async () => {
@@ -161,7 +169,9 @@ describe("loadDevPlugins", () => {
     const { plugins, errors } = await loadDevPlugins([{ rawInput: ghost, absPath: ghost }]);
     assert.deepEqual(plugins, []);
     assert.equal(errors.length, 1);
-    assert.match(errors[0], /does not exist/);
+    const [error] = errors;
+    assert.ok(error);
+    assert.match(error, /does not exist/);
   });
 
   it("loads multiple plugins independently — failure of one does not block the other", async () => {
@@ -172,7 +182,9 @@ describe("loadDevPlugins", () => {
       { rawInput: okDir, absPath: okDir },
     ]);
     assert.equal(plugins.length, 1);
-    assert.equal(plugins[0].name, "@fixture/ok-one");
+    const [loaded] = plugins;
+    assert.ok(loaded);
+    assert.equal(loaded.name, "@fixture/ok-one");
     assert.equal(errors.length, 1);
   });
 });
@@ -199,8 +211,10 @@ describe("detectDevCollisions", () => {
     const dev = [fakePlugin("@a/dup", "/dev/first"), fakePlugin("@a/dup", "/dev/second")];
     const collisions = detectDevCollisions(dev, []);
     assert.equal(collisions.length, 1);
-    assert.equal(collisions[0].name, "@a/dup");
-    assert.deepEqual(collisions[0].sources, ["/dev/first", "/dev/second"]);
+    const [collision] = collisions;
+    assert.ok(collision);
+    assert.equal(collision.name, "@a/dup");
+    assert.deepEqual(collision.sources, ["/dev/first", "/dev/second"]);
   });
 
   it("flags a dev plugin colliding with an installed plugin and tags the prod source", () => {
@@ -208,8 +222,10 @@ describe("detectDevCollisions", () => {
     const prod = [fakePlugin("@a/conflict", "/prod/cache/conflict")];
     const collisions = detectDevCollisions(dev, prod);
     assert.equal(collisions.length, 1);
-    assert.equal(collisions[0].name, "@a/conflict");
-    assert.deepEqual(collisions[0].sources, ["/dev/here", "(installed) /prod/cache/conflict"]);
+    const [collision] = collisions;
+    assert.ok(collision);
+    assert.equal(collision.name, "@a/conflict");
+    assert.deepEqual(collision.sources, ["/dev/here", "(installed) /prod/cache/conflict"]);
   });
 
   it("reports both kinds of collision in one pass", () => {
@@ -233,7 +249,9 @@ describe("evaluateDevPluginGate", () => {
     assert.equal(verdict.ok, true);
     if (verdict.ok) {
       assert.equal(verdict.plugins.length, 1);
-      assert.equal(verdict.plugins[0].name, "@a/one");
+      const [gated] = verdict.plugins;
+      assert.ok(gated);
+      assert.equal(gated.name, "@a/one");
     }
   });
 
@@ -243,8 +261,11 @@ describe("evaluateDevPluginGate", () => {
     assert.equal(verdict.ok, false);
     if (!verdict.ok) {
       assert.equal(verdict.fatalMessages.length, 2);
-      assert.match(verdict.fatalMessages[0], /dist\/index\.js not found/);
-      assert.match(verdict.fatalMessages[1], /refusing to start/);
+      const [loadFailure, summary] = verdict.fatalMessages;
+      assert.ok(loadFailure);
+      assert.ok(summary);
+      assert.match(loadFailure, /dist\/index\.js not found/);
+      assert.match(summary, /refusing to start/);
     }
   });
 

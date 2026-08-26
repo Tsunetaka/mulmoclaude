@@ -7,13 +7,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { SpreadsheetEngine, type SheetData } from "../../../../src/plugins/spreadsheet/engine/index.ts";
+import { cellAt } from "./cellAccess.ts";
 
 /** Calculate `formula` in cell A-after-the-data of a single sheet built from `rows`. */
 const evalInSheet = (rows: (string | number)[][], formula: string): unknown => {
   const data = rows.map((row) => row.map((value) => ({ v: value })));
   data.push([{ v: formula }]);
   const result = new SpreadsheetEngine().calculate({ name: "S", data });
-  return result.data[data.length - 1][0];
+  return cellAt(result.data, data.length - 1, 0);
 };
 
 describe("VLOOKUP — same sheet", () => {
@@ -54,7 +55,8 @@ describe("VLOOKUP — cross-sheet table array (#2390: no longer throws)", () => 
     };
     const main: SheetData = { name: "Main", data: [[{ v: '=VLOOKUP("Bob", Data!A1:B3, 2, FALSE)' }]] };
     const [mainResult] = new SpreadsheetEngine().calculateWorkbook([main, data]);
-    assert.equal(mainResult.data[0][0], 20);
+    assert.ok(mainResult);
+    assert.equal(cellAt(mainResult.data, 0, 0), 20);
   });
 });
 
@@ -132,5 +134,48 @@ describe("INDEX — bounds (#2390)", () => {
 
   it("returns #REF! for row 0 on a multi-row range (was reading A1 above the range)", () => {
     assert.equal(evalInSheet(grid, "=INDEX(A2:B3, 0, 1)"), "#REF!");
+  });
+});
+
+// MATCH and XLOOKUP read their ranges through the NUMERIC-ONLY reader, which
+// drops every text cell. #2358 moved SUMIF/AVERAGEIF onto the raw reader for
+// exactly this reason — `calculator.ts` still explains it — and these two were
+// missed, so they carry both halves of that failure: text keys are invisible,
+// and a lookup/return pair filtered independently falls out of row alignment
+// and answers with a DIFFERENT row's value, silently.
+describe("MATCH / XLOOKUP over text (#2765)", () => {
+  const fruit: (string | number)[][] = [
+    ["apple", 1],
+    ["banana", 2],
+    ["cherry", 3],
+  ];
+
+  it("MATCH finds a text key", () => {
+    assert.equal(evalInSheet(fruit, '=MATCH("banana", A1:A3, 0)'), 2);
+  });
+
+  it("XLOOKUP returns the paired value for a text key", () => {
+    assert.equal(evalInSheet(fruit, '=XLOOKUP("banana", A1:A3, B1:B3)'), 2);
+  });
+
+  // The dangerous one: no error, just a wrong number. `A2` is text, so the
+  // lookup column loses that row while the return column keeps all three —
+  // the match at index 1 then reads B2 instead of B3.
+  it("XLOOKUP stays row-aligned when the lookup column holds text", () => {
+    const mixed: (string | number)[][] = [
+      [1, 100],
+      ["x", 200],
+      [3, 300],
+    ];
+    assert.equal(evalInSheet(mixed, "=XLOOKUP(3, A1:A3, B1:B3)"), 300);
+  });
+
+  it("MATCH keeps its 1-based index when earlier rows hold text", () => {
+    const mixed: (string | number)[][] = [
+      ["x", 0],
+      [7, 0],
+      [9, 0],
+    ];
+    assert.equal(evalInSheet(mixed, "=MATCH(9, A1:A3, 0)"), 3);
   });
 });

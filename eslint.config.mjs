@@ -39,6 +39,11 @@ export default [
   },
   {
     ignores: [
+      // Runtime workspace files the app rewrites while it runs (scheduler
+      // state, roles, dashboard, …) when the workspace IS the checkout. The
+      // `prettier/prettier` rule below applies to every file, JSON included,
+      // and eslint does not read `.gitignore` the way prettier does (#2873).
+      "config",
       "lib",
       "src/plugins/spreadsheet/engine",
       "packages/*/dist",
@@ -261,10 +266,12 @@ export default [
       // accumulated ~190 casts in production code (#2692). `never` is the
       // setting that matches the written rule.
       //
-      // Staged at `warn` while the backlog drains file by file; it graduates
-      // to `error` once production code is clean. Tests keep the permissive
-      // setting via the test override below.
-      "@typescript-eslint/consistent-type-assertions": ["warn", { assertionStyle: "never" }],
+      // `error` since the backlog drained: a new cast now fails CI, which is
+      // the whole point — the rule existed in prose for months and the count
+      // only ever went up. Tests keep the permissive setting via the test
+      // override below; the eight irreducible production casts are listed,
+      // one reason each, in the allowlist block at the end of this file.
+      "@typescript-eslint/consistent-type-assertions": ["error", { assertionStyle: "never" }],
       "@typescript-eslint/no-require-imports": "error",
       "@typescript-eslint/prefer-enum-initializers": "error",
       "import/first": "error",
@@ -463,10 +470,10 @@ export default [
       // was therefore invisible to `consistent-type-assertions` — 18 of them
       // across host and plugin components (#2692). `vue/no-restricted-syntax`
       // is the one rule that does walk that AST, so the same ban is spelled
-      // here as a selector. `warn` matches the script-side severity; both
-      // graduate together.
+      // here as a selector. `error` matches the script-side severity; both
+      // graduated together once the template backlog reached zero.
       "vue/no-restricted-syntax": [
-        "warn",
+        "error",
         {
           selector: "TSAsExpression",
           message: "Do not use any type assertions — narrow in <script> and pass the result to the template.",
@@ -593,18 +600,22 @@ export default [
     },
     rules: {
       // (1) `any` that survives no-explicit-any.
-      "@typescript-eslint/no-unsafe-assignment": "warn",
-      // Drained and ratcheted in #2736 (2026-08-02): both measured ZERO over
+      // Ratcheted in #2885: the backlog this was waiting on is drained of
+      // everything fixable without a cast or a behaviour change. What is left
+      // is three families that a rewrite cannot reach, pinned by file in the
+      // grandfather block at the end of this file.
+      "@typescript-eslint/no-unsafe-assignment": "error",
+      // Drained and ratcheted in #2736 (2026-08-02): all four measured ZERO over
       // `src server test e2e e2e-live packages` once their last finding was
       // fixed. Read those counts only after `yarn build:packages` — with
       // `packages/*/dist` missing, every `@mulmoclaude/*` import is an
-      // unresolved type and these two report ~2700 phantom findings. CI builds
+      // unresolved type and these report ~2700 phantom findings. CI builds
       // packages before both typecheck and lint, so the gate sees the real
       // numbers.
       "@typescript-eslint/no-unsafe-member-access": "error",
       "@typescript-eslint/no-unsafe-argument": "error",
-      "@typescript-eslint/no-unsafe-call": "warn",
-      "@typescript-eslint/no-unsafe-return": "warn",
+      "@typescript-eslint/no-unsafe-call": "error",
+      "@typescript-eslint/no-unsafe-return": "error",
       // Zero findings today — on to keep it that way.
       "@typescript-eslint/no-unsafe-enum-comparison": "warn",
       "@typescript-eslint/no-unsafe-declaration-merging": "warn",
@@ -640,9 +651,17 @@ export default [
       // return type. Each site carries a comment naming its upstream guard; the
       // rule stays a `warn` so a genuinely unguarded fold still surfaces.
       //
-      // Also left at `warn`: `no-unsafe-assignment` (19 findings), and
-      // `no-unsafe-call` / `no-unsafe-return`, which are at zero but were not
-      // part of this drain — promote them in their own PR.
+      // `no-unsafe-assignment` was the last of the five still carrying a backlog
+      // (19 findings). #2885 drained it to the sites that need a cast or a
+      // behaviour change to move, so it graduated too — with those sites listed
+      // in the grandfather block rather than the whole rule left at `warn`.
+      //
+      // `sonarjs/function-return-type` graduated in the same pass. Its 12
+      // findings all live in 8 files where the union return IS the contract
+      // (a parser answering `T | null`, a tool handler answering one of several
+      // result shapes); narrowing them changes what callers receive, so they are
+      // grandfathered by file instead of rewritten.
+      "sonarjs/function-return-type": "error",
       "sonarjs/deprecation": "error",
       "sonarjs/argument-type": "error",
       "sonarjs/no-selector-parameter": "error",
@@ -652,6 +671,15 @@ export default [
       // `off` at the bottom of this file for why the flag invalidates it.
       "sonarjs/no-try-promise": "error",
       "sonarjs/post-message": "error",
+      // Same treatment, measured in #2800: zero findings over `src server test
+      // e2e e2e-live packages scripts batch config` — the paths `yarn lint`
+      // passes, so a wider scope than the six above.
+      // It does NOT collide with `no-floating-promises` above, despite both
+      // ruling on `void expr` — S3735 returns early on a promise operand, so the
+      // `void somePromise()` that rule asks for is never reported. Checked by
+      // forcing this rule on a probe: `void syncFn()` reported, `void asyncFn()`
+      // not. `src/composables/useContentDisplay.ts` relies on that.
+      "sonarjs/void-use": "error",
 
       // Three of those woken rules are off entirely rather than warned. Each
       // was checked against all of its findings in this repo, and none of them
@@ -692,32 +720,43 @@ export default [
       "sonarjs/different-types-comparison": "off",
     },
   },
-  // Per-package ratchet for the `as`-cast ban (#2692). The rule is `warn`
-  // repo-wide while the backlog drains; these packages are already at ZERO,
-  // so a new cast in them is a regression rather than a known debt — and the
-  // only thing that stops the drained set from refilling behind the drain.
+  // The eight production casts the `as`-cast ban (#2692) could not remove.
+  // Each is here because the assertion is the LEAST bad option at that site,
+  // not because nobody got to it — the reasoning also sits at the call site.
   //
-  // Verified at zero when added; `packages/relay`'s last one went in the same
-  // PR. Extend this list as a directory reaches zero, and delete the block
-  // once the repo-wide setting itself graduates to `error`.
+  // Listed in config rather than as inline `eslint-disable` comments, per the
+  // issue: an allowlist is greppable, reviewable in one place, and cannot be
+  // added to without touching this file. **Its cost is granularity** — the
+  // rule is off for the whole FILE, so a NINTH cast added to one of these
+  // would not be flagged. Keep the entries pointed at small files, and drop
+  // an entry the moment its cast goes.
   {
     files: [
-      "packages/chat-service/**/*.ts",
-      "packages/client/**/*.ts",
-      "packages/common/**/*.ts",
-      "packages/create-mulmoclaude-plugin/**/*.ts",
-      "packages/mock-server/**/*.ts",
-      "packages/protocol/**/*.ts",
-      "packages/relay/**/*.ts",
-      "packages/scheduler/**/*.ts",
-      "packages/web-push/**/*.ts",
-      "packages/webhook-runtime/**/*.ts",
+      // Widens `Jsonify<T>` to the channel's `JsonObject` at the ONE place
+      // that reasoning is allowed to live; eight handlers used to re-argue it.
+      "packages/core/src/remote-host/index.ts",
+      // `doc.data() as Command`: narrowing it means narrowing the published
+      // `onExpire` signature MulmoTerminal also implements.
+      "packages/core/src/remote-host/server/hostRunner.ts",
+      // Persisted books are deliberately looser than their types (legacy
+      // `fiscalYearEnd: "Q1"`); a predicate would lock users out of them.
+      "packages/plugins/accounting-plugin/src/server/io.ts",
+      // `loadSchedulerItems` / `loadUserTasks` rewrite the file they read, so
+      // dropping unrecognised entries here would delete the user's data.
+      "server/utils/files/json.ts",
+      // `E` is the caller's generic — nothing inside can check it.
+      "src/plugins/api.ts",
+      // The single claimed step of the aggregator pipeline; the claim itself
+      // is checked against every live aggregator by test_meta_aggregation.ts.
+      "src/plugins/metas.ts",
+      // Proving `ToolDefinition.parameters` means shipping a JSON-Schema
+      // validator to the browser for a field nothing on this path reads.
+      "src/tools/runtimeLoader.ts",
+      // `T` belongs to the plugin; validating the payload is its job.
+      "src/utils/plugin/runtime.ts",
     ],
-    // Tests keep the permissive setting the test override below grants them;
-    // this block covers source only, so it must not reach `**/test/**`.
-    ignores: ["packages/*/test/**", "packages/*/**/*.test.ts"],
     rules: {
-      "@typescript-eslint/consistent-type-assertions": ["error", { assertionStyle: "never" }],
+      "@typescript-eslint/consistent-type-assertions": "off",
     },
   },
   // Build + release scripts. `yarn lint` never reached them, so 21 files that
@@ -730,7 +769,7 @@ export default [
   // that catches a real defect — the `as` ban, unused vars, `prefer-const`,
   // `eqeqeq`, the security tripwires — stays on.
   {
-    files: ["scripts/**/*.{ts,mts,mjs,js}", "batch/**/*.ts", "config/**/*.mjs"],
+    files: ["scripts/**/*.{ts,mts,mjs,js}", "batch/**/*.ts", "build-config/**/*.mjs"],
     languageOptions: {
       globals: { ...globals.node, NodeJS: "readonly" },
     },
@@ -743,13 +782,6 @@ export default [
       "max-lines-per-function": "off",
       // `fs`, `os`, `sh`, `pkg` are the idiom in this layer.
       "id-length": "off",
-      // These regexes match this repo's own package.json fields and TS import
-      // statements at build time. Input is repo-owned, so backtracking cost is
-      // a build-speed question, not a denial-of-service one — kept as warnings
-      // so a genuinely new pattern still surfaces at review.
-      "sonarjs/super-linear-regex": "warn",
-      "sonarjs/regex-complexity": "warn",
-      "security/detect-unsafe-regex": "warn",
     },
   },
   // `x?: T | undefined` is not redundant under `exactOptionalPropertyTypes`:
@@ -761,5 +793,98 @@ export default [
   {
     rules: { "sonarjs/no-redundant-optional": "off" },
   },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Grandfather lists (#2885). Same contract as `max-lines-per-function`
+  // above, and the same rules from docs/lint-policy.md: the rule is `error`
+  // everywhere, and only the sites that cannot move without a cast or a
+  // behaviour change are pinned back to `warn` HERE, by file, with the reason.
+  //
+  //   - Never add a file. A new finding must be fixed, not listed.
+  //   - Drain, then delete. When a file's findings are gone, remove its entry;
+  //     when a block is empty, delete the block.
+  //
+  // Listed by file rather than left as a rule-wide or directory-wide `warn`
+  // precisely so a NEW occurrence in an unlisted file fails CI.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // `no-unsafe-assignment`, three families that a rewrite cannot reach:
+  //
+  //  (a) `const parsed: T = JSON.parse(...)` / `await res.json()`. `JSON.parse`
+  //      is typed `any`, and the repo bans `as`, so the alternatives are a
+  //      runtime schema check on every parse — which REJECTS payloads that
+  //      pass today — or nothing. These sites already carry the shape they
+  //      expect in the annotation; the parse itself is guarded by try/catch.
+  //  (b) `Object.create(null)` assigned to a typed `Record`. TypeScript types
+  //      `Object.create` as `any`, and the null prototype is load-bearing —
+  //      with a plain `{}`, `agg["__proto__"] = v` hits the inherited setter
+  //      and the entry vanishes with no collision reported (src/tools/index.ts
+  //      came out of the Codex review on #1156).
+  //  (c) `req.body` destructuring. Express types it `any`; `requestBodyRecord`
+  //      narrows it to `unknown`, but the tiles then have to reach
+  //      `writeDashboard` as `DashboardTile[]`, so the honest fix is per-tile
+  //      validation — new behaviour, not a typing change.
+  {
+    files: [
+      // (a)
+      "packages/core/src/google/fsJson.ts",
+      "packages/relay/src/durable-object.ts",
+      "packages/relay/src/webhooks/line.ts",
+      "packages/relay/src/webhooks/telegram.ts",
+      "server/agent/backend/claude-code.ts",
+      "server/services/translation/llm.ts",
+      "server/utils/files/json.ts",
+      "server/workspace/chat-index/summarizer.ts",
+      "src/plugins/spreadsheet/definition.ts",
+      "src/utils/api.ts",
+      // (b)
+      "src/plugins/metas.ts",
+      "src/tools/index.ts",
+      // (c)
+      "server/api/routes/dashboard.ts",
+    ],
+    rules: { "@typescript-eslint/no-unsafe-assignment": "warn" },
+  },
+
+  // `function-return-type`: the union return IS the contract at these sites —
+  // a parser answering `T | null`, a tool handler answering one of several
+  // result shapes. Narrowing them changes what every caller receives, so this
+  // is a design change per call site, not a lint cleanup.
+  {
+    files: [
+      "packages/core/src/collection/core/deriveAll.ts",
+      "packages/core/src/collection/core/where.ts",
+      "packages/core/src/collection/registry/registryIndex.ts",
+      "packages/core/src/collection/registry/server/registriesConfig.ts",
+      "packages/core/src/collection/server/manageTool.ts",
+      "packages/core/src/remote-host/index.ts",
+      "packages/markdown-utils/src/markdown/mermaidExtension.ts",
+      "server/api/routes/roles.ts",
+    ],
+    rules: { "sonarjs/function-return-type": "warn" },
+  },
+
+  // The three regex rules used to be `warn` for the whole of `scripts/**`,
+  // which let a genuinely dangerous new pattern in anywhere under that tree.
+  // They are `error` there now, with the three remaining files listed:
+  //
+  //  - `deps.mjs` scans this repo's own TS for import statements. Rewriting
+  //    those multi-alternative patterns as a scanner risks the dependency
+  //    audit itself, and the input is first-party source rather than a
+  //    request, so the backtracking is a build-speed question.
+  //  - `launcherSync.mjs` / `check-readme-translations.mjs` are `safe-regex`
+  //    FALSE POSITIVES. Measured on the pathological input each pattern is
+  //    supposed to blow up on (40,000 chars): every one returns in ~0.1 ms,
+  //    i.e. linear. They are listed rather than rewritten because there is
+  //    nothing wrong to fix.
+  {
+    files: ["scripts/mulmoclaude/deps.mjs", "scripts/mulmoclaude/launcherSync.mjs", "scripts/packages/check-readme-translations.mjs"],
+    rules: {
+      "sonarjs/super-linear-regex": "warn",
+      "sonarjs/regex-complexity": "warn",
+      "security/detect-unsafe-regex": "warn",
+    },
+  },
+
   eslintConfigPrettier,
 ];

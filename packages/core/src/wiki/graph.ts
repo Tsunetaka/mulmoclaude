@@ -13,7 +13,7 @@
 // — do not conflate.
 
 import { WIKI_LINK_PATTERN, parseWikiLink } from "./link.js";
-import { wikiSlugify } from "./slug.js";
+import { resolveLinkTarget, slugByIndexTitle } from "./resolve.js";
 import type { WikiPageEntry } from "./index-parse.js";
 
 export interface WikiGraphNode {
@@ -37,25 +37,13 @@ export interface WikiPageContent {
   content: string;
 }
 
-/** Resolve a raw `[[link]]` target to an existing page slug, or null.
- *  Mirrors the route resolver's strategy: slugify first, then fall
- *  back to matching an index entry title so non-ASCII targets like
- *  `[[さくらインターネット]]` resolve to their ASCII file slug. */
-export function resolveLinkTarget(target: string, fileSlugs: ReadonlySet<string>, slugByTitle: ReadonlyMap<string, string>): string | null {
-  const slug = wikiSlugify(target);
-  if (slug.length > 0 && fileSlugs.has(slug)) return slug;
-  const byTitle = slugByTitle.get(target.trim());
-  if (byTitle !== undefined && fileSlugs.has(byTitle)) return byTitle;
-  return null;
-}
-
 /** Resolved, deduped outgoing slugs for one page body. Self-links and
  *  links to non-existent pages are dropped (the latter are already a
  *  lint "broken link", not a graph edge). */
 export function pageOutgoingSlugs(fromSlug: string, content: string, fileSlugs: ReadonlySet<string>, slugByTitle: ReadonlyMap<string, string>): string[] {
   const out = new Set<string>();
-  for (const match of content.matchAll(WIKI_LINK_PATTERN)) {
-    const { target } = parseWikiLink(match[1]);
+  for (const [, body = ""] of content.matchAll(WIKI_LINK_PATTERN)) {
+    const { target } = parseWikiLink(body);
     const resolved = resolveLinkTarget(target, fileSlugs, slugByTitle);
     if (resolved !== null && resolved !== fromSlug) out.add(resolved);
   }
@@ -64,12 +52,10 @@ export function pageOutgoingSlugs(fromSlug: string, content: string, fileSlugs: 
 
 function buildTitleMaps(entries: readonly WikiPageEntry[]): { titleBySlug: Map<string, string>; slugByTitle: Map<string, string> } {
   const titleBySlug = new Map<string, string>();
-  const slugByTitle = new Map<string, string>();
-  for (const entry of entries) {
+  entries.forEach((entry) => {
     if (!titleBySlug.has(entry.slug)) titleBySlug.set(entry.slug, entry.title);
-    if (entry.title.length > 0 && !slugByTitle.has(entry.title)) slugByTitle.set(entry.title, entry.slug);
-  }
-  return { titleBySlug, slugByTitle };
+  });
+  return { titleBySlug, slugByTitle: slugByIndexTitle(entries) };
 }
 
 /** Build the full page→page graph. Nodes are the existing page files

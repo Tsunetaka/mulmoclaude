@@ -33,6 +33,14 @@ on:
     branches:
       - main
 
+concurrency:
+  # The `github.run_id` fallback puts every push-to-main run in a group of its
+  # own — main CI must never be cancelled or queued behind an earlier commit.
+  # `run_attempt` keeps a manual re-run of an old run from cancelling the
+  # in-flight run of a newer commit on the same PR.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: ${{ github.run_attempt == '1' }}
+
 permissions:
   contents: read
 
@@ -47,7 +55,7 @@ jobs:
       # this job so the rest of the workflow keeps read-only defaults.
       security-events: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # No git pushes from this job; don't leave the token in
           # .git/config (zizmor artipacked).
@@ -115,7 +123,7 @@ jobs:
       - name: Upload SARIF to Code Scanning
         # Hash-pinned: .github/zizmor.yml grants a tag-pin exemption to
         # `actions/*` only, and codeql-action lives under `github/*`.
-        uses: github/codeql-action/upload-sarif@b7351df727350dca84cb9d725d57dcf5bc82ba26  # v3.37.1
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd  # v4.37.7
         with:
           sarif_file: report/jscpd-report.sarif
           # Distinct category keeps these alerts from colliding with the

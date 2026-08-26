@@ -13,8 +13,10 @@ const MS_PER_DAY = 86_400_000;
 
 /** Parse "HH:MM" to milliseconds since midnight (UTC). */
 export function parseTimeToMs(time: string): number {
-  const [hh, mm] = time.split(":").map(Number);
-  return hh * MS_PER_HOUR + mm * MS_PER_MIN;
+  // A missing segment yields NaN (`Number(undefined)`), which is how a
+  // malformed `time` has always surfaced to callers.
+  const [hours, minutes] = time.split(":");
+  return Number(hours) * MS_PER_HOUR + Number(minutes) * MS_PER_MIN;
 }
 
 /**
@@ -30,12 +32,19 @@ export function nextWindowAfter(schedule: TaskSchedule, afterMs: number): number
     return Math.ceil(afterMs / intervalMs) * intervalMs;
   }
 
-  if (schedule.type === SCHEDULE_TYPES.daily) {
-    return nextDailyWindow(parseTimeToMs(schedule.time), afterMs);
-  }
-
-  if (schedule.type === SCHEDULE_TYPES.weekly) {
-    return nextWeeklyWindow(schedule.daysOfWeek, parseTimeToMs(schedule.time), afterMs);
+  // A `time` this library cannot parse has no window — NOT a NaN one.
+  // `TaskSchedule.time` is a bare string on a published package and only some
+  // hosts validate it, so a malformed value does arrive here. Answering NaN
+  // let it escape into arithmetic where every comparison is false: the
+  // `listMissedWindows` loop could not detect the end of its range and filled
+  // itself to the cap, after which one unparseable task threw
+  // `RangeError: Invalid time value` for the whole catch-up batch (#2765).
+  // `null` is the value the callers already handle — it means "nothing to run".
+  if (schedule.type === SCHEDULE_TYPES.daily || schedule.type === SCHEDULE_TYPES.weekly) {
+    const timeOfDayMs = parseTimeToMs(schedule.time);
+    if (!Number.isFinite(timeOfDayMs)) return null;
+    if (schedule.type === SCHEDULE_TYPES.daily) return nextDailyWindow(timeOfDayMs, afterMs);
+    return nextWeeklyWindow(schedule.daysOfWeek, timeOfDayMs, afterMs);
   }
 
   if (schedule.type === SCHEDULE_TYPES.once) {

@@ -5,10 +5,12 @@ const ja: Messages = {
   loadFailed: "⚠ ドキュメントの読み込みに失敗: {error}",
   refreshFailed: "⚠ ドキュメントの更新に失敗: {error} — 前回読み込んだ内容を表示しています。",
   noContent: "Markdown コンテンツがありません",
+  reload: "ファイルを再読み込み",
   pdf: "PDF",
   pdfFailedShort: "⚠ PDF 失敗",
   editSource: "Markdown ソースを編集",
   livePreview: "ライブプレビュー",
+  autoSave: "自動保存",
   saving: "保存中...",
   applyChanges: "変更を適用",
   cancel: "キャンセル",
@@ -25,6 +27,8 @@ const ja: Messages = {
   marpSplitEditorLabel: "ソース",
   mermaidLoadFailed: "⚠ Mermaid の読み込みに失敗しました: {error}",
   mermaidRenderFailed: "⚠ Mermaid の描画に失敗しました: {error}",
+  bookmarkRailLabel: "ブックマーク",
+  bookmarkJump: "ブックマークへ移動: {label}",
 };
 
 export default ja;

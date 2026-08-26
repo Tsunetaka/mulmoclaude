@@ -1,6 +1,6 @@
 {
   "name": "@mulmoclaude/spotify-plugin",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "description": "Read-only Spotify integration for MulmoClaude — Liked Songs / playlists / recently played, OAuth via PKCE. Built as a runtime plugin (issue #1162).",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,24 +23,25 @@
   ],
   "scripts": {
     "build": "vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "vue-tsc --noEmit",
     "test": "echo 'no in-package tests; covered by host tests under test/plugins/spotify/'",
     "lint": "eslint src"
   },
   "dependencies": {
-    "@mulmoclaude/common": "^1.1.1"
+    "@mulmoclaude/common": "^1.2.0"
   },
   "peerDependencies": {
-    "gui-chat-protocol": "^1.2.0",
+    "gui-chat-protocol": "^2.0.0",
     "vue": "^3.5.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.8",
     "typescript": "^6.0.3",
-    "vite": "^8.1.5",
+    "vite": "^8.2.0",
     "vite-plugin-dts": "^5.0.3",
     "vue": "^3.5.40",
+    "vue-tsc": "^3.3.9",
     "zod": "^4.4.3"
   },
   "license": "MIT",

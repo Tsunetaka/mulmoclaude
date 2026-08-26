@@ -48,7 +48,7 @@ import { resolveWithinRoot } from "@mulmoclaude/core/files";
 import { fileToDataUri, stripDataUri } from "./support";
 import { enableGraphAIErrorCapture, setMulmoErrorCaptureLogger, withMulmoErrorCapture } from "./mulmoErrorCapture";
 import type {
-  GenerateOpArgs,
+  GenerateOpArgsWith,
   MovieGenerationResult,
   MovieProgressEvent,
   MulmoScriptServerBackend,
@@ -107,7 +107,7 @@ export interface RunStoryOpDeps {
 }
 
 export interface RunStoryOpOptions<T> {
-  force?: boolean;
+  force?: boolean | undefined;
   /**
    * Op-specific tag included in the failure log so dashboards can
    * distinguish which op is failing (e.g. `"generate-beat-audio"`).
@@ -348,6 +348,17 @@ export function createMulmoScriptServerOps(backend: MulmoScriptServerBackend) {
     backend.onGenerationEvent?.(chatSessionId, event);
   }
 
+  /**
+   * Tell every open View that this script was written.
+   *
+   * `origin` is the writer. A View passes its own id so it can ignore the echo of its own
+   * save — reloading there would rebuild the element the caret is in, mid-keystroke. A write
+   * from the agent carries no origin, so everyone reloads.
+   */
+  function publishScriptChanged(filePath: string, origin?: string): void {
+    backend.onScriptChanged?.({ filePath: canonicalWirePath(filePath), ...(origin === undefined ? {} : { origin }) });
+  }
+
   /** Snapshot of generations currently in flight for one script — the
    *  View's mount-time catch-up, filtered to its wire `filePath`. */
   function pendingGenerations(filePath: string): MulmoScriptGenerationEvent[] {
@@ -416,6 +427,9 @@ export function createMulmoScriptServerOps(backend: MulmoScriptServerBackend) {
       { operation: "beat-audio", onContextMissing: () => ({ ok: true, audio: null }) },
       async ({ context }) => {
         const beat = context.studio.script.beats[beatIndex];
+        // Probe contract: a beat index the script doesn't have soft-fails
+        // like a beat with nothing generated yet, never a server error.
+        if (!beat) return { ok: true, audio: null };
         const audioPath = getBeatAudioPathOrUrl(beat.text ?? "", context, beat, context.lang);
         if (!audioPath || !existsSync(audioPath)) return { ok: true, audio: null };
         return { ok: true, audio: await fileToDataUri(audioPath, "audio/mpeg") };
@@ -473,7 +487,7 @@ export function createMulmoScriptServerOps(backend: MulmoScriptServerBackend) {
 
   // ── Generation ops ────────────────────────────────────────────
 
-  async function renderBeatOp(args: Required<Pick<GenerateOpArgs, "filePath" | "beatIndex">> & GenerateOpArgs): Promise<OpResult<{ image: string }>> {
+  async function renderBeatOp(args: GenerateOpArgsWith<"filePath" | "beatIndex">): Promise<OpResult<{ image: string }>> {
     const { filePath, beatIndex, force, chatSessionId } = args;
     const ffmpeg = ffmpegGuard();
     if (ffmpeg) return ffmpeg;
@@ -486,7 +500,7 @@ export function createMulmoScriptServerOps(backend: MulmoScriptServerBackend) {
         await generateBeatImage({
           index: beatIndex,
           context,
-          args: force ? { forceImage: true } : undefined,
+          ...(force ? { args: { forceImage: true } } : {}),
         });
         const { imagePath } = getBeatPngImagePath(context, beatIndex);
         if (!existsSync(imagePath)) {
@@ -501,7 +515,7 @@ export function createMulmoScriptServerOps(backend: MulmoScriptServerBackend) {
     }
   }
 
-  async function generateBeatAudioOp(args: Required<Pick<GenerateOpArgs, "filePath" | "beatIndex">> & GenerateOpArgs): Promise<OpResult<{ audio: string }>> {
+  async function generateBeatAudioOp(args: GenerateOpArgsWith<"filePath" | "beatIndex">): Promise<OpResult<{ audio: string }>> {
     const { filePath, beatIndex, force, chatSessionId } = args;
     const mapKey = String(beatIndex);
     publishGeneration(chatSessionId, "beatAudio", filePath, mapKey, false);
@@ -513,7 +527,11 @@ export function createMulmoScriptServerOps(backend: MulmoScriptServerBackend) {
         } as Parameters<typeof generateBeatAudio>[2]);
 
         const beat = context.studio.script.beats[beatIndex];
-        const audioPath = context.studio.beats[beatIndex]?.audioFile ?? getBeatAudioPathOrUrl(beat.text ?? "", context, beat, context.lang);
+        // The generated file still wins when present, so a beat index the
+        // script doesn't have only skips the path-derivation fallback and
+        // lands on the "audio was not generated" branch below.
+        const generatedFile = context.studio.beats[beatIndex]?.audioFile;
+        const audioPath = generatedFile ?? (beat ? getBeatAudioPathOrUrl(beat.text ?? "", context, beat, context.lang) : undefined);
 
         if (!audioPath || !existsSync(audioPath)) {
           // Logic-flow failure (not an exception) — emit a targeted
@@ -538,7 +556,7 @@ export function createMulmoScriptServerOps(backend: MulmoScriptServerBackend) {
     }
   }
 
-  async function renderCharacterOp(args: Required<Pick<GenerateOpArgs, "filePath" | "key">> & GenerateOpArgs): Promise<OpResult<{ image: string }>> {
+  async function renderCharacterOp(args: GenerateOpArgsWith<"filePath" | "key">): Promise<OpResult<{ image: string }>> {
     const { filePath, key, force, chatSessionId } = args;
     publishGeneration(chatSessionId, "characterImage", filePath, key, false);
     let genError: string | undefined;
@@ -561,7 +579,7 @@ export function createMulmoScriptServerOps(backend: MulmoScriptServerBackend) {
           key,
           index,
           image: imageEntry as MulmoImagePromptMedia,
-          force,
+          ...(force !== undefined ? { force } : {}),
         });
         if (!existsSync(imagePath)) {
           return opServerError("Character image was not generated");
@@ -839,6 +857,7 @@ export function createMulmoScriptServerOps(backend: MulmoScriptServerBackend) {
     ffmpegGuard,
     runStoryOp,
     publishGeneration,
+    publishScriptChanged,
     pendingGenerations,
     beatImageOp,
     beatAudioOp,

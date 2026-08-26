@@ -1,12 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { writeFileSync, mkdirSync, existsSync } from "fs";
 import path from "path";
-import { tmpdir } from "os";
+
 import { loadCustomDirs, ensureCustomDirs, buildCustomDirsPrompt, validateCustomDirs, DIR_STRUCTURES } from "../../server/workspace/custom-dirs.ts";
+import { makeTempDir } from "../helpers/tempDir.js";
 
 function tmpRoot(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "custom-dirs-"));
+  const dir = makeTempDir("custom-dirs-");
   mkdirSync(path.join(dir, "config"), { recursive: true });
   return dir;
 }
@@ -37,9 +38,12 @@ describe("loadCustomDirs", () => {
     ]);
     const entries = loadCustomDirs(root);
     assert.equal(entries.length, 2);
-    assert.equal(entries[0].path, "data/customers");
-    assert.equal(entries[0].structure, DIR_STRUCTURES.byName);
-    assert.equal(entries[1].path, "artifacts/reports");
+    const [first, second] = entries;
+    assert.ok(first);
+    assert.ok(second);
+    assert.equal(first.path, "data/customers");
+    assert.equal(first.structure, DIR_STRUCTURES.byName);
+    assert.equal(second.path, "artifacts/reports");
   });
 
   it("rejects path traversal (..)", () => {
@@ -98,15 +102,18 @@ describe("loadCustomDirs", () => {
     writeConfig(root, [{ path: "data/books", description: "Reading notes", structure: "flat" }]);
     const entries = loadCustomDirs(root);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].path, "data/books");
+    const [entry] = entries;
+    assert.ok(entry);
+    assert.equal(entry.path, "data/books");
   });
 
   it("truncates long descriptions", () => {
     const root = tmpRoot();
     const longDesc = "x".repeat(500);
     writeConfig(root, [{ path: "data/test", description: longDesc, structure: "flat" }]);
-    const entries = loadCustomDirs(root);
-    assert.equal(entries[0].description.length, 200);
+    const [entry] = loadCustomDirs(root);
+    assert.ok(entry);
+    assert.equal(entry.description.length, 200);
   });
 
   it("strips control characters from description", () => {
@@ -118,16 +125,18 @@ describe("loadCustomDirs", () => {
         structure: "flat",
       },
     ]);
-    const entries = loadCustomDirs(root);
-    assert.ok(!entries[0].description.includes("\x00"));
-    assert.ok(!entries[0].description.includes("\n"));
+    const [entry] = loadCustomDirs(root);
+    assert.ok(entry);
+    assert.ok(!entry.description.includes("\x00"));
+    assert.ok(!entry.description.includes("\n"));
   });
 
   it("defaults structure to flat for invalid values", () => {
     const root = tmpRoot();
     writeConfig(root, [{ path: "data/test", description: "test", structure: "invalid" }]);
-    const entries = loadCustomDirs(root);
-    assert.equal(entries[0].structure, DIR_STRUCTURES.flat);
+    const [entry] = loadCustomDirs(root);
+    assert.ok(entry);
+    assert.equal(entry.structure, DIR_STRUCTURES.flat);
   });
 
   it("limits to 100 entries", () => {
@@ -224,8 +233,10 @@ describe("loadCustomDirs — non-string fields", () => {
     writeConfig(root, [{ path: "data/notes", description: { text: "nope" } }]);
     const entries = loadCustomDirs(root);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].path, "data/notes");
-    assert.equal(entries[0].description, "");
+    const [entry] = entries;
+    assert.ok(entry);
+    assert.equal(entry.path, "data/notes");
+    assert.equal(entry.description, "");
   });
 });
 

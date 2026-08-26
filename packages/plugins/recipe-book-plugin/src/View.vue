@@ -6,26 +6,36 @@
 
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRuntime } from "gui-chat-protocol/vue";
+import { z } from "zod";
 import { useT, format } from "./lang";
 import ConfirmModal from "../../shared/components/ConfirmModal.vue";
 import { useConfirm } from "../../shared/components/confirm";
 
 const { openConfirm } = useConfirm();
 
-interface RecipeSummary {
-  slug: string;
-  title: string;
-  tags: string[];
-  servings: number | null;
-  updated: string;
-}
+const RecipeSummary = z.object({
+  slug: z.string(),
+  title: z.string(),
+  tags: z.array(z.string()),
+  servings: z.number().nullable(),
+  updated: z.string(),
+});
+type RecipeSummary = z.infer<typeof RecipeSummary>;
 
-interface RecipeDetail extends RecipeSummary {
-  prepTime: number | null;
-  cookTime: number | null;
-  created: string;
-  body: string;
-}
+const RecipeDetail = RecipeSummary.extend({
+  prepTime: z.number().nullable(),
+  cookTime: z.number().nullable(),
+  created: z.string(),
+  body: z.string(),
+});
+type RecipeDetail = z.infer<typeof RecipeDetail>;
+
+// `dispatch` returns `unknown` unless given a reader (protocol 2.0.0).
+// Naming the type at the call site was an assertion in disguise — nothing
+// on this side had seen the response. These readers are what make the
+// fields below real rather than claimed.
+const ListResult = z.object({ ok: z.boolean(), recipes: z.array(RecipeSummary).optional() });
+const ReadResult = z.object({ ok: z.boolean(), recipe: RecipeDetail.optional(), error: z.string().optional() });
 
 // Tool-result shape the host hands us. After list / save / update we
 // get a `recipes[]`; after delete we get just `{ ok, slug }`. The
@@ -69,7 +79,7 @@ watch(
 
 async function refetchList(): Promise<void> {
   try {
-    const json = await dispatch<{ ok: boolean; recipes?: RecipeSummary[] }>({ kind: "list" });
+    const json = await dispatch({ kind: "list" }, (raw) => ListResult.parse(raw));
     if (json.ok && json.recipes) {
       recipes.value = json.recipes;
       if (!selectedSlug.value || !json.recipes.find((recipe) => recipe.slug === selectedSlug.value)) {
@@ -91,7 +101,7 @@ watch(
     detailLoading.value = true;
     detailError.value = null;
     try {
-      const result = await dispatch<{ ok: boolean; recipe?: RecipeDetail; error?: string }>({ kind: "read", slug });
+      const result = await dispatch({ kind: "read", slug }, (raw) => ReadResult.parse(raw));
       if (selectedSlug.value !== slug) return;
       if (result.ok && result.recipe) {
         detail.value = result.recipe;
@@ -167,16 +177,16 @@ function renderMarkdownLite(input: string): string {
     }
   };
   for (const line of lines) {
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
+    const [, hashes, headingText] = line.match(/^(#{1,6})\s+(.+)$/) ?? [];
+    if (hashes !== undefined && headingText !== undefined) {
       flushPara();
       closeLists();
-      const level = heading[1].length;
-      out.push(`<h${level}>${formatInline(heading[2])}</h${level}>`);
+      const level = hashes.length;
+      out.push(`<h${level}>${formatInline(headingText)}</h${level}>`);
       continue;
     }
-    const ul = line.match(/^[-*]\s+(.+)$/);
-    if (ul) {
+    const [, ulItem] = line.match(/^[-*]\s+(.+)$/) ?? [];
+    if (ulItem !== undefined) {
       flushPara();
       if (inOl) {
         out.push("</ol>");
@@ -186,11 +196,11 @@ function renderMarkdownLite(input: string): string {
         out.push("<ul>");
         inUl = true;
       }
-      out.push(`<li>${formatInline(ul[1])}</li>`);
+      out.push(`<li>${formatInline(ulItem)}</li>`);
       continue;
     }
-    const ol = line.match(/^\d+\.\s+(.+)$/);
-    if (ol) {
+    const [, olItem] = line.match(/^\d+\.\s+(.+)$/) ?? [];
+    if (olItem !== undefined) {
       flushPara();
       if (inUl) {
         out.push("</ul>");
@@ -200,7 +210,7 @@ function renderMarkdownLite(input: string): string {
         out.push("<ol>");
         inOl = true;
       }
-      out.push(`<li>${formatInline(ol[1])}</li>`);
+      out.push(`<li>${formatInline(olItem)}</li>`);
       continue;
     }
     if (line.trim().length === 0) {

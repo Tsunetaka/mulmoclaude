@@ -1,5 +1,5 @@
 <template>
-  <div class="markdown-container">
+  <div ref="containerRef" class="markdown-container">
     <div v-if="loading" class="min-h-full p-8 flex items-center justify-center">
       <div class="text-gray-500">{{ t("pluginMarkdown.loading") }}</div>
     </div>
@@ -52,6 +52,17 @@
             <MarpView :markdown="markdownContent" :pdf-filename="marpPdfFilename" :base-dir="marpBaseDir">
               <template #toolbar>
                 <button
+                  v-if="isFileBacked"
+                  class="h-8 px-2.5 flex items-center gap-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                  :disabled="!canReload"
+                  :title="t('pluginMarkdown.reload')"
+                  :aria-label="t('pluginMarkdown.reload')"
+                  data-testid="present-document-reload"
+                  @click="reloadFromDisk"
+                >
+                  <span class="material-icons text-base" aria-hidden="true">refresh</span>
+                </button>
+                <button
                   class="h-8 px-2.5 flex items-center gap-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm"
                   :title="t('pluginMarkdown.marpSplitEnter')"
                   :aria-label="t('pluginMarkdown.marpSplitEnter')"
@@ -64,6 +75,13 @@
           </div>
         </div>
         <div class="bottom-bar-wrapper">
+          <!-- No bookmark rail here, deliberately: this is the Marp branch, and
+             a deck is navigated by slide, which the preview beside it already
+             shows. The rail belongs to the plain-document editor below, where
+             there is nothing else to tell you where you are in a long file.
+             This textarea also has no `editorRef` and no scroll-sync, so the
+             rail would need the measurement path wired through a second time —
+             worth doing only if decks turn out to want it. -->
           <details ref="sourceDetails" class="markdown-source" @toggle="onDetailsToggle">
             <summary>{{ t("pluginMarkdown.editSource") }}</summary>
             <textarea v-model="editableMarkdown" class="markdown-editor" spellcheck="false"></textarea>
@@ -81,6 +99,17 @@
     <template v-else>
       <div class="flex items-center justify-end gap-2 px-3 py-2 border-b border-gray-100 shrink-0">
         <button
+          v-if="isFileBacked"
+          class="h-8 px-2.5 flex items-center rounded bg-gray-100 hover:bg-gray-200 text-gray-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          :disabled="!canReload"
+          :title="t('pluginMarkdown.reload')"
+          :aria-label="t('pluginMarkdown.reload')"
+          data-testid="present-document-reload"
+          @click="reloadFromDisk"
+        >
+          <span class="material-icons text-base" aria-hidden="true">refresh</span>
+        </button>
+        <button
           class="h-8 px-2.5 flex items-center gap-1 rounded bg-green-600 hover:bg-green-700 text-white text-sm disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
           :disabled="pdfDownloading"
           @click="downloadPdf"
@@ -93,79 +122,118 @@
       <div v-if="loadError" class="load-error-banner" role="alert">
         {{ t("pluginMarkdown.refreshFailed", { error: loadError }) }}
       </div>
-      <div ref="previewScrollRef" class="markdown-content-wrapper">
-        <div class="p-4">
-          <!-- Frontmatter properties panel (FileContentRenderer-style)
+      <!-- Viewer + source panel. Stacked (`display: contents`, so the two
+           children stay direct flex items of `.markdown-container` and the
+           layout is exactly what it was) until the editor opens on a pane
+           wider than tall — then this becomes the 50/50 split: editor left,
+           viewer right, same hand as `MarpSplitEditor`. -->
+      <div class="editor-layout" :class="{ 'editor-layout--split': splitEditing }" :style="splitEditing ? { height: splitPaneHeightCss } : undefined">
+        <div ref="previewScrollRef" class="markdown-content-wrapper">
+          <div class="p-4">
+            <!-- Frontmatter properties panel (FileContentRenderer-style)
                — only rendered when the file has a `---\n...\n---`
                header. Lazy-on-write means most existing files don't
                have one yet (#895). -->
-          <div v-if="previewDoc.fields.length > 0" class="mb-3 rounded border border-gray-200 bg-gray-50 p-3 text-xs">
-            <div v-for="field in previewDoc.fields" :key="field.key" class="flex items-baseline gap-2 py-0.5">
-              <span class="font-semibold text-gray-600 shrink-0">{{ field.key }}:</span>
-              <template v-if="Array.isArray(field.value)">
-                <span class="flex flex-wrap gap-1">
-                  <span
-                    v-for="(item, idx) in field.value"
-                    :key="String(idx) + ':' + formatScalarField(item)"
-                    class="rounded-full bg-white border border-gray-300 px-2 py-0.5 text-gray-700"
-                  >
-                    {{ formatScalarField(item) }}
+            <div v-if="previewDoc.fields.length > 0" class="mb-3 rounded border border-gray-200 bg-gray-50 p-3 text-xs">
+              <div v-for="field in previewDoc.fields" :key="field.key" class="flex items-baseline gap-2 py-0.5">
+                <span class="font-semibold text-gray-600 shrink-0">{{ field.key }}:</span>
+                <template v-if="Array.isArray(field.value)">
+                  <span class="flex flex-wrap gap-1">
+                    <span
+                      v-for="(item, idx) in field.value"
+                      :key="String(idx) + ':' + formatScalarField(item)"
+                      class="rounded-full bg-white border border-gray-300 px-2 py-0.5 text-gray-700"
+                    >
+                      {{ formatScalarField(item) }}
+                    </span>
                   </span>
-                </span>
-              </template>
-              <span v-else class="text-gray-800 break-words">{{ formatScalarField(field.value) }}</span>
+                </template>
+                <span v-else class="text-gray-800 break-words">{{ formatScalarField(field.value) }}</span>
+              </div>
             </div>
-          </div>
-          <!-- Click delegation: a single listener on the wrapper picks
+            <!-- Click delegation: a single listener on the wrapper picks
                up every interactive checkbox inserted by v-html. We
                cannot bind @click directly on each `<input>` because
                v-html bypasses Vue's template compiler. -->
-          <!-- eslint-disable-next-line vue/no-v-html -- DOMPurify-sanitised marked output (sanitizeMarkdownHtml). `path` can open any .md on disk, so this content is NOT app-owned. -->
-          <div ref="markdownContainerRef" class="markdown-content prose prose-slate max-w-none" @click="onMarkdownClick" v-html="renderedHtml"></div>
+            <!-- eslint-disable-next-line vue/no-v-html -- DOMPurify-sanitised marked output (sanitizeMarkdownHtml). `path` can open any .md on disk, so this content is NOT app-owned. -->
+            <div ref="markdownContainerRef" class="markdown-content prose prose-slate max-w-none" @click="onMarkdownClick" v-html="renderedHtml"></div>
+          </div>
         </div>
-      </div>
 
-      <div class="bottom-bar-wrapper">
-        <!-- A plain div rather than <details>: a <summary> must be the first
+        <div class="bottom-bar-wrapper">
+          <!-- A plain div rather than <details>: a <summary> must be the first
              child, which forces a header row above the textarea, and this panel
              spends its one row on the toolbar UNDER the editor instead — where
              Apply / Cancel already are. `editing` is the open state. -->
-        <div class="markdown-source">
-          <button v-if="!editing" class="source-toggle" @click="openEditor">{{ t("pluginMarkdown.editSource") }}</button>
-          <template v-else>
-            <textarea ref="editorRef" v-model="editableMarkdown" class="markdown-editor" spellcheck="false" @scroll="syncPreviewScroll"></textarea>
-            <div class="editor-actions">
-              <label class="live-toggle">
-                <input v-model="livePreview" type="checkbox" />
-                {{ t("pluginMarkdown.livePreview") }}
-              </label>
-              <!-- Grouped so `.editor-actions` still sees two children and its
-                   space-between keeps meaning what it does in the marp panel. -->
-              <div class="action-buttons">
-                <button class="apply-btn" :disabled="!hasChanges || saving" @click="applyMarkdown">
-                  {{ saving ? t("pluginMarkdown.saving") : t("pluginMarkdown.applyChanges") }}
-                </button>
-                <button class="cancel-btn" @click="cancelEdit">{{ t("pluginMarkdown.cancel") }}</button>
+          <div class="markdown-source">
+            <button v-if="!editing" class="source-toggle" @click="openEditor">{{ t("pluginMarkdown.editSource") }}</button>
+            <template v-else>
+              <!-- The editor plus its bookmark rail. The rail is a sibling
+                 gutter rather than an overlay so it never sits on top of the
+                 text; it is rendered only when there is something to mark, so
+                 a document with no bookmarks looks exactly as it did. -->
+              <div class="editor-with-rail">
+                <div v-if="bookmarkMarkers.length > 0" class="bookmark-rail" :aria-label="t('pluginMarkdown.bookmarkRailLabel')" role="group">
+                  <button
+                    v-for="bookmark in bookmarkMarkers"
+                    :key="bookmark.offset"
+                    class="bookmark-marker"
+                    :style="{ top: `calc(${bookmark.railFraction} * (100% - ${BOOKMARK_MARKER_SIZE_PX}px))` }"
+                    :title="bookmark.label"
+                    :aria-label="t('pluginMarkdown.bookmarkJump', { label: bookmark.label })"
+                    @click="scrollToBookmark(bookmark)"
+                  >
+                    <span class="material-icons" aria-hidden="true">play_arrow</span>
+                  </button>
+                </div>
+                <textarea ref="editorRef" v-model="editableMarkdown" class="markdown-editor" spellcheck="false" @scroll="onEditorScroll"></textarea>
               </div>
-            </div>
-            <p v-if="saveError" class="save-error" role="alert">{{ t("pluginMarkdown.saveError", { error: saveError }) }}</p>
-          </template>
+              <div class="editor-actions">
+                <div class="toggle-group">
+                  <label class="live-toggle">
+                    <input v-model="livePreview" type="checkbox" />
+                    {{ t("pluginMarkdown.livePreview") }}
+                  </label>
+                  <!-- Auto save rides on live preview: without it the viewer
+                     already shows what is on disk, so writing behind the
+                     user's back would buy nothing and cost the Cancel. -->
+                  <label v-if="livePreview && canPersist" class="live-toggle">
+                    <input v-model="autoSave" type="checkbox" />
+                    {{ t("pluginMarkdown.autoSave") }}
+                  </label>
+                </div>
+                <!-- Grouped so `.editor-actions` still sees two children and its
+                   space-between keeps meaning what it does in the marp panel. -->
+                <div class="action-buttons">
+                  <button class="apply-btn" :disabled="!hasChanges || saving" @click="applyMarkdown">
+                    {{ saving ? t("pluginMarkdown.saving") : t("pluginMarkdown.applyChanges") }}
+                  </button>
+                  <button class="cancel-btn" @click="cancelEdit">{{ t("pluginMarkdown.cancel") }}</button>
+                </div>
+              </div>
+              <p v-if="saveError" class="save-error" role="alert">{{ t("pluginMarkdown.saveError", { error: saveError }) }}</p>
+            </template>
+          </div>
+          <button v-show="!editing" class="copy-btn" :title="copied ? t('pluginMarkdown.copiedLabel') : t('pluginMarkdown.copyLabel')" @click="copyText">
+            <span class="material-icons">{{ copied ? "check" : "content_copy" }}</span>
+          </button>
         </div>
-        <button v-show="!editing" class="copy-btn" :title="copied ? t('pluginMarkdown.copiedLabel') : t('pluginMarkdown.copyLabel')" @click="copyText">
-          <span class="material-icons">{{ copied ? "check" : "content_copy" }}</span>
-        </button>
       </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick, onUnmounted } from "vue";
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useRuntime } from "gui-chat-protocol/vue";
+import { readBookmarkPattern, readDocContent } from "./contract";
+import { DEFAULT_DOCUMENT_BOOKMARK_PATTERN, compileBookmarkPattern, findDocumentBookmarks } from "./bookmarks";
+import { measureOffsetTops } from "./bookmarkGeometry";
 import { marked } from "marked";
 import { formatScalarField, sanitizeMarkdownHtml, useMarkdownDoc, useClipboardCopy, useFileWatch } from "@mulmoclaude/core/plugin-vue";
 import type { ToolResult } from "gui-chat-protocol";
 import { documentPathOf, type MarkdownToolData } from "./definition";
+import { createAutoSaver } from "./autoSaver";
 import { rewriteMarkdownImageRefs } from "@mulmoclaude/markdown-utils/image/rewriteMarkdownImageRefs";
 import { findTaskLines, makeTasksInteractive, toggleTaskAt } from "@mulmoclaude/markdown-utils/markdown/taskList";
 import { mermaidExtension } from "@mulmoclaude/markdown-utils/markdown/mermaidExtension";
@@ -210,11 +278,22 @@ const loadError = ref<string | null>(null);
 const markdownContent = ref("");
 const editableMarkdown = ref("");
 
+// Generation counter for in-flight loads. The manual reload button, the
+// remote-write watcher and a result switch can all start a load, so a
+// slow earlier response must not land on top of a newer one — every
+// commit below is gated on still being the latest request.
+let loadRequestId = 0;
+
 async function fetchMarkdownContent(): Promise<void> {
+  const requestId = ++loadRequestId;
   loadError.value = null;
   const raw = props.selectedResult.data?.markdown;
   const filePath = documentPathOf(props.selectedResult.data);
   if (!raw && !filePath) {
+    // Clear `loading` here too: a still-in-flight fetch for the previous
+    // (file-backed) document now returns as superseded without touching it,
+    // so this branch owns the flag or the view strands on the spinner.
+    loading.value = false;
     markdownContent.value = "";
     editableMarkdown.value = "";
     return;
@@ -222,9 +301,12 @@ async function fetchMarkdownContent(): Promise<void> {
   if (filePath) {
     loading.value = true;
     try {
-      const { content } = await dispatch<{ content: string }>({ kind: "loadDoc", path: filePath });
+      const { content } = await dispatch({ kind: "loadDoc", path: filePath }, readDocContent);
+      // Superseded: the newer request owns `loading` and the buffers.
+      if (requestId !== loadRequestId) return;
       markdownContent.value = content ?? "";
     } catch (err) {
+      if (requestId !== loadRequestId) return;
       // Preserve any previously-loaded content instead of wiping it —
       // the user sees the banner AND whatever they were reading, not
       // a blank canvas. editableMarkdown is left in sync so the editor
@@ -235,7 +317,9 @@ async function fetchMarkdownContent(): Promise<void> {
     }
     loading.value = false;
   } else {
-    // Legacy inline content
+    // Legacy inline content — same reason as above: this path never awaits,
+    // so it must clear a spinner left behind by a superseded file load.
+    loading.value = false;
     markdownContent.value = raw ?? "";
   }
   editableMarkdown.value = markdownContent.value;
@@ -245,6 +329,26 @@ async function fetchMarkdownContent(): Promise<void> {
 fetchMarkdownContent();
 
 const hasChanges = computed(() => editableMarkdown.value !== markdownContent.value);
+
+// Only a file-backed document can be re-read from disk — legacy inline
+// content has no on-disk twin, so the reload button stays hidden there.
+const isFileBacked = computed(() => documentPathOf(props.selectedResult.data) !== null);
+
+// Manual refresh. The file-change subscription below already refetches on
+// remote writes, but that only fires for writes this client hears about;
+// the button is the explicit escape hatch.
+//
+// Blocked while the editor holds unsaved changes (the refetch reseeds the
+// buffer) and while one of our own writes is still in flight: a task-list
+// toggle updates `markdownContent` optimistically — so `hasChanges` reads
+// clean — and a load started before that PUT lands would restore the
+// pre-toggle text, which the self-save watcher then declines to correct.
+const canReload = computed(() => !loading.value && !hasChanges.value && pendingSelfSaves.value === 0);
+
+function reloadFromDisk(): void {
+  if (!canReload.value) return;
+  void fetchMarkdownContent();
+}
 
 // Subscribe to per-file change events so any tab / browser / agent run
 // that overwrites the file refreshes this view automatically. The path
@@ -281,6 +385,58 @@ const marpSplitMode = ref(false);
 // entry) and the click-delegation handler below; the toggle setter
 // lives in `onDetailsToggle` further down.
 const editing = ref(false);
+
+// ── Landscape split editing (non-Marp branch) ────────────────────
+//
+// When the source panel opens on a pane that is wider than tall, it
+// moves BESIDE the document instead of under it: editor left, viewer
+// right — the same hand as `MarpSplitEditor`, so the two source
+// editors in this plugin don't mirror each other.
+//
+// The height it is compared against is deliberately NOT the
+// container's own: under StackView the plugin renders inside
+// `.stack-natural`, which neutralises its `h-full` / `overflow` /
+// `flex-1` rules so the container flows at content height — any long
+// document would then measure "taller than wide" and never split.
+// `min(80vh, 720px)` is the height the split pane itself takes (the
+// value `MarpSplitEditor` pins for the same reason); `flex: 1 1 auto`
+// on `.editor-layout--split` lets it grow past that when the host DOES
+// give the container a real height (single layout).
+const SPLIT_PANE_VIEWPORT_FRACTION = 0.8;
+const SPLIT_PANE_MAX_HEIGHT_PX = 720;
+const splitPaneHeightCss = `min(${SPLIT_PANE_VIEWPORT_FRACTION * 100}vh, ${SPLIT_PANE_MAX_HEIGHT_PX}px)`;
+
+const containerRef = ref<HTMLElement | null>(null);
+const containerWidth = ref(0);
+const splitPaneHeight = ref(0);
+
+function measureSplitGeometry(): void {
+  containerWidth.value = containerRef.value?.clientWidth ?? 0;
+  splitPaneHeight.value = Math.min(window.innerHeight * SPLIT_PANE_VIEWPORT_FRACTION, SPLIT_PANE_MAX_HEIGHT_PX);
+}
+
+const splitEditing = computed(() => editing.value && containerWidth.value > 0 && containerWidth.value > splitPaneHeight.value);
+
+let containerObserver: ResizeObserver | undefined;
+
+onMounted(() => {
+  measureSplitGeometry();
+  const element = containerRef.value;
+  // The observer catches pane resizes (sidebar toggle, window width, the
+  // stack card growing). The window listener catches viewport HEIGHT
+  // changes, which move the reference height while leaving the
+  // container's box — and so the observer — untouched.
+  if (element && typeof ResizeObserver !== "undefined") {
+    containerObserver = new ResizeObserver(measureSplitGeometry);
+    containerObserver.observe(element);
+  }
+  window.addEventListener("resize", measureSplitGeometry);
+});
+
+onUnmounted(() => {
+  containerObserver?.disconnect();
+  window.removeEventListener("resize", measureSplitGeometry);
+});
 
 // Remote write: refetch so the rendered view tracks disk. If the
 // editor is open we close it first — `fileVersion` only fires once
@@ -347,7 +503,43 @@ watch([editableMarkdown, livePreview, editing], ([text, live, open], previous) =
   }, LIVE_PREVIEW_DEBOUNCE_MS);
 });
 
-onUnmounted(() => clearTimeout(liveTimer));
+// Auto save (opt-in, only offered alongside live preview): the buffer is
+// written to disk on a debounce so the document keeps up with the typing
+// without an Apply. Off by default — a write is not undoable, and the panel
+// is also used to try things out. Only file-backed documents can persist;
+// inline legacy content has no on-disk twin to save to.
+const AUTO_SAVE_DEBOUNCE_MS = 1500;
+const canPersist = computed(() => documentPathOf(props.selectedResult.data) !== null);
+const autoSave = ref(false);
+const autoSaveActive = computed(() => autoSave.value && livePreview.value && editing.value && canPersist.value);
+// Debounce, serialisation and the "is this write still wanted?" rule live in
+// `createAutoSaver` (unit-tested there — the cancellation boundary is the part
+// worth pinning down). This view supplies the two predicates.
+const autoSaver = createAutoSaver<string | null>({
+  delayMs: AUTO_SAVE_DEBOUNCE_MS,
+  // Re-checked when a queued write finally runs, not just when it was queued:
+  // a write already handed to the chain waits behind an in-flight PUT and would
+  // otherwise still land — persisting text the user discarded with Cancel, or
+  // asked to stop persisting by unticking a box. The path check covers the
+  // other half: the user may have selected a different document meanwhile.
+  isWanted: (path) => autoSaveActive.value && documentPathOf(props.selectedResult.data) === path,
+  write: (text) => persistMarkdown(text),
+});
+
+watch([editableMarkdown, autoSaveActive], () => {
+  autoSaver.cancel();
+  // Closing the editor / unticking either box flips `autoSaveActive` and lands
+  // here, so a pending write is dropped before Cancel discards the draft.
+  if (!autoSaveActive.value || !hasChanges.value) return;
+  // Snapshot what is being saved and where — by the time the write runs,
+  // `editableMarkdown` and the selected document may both have moved on.
+  autoSaver.schedule(editableMarkdown.value, documentPathOf(props.selectedResult.data));
+});
+
+onUnmounted(() => {
+  clearTimeout(liveTimer);
+  autoSaver.cancel();
+});
 
 // What the viewer renders. Deliberately NOT what `marpMode` and the
 // task-checkbox walker read: those stay on `markdownContent`, so typing marp
@@ -366,8 +558,31 @@ const previewDoc = useMarkdownDoc(previewSource);
 const previewScrollRef = ref<HTMLElement | null>(null);
 const editorRef = ref<HTMLTextAreaElement | null>(null);
 
+// Whether the textarea has been scrolled since the editor opened. Until it has,
+// the viewer is left exactly where the reader put it: opening the editor shrinks
+// the viewer, and the browser keeps its absolute scrollTop, so re-deriving that
+// position from the editor's fraction against the new (shorter) range would
+// nudge the text the reader is looking at for no reason. The sync starts the
+// moment the editor actually becomes the side being driven.
+const editorScrolled = ref(false);
+
+// Set when we move the textarea ourselves (opening the editor at the viewer's
+// position). The resulting scroll event is indistinguishable from the user's,
+// and taking it as "the editor is being driven now" would trigger the very
+// nudge this flag exists to prevent.
+let suppressEditorScroll = false;
+
+function onEditorScroll(): void {
+  if (suppressEditorScroll) {
+    suppressEditorScroll = false;
+    return;
+  }
+  editorScrolled.value = true;
+  syncPreviewScroll();
+}
+
 function syncPreviewScroll(): void {
-  if (!livePreview.value || !editing.value) return;
+  if (!livePreview.value || !editing.value || !editorScrolled.value) return;
   const editor = editorRef.value;
   const preview = previewScrollRef.value;
   if (!editor || !preview) return;
@@ -379,10 +594,162 @@ function syncPreviewScroll(): void {
   preview.scrollTop = (editor.scrollTop / editorRange) * previewRange;
 }
 
-// Re-apply after each re-render and when live mode is switched on: new content
-// changes the viewer's scrollHeight, so the fraction that was right a keystroke
-// ago now points somewhere else.
-watch([liveBuffer, livePreview], () => void nextTick(syncPreviewScroll));
+// Re-apply after each re-render, when live mode is switched on, and when the
+// panel flips between stacked and split: new content — or a viewer that just
+// went from full width to half — changes the viewer's scrollHeight, so the
+// fraction that was right a keystroke ago now points somewhere else.
+watch([liveBuffer, livePreview, splitEditing], () => void nextTick(syncPreviewScroll));
+
+// The same mapping the other way round, run once when the editor opens: the
+// textarea starts at the viewer's scroll fraction, so opening the source after
+// reading halfway down a document lands on the part being read rather than at
+// the top. Same proportional caveat as above — close, not line-accurate.
+// Returns null when the viewer isn't scrollable (or isn't mounted): there is no
+// position to carry over, and dividing by that range would be a division by zero.
+function previewScrollFraction(): number | null {
+  const preview = previewScrollRef.value;
+  if (!preview) return null;
+  const range = preview.scrollHeight - preview.clientHeight;
+  return range > 0 ? preview.scrollTop / range : null;
+}
+
+function applyEditorScrollFraction(fraction: number): void {
+  const editor = editorRef.value;
+  if (!editor) return;
+  const range = editor.scrollHeight - editor.clientHeight;
+  if (range <= 0) return;
+  const target = fraction * range;
+  // Only arm the suppression when the assignment will actually move the
+  // element — a no-op assignment fires no scroll event, and the flag would
+  // then swallow the user's first real scroll instead.
+  if (Math.round(target) !== Math.round(editor.scrollTop)) suppressEditorScroll = true;
+  editor.scrollTop = target;
+}
+
+// ── Source-editor bookmarks ──────────────────────────────────────
+//
+// A user-configured regex (`~/.config/mulmo/config.json` →
+// `documentBookmarks.pattern`, shared with MulmoTerminal) marks places in the
+// document; each match gets a triangle in the rail left of the textarea, at
+// that match's position in the WHOLE document. Clicking one scrolls there.
+//
+// The pattern is fetched once per view. A host that predates the
+// `bookmarkPattern` dispatch kind throws here, and an unconfigured one answers
+// null — both land on the shipped default, so the feature never depends on the
+// round trip succeeding.
+const BOOKMARK_MARKER_SIZE_PX = 12;
+const bookmarkPattern = ref<RegExp | null>(compileBookmarkPattern(DEFAULT_DOCUMENT_BOOKMARK_PATTERN));
+
+async function loadBookmarkPattern(): Promise<void> {
+  try {
+    const { pattern } = await dispatch({ kind: "bookmarkPattern" }, readBookmarkPattern);
+    if (pattern === null) return;
+    // The server already rejected anything that does not compile, so a null
+    // here would be a version skew rather than a user typo — keep the default
+    // instead of dropping the rail.
+    bookmarkPattern.value = compileBookmarkPattern(pattern) ?? bookmarkPattern.value;
+  } catch {
+    // Host without the capability. The default is already in place, and there
+    // is nothing the user could do about it, so this stays silent.
+  }
+}
+
+onMounted(() => void loadBookmarkPattern());
+
+// Scans the BUFFER, not what is on disk: the markers track the text as it is
+// typed, which is the whole point of a rail beside the editor. Only computed
+// while the editor is open — nothing renders the rail otherwise.
+// LF-normalised, because every consumer of a bookmark offset indexes the
+// TEXTAREA's value, and a textarea's API value has BOTH `\r\n` and a lone `\r`
+// collapsed to `\n` (HTML's "API value" normalisation). A document loaded from
+// disk with either ending therefore sits in `editableMarkdown` out of step with
+// what `setSelectionRange` and the geometry mirror actually see — one character
+// per line for CRLF — and every offset past the first would land a line early
+// and drift from there. `\r\n?` covers both; matching only `\r\n` would leave
+// old-Mac lone-CR files broken in exactly the way this guards against.
+const bookmarkSource = computed(() => editableMarkdown.value.replace(/\r\n?/g, "\n"));
+
+const foundBookmarks = computed(() => (editing.value ? findDocumentBookmarks(bookmarkSource.value, bookmarkPattern.value) : []));
+
+// Where each bookmark actually sits, in pixels, measured against a mirror of
+// the textarea (`./bookmarkGeometry`). The scanner's own `fraction` — the
+// character offset over the document length — is only a fallback: a blank line
+// and a wrapped paragraph carry very different numbers of characters per line
+// of height, so in a real markdown document that estimate is systematically off
+// (it overshot, worst near the top, which is what this measurement replaces).
+const bookmarkTops = ref<readonly number[]>([]);
+const bookmarkContentHeight = ref(0);
+
+// Debounced: the measurement lays out the whole document in a hidden div, which
+// is far too much to redo on every keystroke. Until it catches up the markers
+// stay where they were — a marker a few pixels stale for a moment beats a rail
+// that jitters while typing.
+const BOOKMARK_MEASURE_DEBOUNCE_MS = 150;
+let measureTimer: ReturnType<typeof setTimeout> | undefined;
+
+function measureBookmarks(): void {
+  const editor = editorRef.value;
+  const offsets = foundBookmarks.value.map((bookmark) => bookmark.offset);
+  const measured = editor ? measureOffsetTops(editor, bookmarkSource.value, offsets) : null;
+  if (measured === null) {
+    // Nothing to measure (no bookmarks, or the editor is not laid out yet).
+    // Clear only when there is genuinely nothing, so a transient unmeasurable
+    // state does not stack every marker at the top.
+    if (offsets.length === 0) bookmarkTops.value = [];
+    return;
+  }
+  bookmarkTops.value = measured.tops;
+  bookmarkContentHeight.value = measured.contentHeight;
+}
+
+watch(
+  [foundBookmarks, splitEditing, containerWidth],
+  () => {
+    clearTimeout(measureTimer);
+    // The debounce is for TYPING. A first measurement — the editor just opened,
+    // or a bookmark appeared or vanished — runs at once: waiting would leave the
+    // rail on its fallback estimate, and a click landing in that window would
+    // scroll to the estimate rather than to the bookmark.
+    const settled = bookmarkTops.value.length === foundBookmarks.value.length;
+    measureTimer = setTimeout(() => void nextTick(measureBookmarks), settled ? BOOKMARK_MEASURE_DEBOUNCE_MS : 0);
+  },
+  { immediate: true },
+);
+
+onUnmounted(() => clearTimeout(measureTimer));
+
+/** A marker's position down the rail, 0..1. Falls back to the scanner's
+ *  character-offset estimate until the first measurement lands (one debounce
+ *  after the editor opens) so the rail is never blank while it settles. */
+const bookmarkMarkers = computed(() =>
+  foundBookmarks.value.map((bookmark, index) => {
+    const top = bookmarkTops.value[index];
+    const usable = top !== undefined && bookmarkContentHeight.value > 0 && bookmarkTops.value.length === foundBookmarks.value.length;
+    return { ...bookmark, top, railFraction: usable ? Math.min(1, top / bookmarkContentHeight.value) : bookmark.fraction };
+  }),
+);
+
+// Put the bookmark at the top of the visible box. `top` is measured from the
+// top of the textarea's scrollable content, which is exactly what `scrollTop`
+// counts, so this lands on the line rather than near it.
+//
+// The caret moves too, so typing continues where the user just jumped, and the
+// resulting scroll event drives the live preview through `onEditorScroll`.
+function scrollToBookmark(bookmark: { offset: number; top: number | undefined; railFraction: number }): void {
+  const editor = editorRef.value;
+  if (!editor) return;
+  editor.focus();
+  editor.setSelectionRange(bookmark.offset, bookmark.offset);
+  const range = editor.scrollHeight - editor.clientHeight;
+  if (range <= 0) return;
+  // Measure THIS bookmark fresh rather than trusting the rail's batch: one
+  // offset costs one layout, and it makes the click exact even mid-debounce or
+  // after a resize the batch has not caught up with. The batch value, then the
+  // character-offset estimate, stand in only if the measurement is unavailable.
+  const measured = measureOffsetTops(editor, bookmarkSource.value, [bookmark.offset])?.tops[0];
+  const target = measured ?? bookmark.top ?? bookmark.railFraction * editor.scrollHeight;
+  editor.scrollTop = Math.max(0, Math.min(range, target));
+}
 
 function enterMarpSplitMode(): void {
   // Preserve any existing unsaved draft. The close (`close_fullscreen`)
@@ -498,7 +865,16 @@ function openEditor(): void {
   // The draft survives a close/reopen, so don't touch `editableMarkdown` here
   // — only `closeEditor` (and Cancel, which is the same thing) discards it.
   saveError.value = null;
+  // A fresh open is a fresh reader: the viewer keeps its position until this
+  // editor is scrolled, however the previous one was left.
+  editorScrolled.value = false;
+  // Read the viewer's position BEFORE the editor mounts: opening it shrinks the
+  // viewer, which moves its own scrollTop, so the fraction taken afterwards
+  // would be the post-shrink one rather than what the user was looking at.
+  const fraction = previewScrollFraction();
   editing.value = true;
+  if (fraction === null) return;
+  void nextTick(() => applyEditorScrollFraction(fraction));
 }
 
 // One teardown for both panels. The marp branch is still a <details>, and
@@ -536,52 +912,71 @@ async function downloadPdf() {
   await rawDownloadPdf({ markdown: markdownContent.value, filename });
 }
 
-async function applyMarkdown() {
-  const raw = props.selectedResult.data?.markdown;
-  const filePath = documentPathOf(props.selectedResult.data);
-  if (!raw && !filePath) return;
-
-  saveError.value = null;
-
-  // If file-based, save to server. The path is sent verbatim — it is
-  // whatever the tool call named (an `artifacts/documents/YYYY/MM/…` doc
-  // this tool wrote, a repo file, an absolute path), and the host is the
-  // layer that decides what it will write.
-  if (filePath) {
-    saving.value = true;
-    pendingSelfSaves.value += 1;
-    try {
-      await dispatch({ kind: "saveDoc", path: filePath, markdown: editableMarkdown.value });
-    } catch (err) {
-      // Roll back the self-save expectation — no pubsub event will
-      // arrive for a failed save, so the counter would otherwise stay
-      // high and silently absorb the next *remote* write.
-      pendingSelfSaves.value = Math.max(0, pendingSelfSaves.value - 1);
-      // Store the raw error; the template formats it via t() so locale
-      // switches re-render without double-translating.
-      saveError.value = err instanceof Error ? err.message : String(err);
-      return;
-    } finally {
-      saving.value = false;
-    }
+// Shared write path for Apply and auto save. Returns false when nothing was
+// written, so Apply can keep the panel open on failure while auto save just
+// leaves the error banner up and retries on the next keystroke.
+// The write itself. The path is sent verbatim — it is whatever the tool call
+// named (an `artifacts/documents/YYYY/MM/…` doc this tool wrote, a repo file,
+// an absolute path), and the host is the layer that decides what it will write.
+async function writeDoc(filePath: string, text: string): Promise<boolean> {
+  saving.value = true;
+  pendingSelfSaves.value += 1;
+  try {
+    await dispatch({ kind: "saveDoc", path: filePath, markdown: text });
+    return true;
+  } catch (err) {
+    // Roll back the self-save expectation — no pubsub event will
+    // arrive for a failed save, so the counter would otherwise stay
+    // high and silently absorb the next *remote* write.
+    pendingSelfSaves.value = Math.max(0, pendingSelfSaves.value - 1);
+    // Store the raw error; the template formats it via t() so locale
+    // switches re-render without double-translating.
+    saveError.value = err instanceof Error ? err.message : String(err);
+    return false;
+  } finally {
+    saving.value = false;
   }
+}
 
-  // Update local state
-  markdownContent.value = editableMarkdown.value;
-
-  // Emit update to parent (clears pdfPath since content changed)
-  const updatedResult: ToolResult<MarkdownToolData> = {
+// What the parent is told after a successful write (pdfPath is cleared because
+// the content it was rendered from is gone).
+function buildUpdatedResult(filePath: string | null, text: string): ToolResult<MarkdownToolData> {
+  return {
     ...props.selectedResult,
     data: {
       ...props.selectedResult.data,
-      markdown: filePath ?? editableMarkdown.value,
+      markdown: filePath ?? text,
       pdfPath: undefined,
     },
   };
-  emit("updateResult", updatedResult);
+}
 
-  // Close the edit panel
-  closeEditor();
+async function persistMarkdown(text: string): Promise<boolean> {
+  const raw = props.selectedResult.data?.markdown;
+  const filePath = documentPathOf(props.selectedResult.data);
+  if (!raw && !filePath) return false;
+
+  saveError.value = null;
+
+  if (filePath) {
+    if (!(await writeDoc(filePath, text))) return false;
+    // The user may have selected another document during the round trip. Every
+    // state mutation below belongs to the document that was written, so
+    // applying them now would put its content — and its path — on whatever is
+    // on screen instead. Same guard as `persistTaskMarkdown`.
+    if (documentPathOf(props.selectedResult.data) !== filePath) return false;
+  }
+
+  markdownContent.value = text;
+  emit("updateResult", buildUpdatedResult(filePath, text));
+  return true;
+}
+
+async function applyMarkdown() {
+  if (await persistMarkdown(editableMarkdown.value)) {
+    // Close the edit panel
+    closeEditor();
+  }
 }
 
 // ── Inline task-list checkbox toggle (#775) ──────────────────────
@@ -753,6 +1148,68 @@ watch(
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+}
+
+/* Stacked (default): the wrapper is inert, so viewer and source panel remain
+   direct flex children of `.markdown-container` and lay out exactly as they
+   did before the wrapper existed. */
+.editor-layout {
+  display: contents;
+}
+
+/* Split: `row-reverse` puts the source panel (the LATER child in document
+   order) on the left and the viewer on the right, matching MarpSplitEditor,
+   without moving either element in the DOM — the viewer keeps its scroll
+   position, its rendered mermaid diagrams and its v-html subtree across the
+   switch. The inline `height` (see `splitPaneHeightCss`) supplies the basis;
+   `flex: 1 1 auto` lets it grow when the host gives the container a real
+   height, and collapses to that basis when it doesn't. None of these class
+   names are the ones StackView's `.stack-natural :deep(...)` overrides
+   target, so the sizing here survives stack mode. */
+.editor-layout--split {
+  display: flex;
+  flex-direction: row-reverse;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-layout--split > .markdown-content-wrapper {
+  flex: 1 1 50%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-layout--split > .bottom-bar-wrapper {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 50%;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid #e0e0e0;
+}
+
+.editor-layout--split .markdown-source {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  border-top: none;
+}
+
+/* The stacked panel caps the textarea at 40vh; here it owns the column and
+   fills whatever the split leaves after the actions row. The growth is on the
+   WRAPPER (`.editor-with-rail`), which is the flex child of the column — the
+   textarea is a child of that row and stretches to it. */
+.editor-layout--split .editor-with-rail {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.editor-layout--split .markdown-editor {
+  height: auto;
+  min-height: 0;
+  resize: none;
 }
 
 /* Body styles for the rendered Markdown.
@@ -979,6 +1436,13 @@ watch(
   cursor: pointer;
 }
 
+.toggle-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 .action-buttons {
   display: flex;
   gap: 0.5rem;
@@ -1010,6 +1474,55 @@ watch(
   resize: vertical;
   margin-bottom: 0.5rem;
   line-height: 1.5;
+}
+
+/* Editor + bookmark rail. A row rather than an overlay: the triangles get a
+   gutter of their own, so they can never cover the first characters of a line,
+   and the textarea keeps its full width for text. */
+.editor-with-rail {
+  display: flex;
+  align-items: stretch;
+}
+
+.editor-with-rail .markdown-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+/* `position: relative` makes this the containing block the markers' percentage
+   `top` is resolved against — so the rail's own height IS the 100% that a
+   bookmark's position in the document is expressed as. The bottom margin
+   matches the textarea's, keeping the two boxes aligned. */
+.bookmark-rail {
+  position: relative;
+  flex: none;
+  width: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.bookmark-marker {
+  position: absolute;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 12px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #9e9e9e;
+  cursor: pointer;
+}
+
+.bookmark-marker:hover {
+  color: #4caf50;
+}
+
+.bookmark-marker .material-icons {
+  font-size: 12px;
+  line-height: 1;
 }
 
 .markdown-editor:focus {

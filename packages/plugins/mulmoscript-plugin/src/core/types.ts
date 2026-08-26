@@ -7,9 +7,13 @@ import type { MulmoScript } from "@mulmocast/types";
  *  by hosts that have a movie backend (the package core ignores it). */
 export interface SaveMulmoScriptArgs {
   script?: unknown;
-  filename?: string;
-  filePath?: string;
-  autoGenerateMovie?: boolean;
+  filename?: string | undefined;
+  filePath?: string | undefined;
+  autoGenerateMovie?: boolean | undefined;
+  /** With `filePath`: replace just this beat instead of re-sending the whole script. */
+  beatIndex?: number | undefined;
+  /** The replacement beat. Only meaningful with `filePath` + `beatIndex`. */
+  beat?: unknown;
 }
 
 /** Result payload that drives the View. `filePath` is the historical

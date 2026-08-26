@@ -82,10 +82,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useAccountingI18n } from "../lang";
-import { getProfitLoss, type ProfitLoss } from "../api";
+import { useAccountingApi, type ProfitLoss } from "../api";
 import { formatAmount as formatAmountWithCurrency, currentFiscalYearRange, resolveFiscalYearEnd, type DateRange, type FiscalYearEnd } from "../../shared";
 import { useLatestRequest } from "./useLatestRequest";
 import DateRangePicker from "./DateRangePicker.vue";
+
+const api = useAccountingApi();
 
 const { t } = useAccountingI18n();
 
@@ -93,11 +95,11 @@ const props = defineProps<{
   bookId: string;
   currency: string;
   version: number;
-  fiscalYearEnd?: FiscalYearEnd;
+  fiscalYearEnd?: FiscalYearEnd | undefined;
   /** Opening-balance date for the active book — drives the "Lifetime"
    *  shortcut in the date picker (from = openingDate, to = today).
    *  When absent, the picker hides Lifetime; "All" still works. */
-  openingDate?: string;
+  openingDate?: string | undefined;
 }>();
 
 const emit = defineEmits<{ selectAccount: [code: string] }>();
@@ -135,7 +137,7 @@ async function refresh(): Promise<void> {
     // (both empty) means "every entry" rather than an empty window.
     const fromBound = range.value.from || "0000-01-01";
     const toBound = range.value.to || "9999-12-31";
-    const result = await getProfitLoss({ kind: "range", from: fromBound, to: toBound }, props.bookId);
+    const result = await api.getProfitLoss({ kind: "range", from: fromBound, to: toBound }, props.bookId);
     if (!isCurrent(token)) return;
     if (!result.ok) {
       error.value = result.error;

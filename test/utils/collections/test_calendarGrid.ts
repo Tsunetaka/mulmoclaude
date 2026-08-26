@@ -131,27 +131,38 @@ describe("buildMonthGrid", () => {
     // June 2026: the 1st is a Monday. Sunday-start grid → one leading day
     // (May 31), then June 1-30, then trailing July days.
     const grid = buildMonthGrid(2026, 6, 0);
-    assert.equal(grid[0].key, "2026-05-31");
-    assert.equal(grid[0].inMonth, false);
-    assert.equal(grid[1].key, "2026-06-01");
-    assert.equal(grid[1].inMonth, true);
+    const [leadingCell, secondCell] = grid;
+    assert.ok(leadingCell);
+    assert.ok(secondCell);
+    assert.equal(leadingCell.key, "2026-05-31");
+    assert.equal(leadingCell.inMonth, false);
+    assert.equal(secondCell.key, "2026-06-01");
+    assert.equal(secondCell.inMonth, true);
     const inMonth = grid.filter((cell) => cell.inMonth);
     assert.equal(inMonth.length, 30);
-    assert.equal(inMonth[0].key, "2026-06-01");
-    assert.equal(inMonth[29].key, "2026-06-30");
+    const [firstOfMonth] = inMonth;
+    const lastOfMonth = inMonth.at(-1);
+    assert.ok(firstOfMonth);
+    assert.ok(lastOfMonth);
+    assert.equal(firstOfMonth.key, "2026-06-01");
+    assert.equal(lastOfMonth.key, "2026-06-30");
   });
 
   it("honours a Monday week start", () => {
     // June 1 2026 is a Monday → no leading days with weekStartsOn=1.
     const grid = buildMonthGrid(2026, 6, 1);
-    assert.equal(grid[0].key, "2026-06-01");
-    assert.equal(grid[0].inMonth, true);
+    const [leadingCell] = grid;
+    assert.ok(leadingCell);
+    assert.equal(leadingCell.key, "2026-06-01");
+    assert.equal(leadingCell.inMonth, true);
   });
 
   it("handles a leap February", () => {
     const inMonth = buildMonthGrid(2024, 2).filter((cell) => cell.inMonth);
     assert.equal(inMonth.length, 29);
-    assert.equal(inMonth[28].key, "2024-02-29");
+    const leapDay = inMonth.at(-1);
+    assert.ok(leapDay);
+    assert.equal(leapDay.key, "2024-02-29");
   });
 
   it("produces 42 contiguous days with no gaps or repeats", () => {
@@ -307,6 +318,25 @@ describe("assignLanes", () => {
       { lane: 1, lanes: 2 },
       { lane: 0, lanes: 2 },
       { lane: 0, lanes: 2 },
+    ]);
+  });
+
+  // A cluster stays open on the LONGEST end seen so far, not the previous
+  // block's. Without that running max, C (which the all-day block still
+  // overlaps) breaks into a cluster of its own and renders full-width while
+  // sitting on top of A. Pinned because 20k randomly generated layouts never
+  // produced this shape — only a hand-built one distinguishes the two (#2765).
+  it("keeps a block inside the cluster of a longer block that already contains it", () => {
+    const lanes = assignLanes([
+      { startMin: 540, endMin: 720 }, // A — spans the whole group
+      { startMin: 560, endMin: 580 }, // B — inside A
+      { startMin: 600, endMin: 620 }, // C — inside A, starts after B ended
+    ]);
+    assert.deepEqual(lanes, [
+      { lane: 0, lanes: 2 },
+      { lane: 1, lanes: 2 },
+      // Reuses B's freed lane, and still reports the cluster's full width.
+      { lane: 1, lanes: 2 },
     ]);
   });
 });

@@ -30,10 +30,10 @@ export interface MarpThemeEntry {
 export interface ExportPdfOptions {
   markdown: string;
   filename: string;
-  marp?: boolean;
-  baseDir?: string;
-  format?: "Letter" | "A4";
-  stripFrontmatter?: boolean;
+  marp?: boolean | undefined;
+  baseDir?: string | undefined;
+  format?: "Letter" | "A4" | undefined;
+  stripFrontmatter?: boolean | undefined;
 }
 
 /**
@@ -59,6 +59,14 @@ export interface MarkdownHostApp {
   /** Replace `__too_be_replaced_image_path__` placeholders with
    *  generated images (degrades to text markers when unavailable). */
   fillImages: (markdown: string) => Promise<{ markdown: string }>;
+  /** The source-editor bookmark regex from the host-neutral per-user config
+   *  (`~/.config/mulmo/config.json` → `documentBookmarks.pattern`), or null
+   *  when nothing usable is configured — the View then falls back to
+   *  `DEFAULT_DOCUMENT_BOOKMARK_PATTERN`.
+   *
+   *  OPTIONAL: a host that has not wired the shared config reader yet keeps
+   *  working, and its users get the default pattern rather than an error. */
+  bookmarkPattern?: () => Promise<{ pattern: string | null }>;
 }
 
 // ── Dispatch envelope (what the View sends through `dispatch`) ───────
@@ -82,9 +90,12 @@ export interface FillImagesArgs {
   kind: "fillImages";
   markdown: string;
 }
+export interface BookmarkPatternArgs {
+  kind: "bookmarkPattern";
+}
 
 /** Discriminated union of every action the View can `dispatch`. */
-export type MarkdownDispatchArgs = LoadDocArgs | SaveDocArgs | MarpThemesArgs | ExportPdfArgs | FillImagesArgs;
+export type MarkdownDispatchArgs = LoadDocArgs | SaveDocArgs | MarpThemesArgs | ExportPdfArgs | FillImagesArgs | BookmarkPatternArgs;
 
 /** Maps a dispatch `kind` to its result shape so the View can call
  *  `dispatch<MarkdownDispatchResult["loadDoc"]>(…)` without a cast. */
@@ -94,6 +105,7 @@ export interface MarkdownDispatchResult {
   marpThemes: { themes: MarpThemeEntry[] };
   exportPdf: { pdfBase64: string };
   fillImages: { markdown: string };
+  bookmarkPattern: { pattern: string | null };
 }
 
 // ── Runtime guard ───────────────────────────────────────────────────
@@ -124,6 +136,7 @@ const DISPATCH_SHAPE_CHECKS = new Map<string, (args: Record<string, unknown>) =>
   ["loadDoc", (args) => isString(args.path)],
   ["saveDoc", (args) => isString(args.path) && isString(args.markdown)],
   ["marpThemes", () => true],
+  ["bookmarkPattern", () => true],
   ["fillImages", (args) => isString(args.markdown)],
   [
     "exportPdf",
@@ -142,4 +155,45 @@ export function isMarkdownDispatchArgs(value: unknown): value is MarkdownDispatc
   if (!isRecord(value) || typeof value.kind !== "string") return false;
   const check = DISPATCH_SHAPE_CHECKS.get(value.kind);
   return check !== undefined && check(value);
+}
+
+// ── Dispatch result readers ─────────────────────────────────────────
+//
+// Protocol 2.0.0 makes `dispatch` return `unknown` unless it is handed a
+// reader: naming the result type at the call site never checked anything,
+// since the caller had not seen the response. These sit beside the shapes
+// they read, like the argument guards above.
+//
+// They throw, which is the documented idiom for `dispatch` — every caller
+// here is already inside a try/catch that reports the failure.
+
+const notReturned = (what: string, value: unknown): never => {
+  throw new Error(`markdown plugin: dispatch returned no ${what} (got ${typeof value})`);
+};
+
+export function readDocContent(value: unknown): { content: string } {
+  if (isRecord(value) && typeof value.content === "string") return { content: value.content };
+  return notReturned("document content", value);
+}
+
+export function readMarpThemes(value: unknown): { themes: MarpThemeEntry[] } {
+  if (!isRecord(value) || !Array.isArray(value.themes)) return notReturned("marp themes", value);
+  const themes = value.themes.filter((entry): entry is MarpThemeEntry => isRecord(entry) && typeof entry.name === "string" && typeof entry.css === "string");
+  // A malformed entry is dropped rather than failing the whole list: one
+  // bad theme file should not leave the deck with no themes at all.
+  return { themes };
+}
+
+/** `null` is a legitimate answer here ("nothing configured"), so — unlike the
+ *  readers around it — only a malformed envelope throws. A host that predates
+ *  the `bookmarkPattern` kind answers with something else entirely; the View
+ *  catches that and falls back to the default pattern. */
+export function readBookmarkPattern(value: unknown): { pattern: string | null } {
+  if (isRecord(value) && (typeof value.pattern === "string" || value.pattern === null)) return { pattern: value.pattern };
+  return notReturned("bookmark pattern", value);
+}
+
+export function readExportedPdf(value: unknown): { pdfBase64: string } {
+  if (isRecord(value) && typeof value.pdfBase64 === "string") return { pdfBase64: value.pdfBase64 };
+  return notReturned("exported PDF", value);
 }

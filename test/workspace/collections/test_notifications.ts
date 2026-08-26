@@ -43,6 +43,12 @@ let dataDir: string;
 
 const SLUG = "test-completion";
 
+// These tests drive the reconciler with an EXPLICIT `workspaceRoot` (a tmpdir),
+// so the bell ids they produce carry that root. Production does not: the host
+// starts its watchers with no root override, and its ids stay the bare
+// `collection-completion:<slug>:<itemId>` that `active.json` already holds.
+const legacyIdFor = (itemId: string): string => `collection-completion:@${workdir}\u0000${SLUG}:${itemId}`;
+
 function buildSchema(extra: Partial<CollectionSchema> = {}): CollectionSchema {
   return {
     title: "Test Completion",
@@ -158,7 +164,7 @@ describe("reconcileItem", () => {
     await reconcileItem(asCollection(SLUG, schema, dataDir), "a", { workspaceRoot: workdir });
     const entries = await activeCompletionEntries();
     assert.equal(entries.length, 1);
-    assert.equal(entries[0]?.legacyId, `collection-completion:${SLUG}:a`);
+    assert.equal(entries[0]?.legacyId, legacyIdFor("a"));
     assert.equal(entries[0]?.title, `${schema.title}: a`);
     // Deep-link target includes the itemId so the bell click opens the detail.
     assert.equal(entries[0]?.navigateTarget, `/collections/${SLUG}?selected=a`);
@@ -282,7 +288,7 @@ describe("reconcileAllItems", () => {
     await reconcileAllItems(asCollection(SLUG, schema, dataDir), { workspaceRoot: workdir });
     const entries = await activeCompletionEntries();
     const legacyIds = entries.map((entry) => entry.legacyId).sort();
-    assert.deepEqual(legacyIds, [`collection-completion:${SLUG}:a`, `collection-completion:${SLUG}:c`]);
+    assert.deepEqual(legacyIds, [legacyIdFor("a"), legacyIdFor("c")]);
   });
 
   it("is a no-op when the schema has no completionField", async () => {
@@ -298,7 +304,7 @@ describe("clearItemNotification", () => {
     // Manually publish two entries with the same legacyId to simulate a
     // historical race producing duplicates — the clear path must take
     // them both out, not leave a stuck one behind.
-    const legacyId = `collection-completion:${SLUG}:a`;
+    const legacyId = legacyIdFor("a");
     const pluginData = {
       legacy: true,
       legacyId,
@@ -323,7 +329,9 @@ describe("clearItemNotification", () => {
       pluginData,
     });
     assert.equal((await activeCompletionEntries()).length, 2);
-    await clearItemNotification(SLUG, "a");
+    // Same root the entries were published under — the clear path keys on
+    // (root, slug, itemId), so a root-less clear would leave both standing.
+    await clearItemNotification(SLUG, "a", workdir);
     assert.equal((await activeCompletionEntries()).length, 0);
   });
 
@@ -494,7 +502,7 @@ describe("reconcileItem — notifyWhen (condition gate)", () => {
     await reconcileItem(asCollection(SLUG, schema, dataDir), "a", { workspaceRoot: workdir });
     await reconcileItem(asCollection(SLUG, schema, dataDir), "b", { workspaceRoot: workdir });
     const ids = (await activeCompletionEntries()).map((entry) => entry.legacyId);
-    assert.deepEqual(ids, [`collection-completion:${SLUG}:a`]);
+    assert.deepEqual(ids, [legacyIdFor("a")]);
   });
 
   it("does not fire when the gated field is missing", async () => {
@@ -563,8 +571,8 @@ describe("reconcileItem — notifyWhen severity", () => {
     await reconcileItem(asCollection(SLUG, schema, dataDir), "a", { workspaceRoot: workdir });
     await reconcileItem(asCollection(SLUG, schema, dataDir), "b", { workspaceRoot: workdir });
     const bySlug = new Map((await activeCompletionEntries()).map((entry) => [entry.legacyId, entry.severity]));
-    assert.equal(bySlug.get(`collection-completion:${SLUG}:a`), "urgent");
-    assert.equal(bySlug.get(`collection-completion:${SLUG}:b`), "nudge");
+    assert.equal(bySlug.get(legacyIdFor("a")), "urgent");
+    assert.equal(bySlug.get(legacyIdFor("b")), "nudge");
   });
 
   it("updates a pending entry's severity in place when its flagged priority changes", async () => {
@@ -573,7 +581,9 @@ describe("reconcileItem — notifyWhen severity", () => {
     await reconcileItem(asCollection(SLUG, schema, dataDir), "a", { workspaceRoot: workdir });
     const before = await activeCompletionEntries();
     assert.equal(before.length, 1);
-    assert.equal(before[0].severity, "urgent");
+    const [beforeEntry] = before;
+    assert.ok(beforeEntry);
+    assert.equal(beforeEntry.severity, "urgent");
 
     // urgent → high: still flagged, so the entry persists but must re-colour
     // to amber — and keep the SAME id (in-place update, not clear+republish).
@@ -581,8 +591,10 @@ describe("reconcileItem — notifyWhen severity", () => {
     await reconcileItem(asCollection(SLUG, schema, dataDir), "a", { workspaceRoot: workdir });
     const after = await activeCompletionEntries();
     assert.equal(after.length, 1);
-    assert.equal(after[0].severity, "nudge");
-    assert.equal(after[0].priority, "normal");
-    assert.equal(after[0].id, before[0].id);
+    const [afterEntry] = after;
+    assert.ok(afterEntry);
+    assert.equal(afterEntry.severity, "nudge");
+    assert.equal(afterEntry.priority, "normal");
+    assert.equal(afterEntry.id, beforeEntry.id);
   });
 });

@@ -135,16 +135,16 @@ const props = defineProps<{
   items: CollectionItem[];
   day: Ymd;
   anchorField: string;
-  endField?: string;
-  timeField?: string;
+  endField?: string | undefined;
+  timeField?: string | undefined;
   /** Optional `enum` field tinting each chip by its value's palette colour
    *  (matching the month view). Empty / unset → default indigo/slate styling. */
-  colorField?: string;
-  selected?: string;
+  colorField?: string | undefined;
+  selected?: string | undefined;
   canCreate: boolean;
   /** When true, expand the modal to two columns and render the `#detail`
    *  slot (the selected/created record) to the right of the timeline. */
-  showDetail?: boolean;
+  showDetail?: boolean | undefined;
 }>();
 
 const emit = defineEmits<{
@@ -255,7 +255,9 @@ const timedEntries = computed<TimedEntry[]>(() => {
     timed.map((entry) => ({ startMin: entry.slice.startMin, endMin: Math.max(entry.slice.endMin, entry.slice.startMin + LANE_MIN_MINUTES) })),
   );
   return timed.map((entry, index) => {
-    const { lane, lanes: laneCount } = lanes[index];
+    // `assignLanes` returns one assignment per input, so the fallback is
+    // unreachable; it mirrors the default `assignLanes` uses internally.
+    const { lane, lanes: laneCount } = lanes[index] ?? { lane: 0, lanes: 1 };
     const widthPct = 100 / laneCount;
     const heightPx = entry.slice.kind === "line" ? LINE_PX : Math.max((entry.slice.endMin - entry.slice.startMin) * PX_PER_MIN, MIN_BLOCK_PX);
     return {

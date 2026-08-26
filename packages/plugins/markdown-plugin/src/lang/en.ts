@@ -5,10 +5,12 @@ const en: Messages = {
   loadFailed: "⚠ Failed to load document: {error}",
   refreshFailed: "⚠ Failed to refresh document: {error} — showing last successfully loaded content.",
   noContent: "No markdown content available",
+  reload: "Reload from disk",
   pdf: "PDF",
   pdfFailedShort: "⚠ PDF failed",
   editSource: "Edit Markdown Source",
   livePreview: "Live preview",
+  autoSave: "Auto save",
   saving: "Saving...",
   applyChanges: "Apply Changes",
   cancel: "Cancel",
@@ -25,6 +27,8 @@ const en: Messages = {
   marpSplitEditorLabel: "Source",
   mermaidLoadFailed: "⚠ Mermaid failed to load: {error}",
   mermaidRenderFailed: "⚠ Mermaid render failed: {error}",
+  bookmarkRailLabel: "Bookmarks",
+  bookmarkJump: "Jump to bookmark: {label}",
 };
 
 export default en;

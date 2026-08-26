@@ -47,11 +47,11 @@ export interface ResolvedCompany {
 
 export interface EdgarClient {
   resolve(tickerOrCik: string): Promise<ResolvedCompany>;
-  getRecentFilings(cik: string, opts: { formTypes?: string[]; limit?: number }): Promise<{ name: string; filings: FilingSummary[] }>;
+  getRecentFilings(cik: string, opts: { formTypes?: string[] | undefined; limit?: number | undefined }): Promise<{ name: string; filings: FilingSummary[] }>;
   getFilingDocument(cik: string, accessionNumber: string, primaryDocument: string): Promise<{ url: string; text: string }>;
   getCompanyFacts(cik: string): Promise<unknown>;
   getCompanyConcept(cik: string, taxonomy: string, concept: string): Promise<unknown>;
-  fullTextSearch(query: string, opts: { forms?: string[]; dateRange?: { from: string; to: string } }): Promise<unknown>;
+  fullTextSearch(query: string, opts: { forms?: string[] | undefined; dateRange?: { from: string; to: string } | undefined }): Promise<unknown>;
 }
 
 interface EdgarDeps {
@@ -154,7 +154,10 @@ export function createEdgarClient(deps: EdgarDeps): EdgarClient {
     return { cik: padCik(hit.cik_str), name: hit.title, ticker: hit.ticker };
   }
 
-  async function getRecentFilings(cik: string, opts: { formTypes?: string[]; limit?: number } = {}): Promise<{ name: string; filings: FilingSummary[] }> {
+  async function getRecentFilings(
+    cik: string,
+    opts: { formTypes?: string[] | undefined; limit?: number | undefined } = {},
+  ): Promise<{ name: string; filings: FilingSummary[] }> {
     const response = await edgarFetch(`https://data.sec.gov/submissions/CIK${cik}.json`);
     const data = (await response.json()) as {
       name: string;
@@ -170,13 +173,18 @@ export function createEdgarClient(deps: EdgarDeps): EdgarClient {
       };
     };
     const { recent } = data.filings;
-    const all: FilingSummary[] = recent.accessionNumber.map((_, idx) => ({
-      accessionNumber: recent.accessionNumber[idx],
-      form: recent.form[idx],
-      filingDate: recent.filingDate[idx],
-      reportDate: recent.reportDate[idx],
-      primaryDocument: recent.primaryDocument[idx],
-      primaryDocDescription: recent.primaryDocDescription[idx],
+    // `recent` is six PARALLEL arrays keyed by position, and nothing in
+    // the feed guarantees they are the same length. A short column would
+    // otherwise put `undefined` into a field declared `string`, and the
+    // `filing.form.toUpperCase()` filter below would throw on it.
+    const columnAt = (column: readonly string[], idx: number): string => column[idx] ?? "";
+    const all: FilingSummary[] = recent.accessionNumber.map((accessionNumber, idx) => ({
+      accessionNumber,
+      form: columnAt(recent.form, idx),
+      filingDate: columnAt(recent.filingDate, idx),
+      reportDate: columnAt(recent.reportDate, idx),
+      primaryDocument: columnAt(recent.primaryDocument, idx),
+      primaryDocDescription: columnAt(recent.primaryDocDescription, idx),
     }));
     const formTypes = opts.formTypes?.map((form) => form.toUpperCase());
     const filtered = formTypes ? all.filter((filing) => formTypes.includes(filing.form.toUpperCase())) : all;
@@ -200,7 +208,10 @@ export function createEdgarClient(deps: EdgarDeps): EdgarClient {
     return await response.json();
   }
 
-  async function fullTextSearch(query: string, opts: { forms?: string[]; dateRange?: { from: string; to: string } } = {}): Promise<unknown> {
+  async function fullTextSearch(
+    query: string,
+    opts: { forms?: string[] | undefined; dateRange?: { from: string; to: string } | undefined } = {},
+  ): Promise<unknown> {
     const params = new URLSearchParams({ q: query });
     if (opts.forms?.length) params.set("forms", opts.forms.join(","));
     if (opts.dateRange) {

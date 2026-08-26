@@ -13,6 +13,7 @@ import { loadDevPlugins, parseDevPluginsEnv } from "../plugins/dev-loader.js";
 import { loadPresetPlugins } from "../plugins/preset-loader.js";
 import { registerRuntimePlugins, getRuntimePlugins } from "../plugins/runtime-registry.js";
 import { errorMessage } from "../utils/errors.js";
+import { settleWithin } from "../utils/promise.js";
 import { isNonEmptyString, isRecord } from "../utils/types.js";
 import { API_ROUTES } from "../../src/config/apiRoutes.js";
 import { env } from "../system/env.js";
@@ -22,6 +23,7 @@ import { safeResponseText } from "../utils/http.js";
 import { readTextSafeSync } from "../utils/files/safe.js";
 import { WORKSPACE_PATHS } from "../workspace/paths.js";
 import { makeUuid } from "../utils/id.js";
+import { deliverBeacon, BROKER_READY_DELIVERY } from "./brokerBeacon.js";
 
 type JsonRpcId = string | number | null;
 
@@ -121,9 +123,20 @@ const mcpToolDefs: Record<string, ToolDef> = Object.fromEntries(
 // builds tsx with cjs output, where TLA fails at parse time.
 // Instead, the stdin handler awaits `runtimeReady` before serving
 // `tools/list` / `tools/call`, so requests arriving early just wait.
+// Both views are derived from the same plugin barrel, so every def has an
+// endpoint; a def without one is dropped rather than published half-wired.
+function pluginToolEntries(): [name: string, tool: ToolDef][] {
+  const entries: [string, ToolDef][] = [];
+  for (const def of PLUGIN_DEFS) {
+    const endpoint = TOOL_ENDPOINTS[def.name];
+    if (endpoint !== undefined) entries.push([def.name, fromPackage(def, endpoint)]);
+  }
+  return entries;
+}
+
 const ALL_TOOLS: Record<string, ToolDef> = {
   ...mcpToolDefs,
-  ...Object.fromEntries(PLUGIN_DEFS.map((def) => [def.name, fromPackage(def, TOOL_ENDPOINTS[def.name])])),
+  ...Object.fromEntries(pluginToolEntries()),
 };
 
 // Host-internal MCP tools the CLI invokes directly via flags
@@ -183,6 +196,19 @@ function isToolKnown(name: string): boolean {
 // policy in `runtime-registry.ts` enforce that.
 const STATIC_TOOL_NAMES: ReadonlySet<string> = new Set([...MCP_PLUGIN_NAMES, ...Object.keys(mcpToolDefs)]);
 
+// The parent describes every name in PLUGIN_NAMES to the LLM
+// (`buildPluginPromptSections`), so a name that resolves to no tool here is a
+// tool the agent has been told to call and cannot — the state behind #2731,
+// previously visible only by hand-driving the broker over stdio.
+function reportPublishedSurface(): void {
+  const published = new Set(tools.map((toolDef) => toolDef.name));
+  const missing = activeNames.filter((name) => !published.has(name));
+  process.stderr.write(`[mcp-server] publishing ${tools.length} tools: ${toolSignature(tools)}\n`);
+  if (missing.length > 0) {
+    process.stderr.write(`[mcp-server] advertised but NOT published (check plugin load above): ${missing.join(",")}\n`);
+  }
+}
+
 // Internal try/catch so a filesystem failure (EACCES on plugins.json,
 // busted tgz, runaway plugin import) can never strand the MCP
 // handshake. Runtime plugins are best-effort: any failure logs and
@@ -224,6 +250,7 @@ const runtimeReady: Promise<void> = (async () => {
   } catch (err) {
     process.stderr.write(`[mcp-server] runtime plugin load failed; static tools only: ${String(err)}\n`);
   }
+  reportPublishedSurface();
   // Runtime plugins (if any) are now folded into `tools`. The initial
   // `tools/list` already served the static set (incl. handlePermission);
   // nudge the client to re-fetch only if the surface actually grew.
@@ -231,6 +258,13 @@ const runtimeReady: Promise<void> = (async () => {
     notifyToolsListChanged();
   }
 })();
+
+// How long the first `tools/list` may wait for runtime plugins. Deliberately
+// well under the CLI's ~5 s native connect wait (#2201) — this is a
+// correctness fix for a load that normally takes milliseconds, not a budget
+// for a slow one. A load that overruns it falls back to today's behaviour:
+// answer with the static set, then `notifications/tools/list_changed`.
+const TOOLS_LIST_RUNTIME_WAIT_MS = 2 * ONE_SECOND_MS;
 
 // MCP tools (e.g. readXPost, searchX) call external APIs through their
 // own handlers. The bridge timeout must exceed those inner timeouts
@@ -548,6 +582,50 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
   return parts.length > 0 ? parts.join("\n") : "Done";
 }
 
+// Milliseconds from this process starting to the module being set up — the
+// cold boot itself. `performance.now()` is relative to process start, so tsx
+// transcoding the import graph (or node reading the 6 MB bundle) is already
+// inside the number, and no host/container clock agreement is needed (#2842).
+const BOOT_MS = Math.round(performance.now());
+
+// Which spawn path this is, as seen from inside: the bundle is emitted as
+// `server/build/mcp-server.mjs`, the fallback runs `mcp-server.ts` under tsx.
+const BROKER_KIND = import.meta.url.endsWith(".mjs") ? "bundle" : "tsx";
+
+// `initialize` can arrive again on a reconnect; the first answer is the one
+// that raced the CLI's connect wait, so later ones say nothing new. Set when
+// delivery STARTS, not when it succeeds — a second handshake must not open a
+// second retry chain reporting a boot time that is no longer the first one.
+const brokerReadyBeacon = { started: false };
+
+// Fire-and-forget, and only AFTER the handshake reply is already on the wire.
+// The host has no other view of this child — Claude CLI spawned it and owns its
+// stderr — so without this beacon a slow broker and a dead one are the same
+// observation from out there (#2842). Deliberately never awaited and never
+// rethrown: a beacon that delayed `initialize` would worsen the very race it
+// exists to measure.
+//
+// Retried rather than sent once, because the host now SKIPS the automatic
+// replay when no beacon arrived. A beacon dropped in flight would make a
+// healthy broker look like one that never started.
+function reportBrokerReady(): void {
+  if (brokerReadyBeacon.started) return;
+  brokerReadyBeacon.started = true;
+  const body = { bootMs: BOOT_MS, initializeMs: Math.round(performance.now()), kind: BROKER_KIND, spawnId: env.mcpSpawnId };
+  void deliverBeacon(
+    {
+      send: (timeoutMs) => postJson(API_ROUTES.mcp.brokerReady, body, { timeoutMs }),
+      // Unref'd: a pending retry must never be the reason this process stays up.
+      wait: (delayMs) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, delayMs).unref();
+        }),
+      report: (attempts, err) => process.stderr.write(`[mcp-server] startup beacon undelivered after ${attempts} attempts: ${errorMessage(err)}\n`),
+    },
+    BROKER_READY_DELIVERY,
+  );
+}
+
 function handleInitialize(requestId: JsonRpcId | undefined): void {
   respond({
     jsonrpc: "2.0",
@@ -558,25 +636,31 @@ function handleInitialize(requestId: JsonRpcId | undefined): void {
       serverInfo: { name: "mulmoclaude", version: "1.0.0" },
     },
   });
+  reportBrokerReady();
 }
 
-// Respond immediately with the current tool set — do NOT wait for
-// `runtimeReady`. The always-on `handlePermission` tool (wired via
-// `--permission-prompt-tool`) and all static tools are present from the
-// start, so an ask-mode permission check at session start no longer races a
-// slow plugin load (#1698). Runtime plugins that finish loading later are
-// advertised via `notifications/tools/list_changed`, prompting a re-fetch.
+// Answer once runtime plugins are in — but never later than the cap. A client
+// that snapshots the tool surface at session start (a deferred / tool-search
+// index does) keeps whatever this first response said, so answering
+// static-only leaves preset tools like `google` described in the system prompt
+// yet uncallable for the rest of the session, with
+// `notifications/tools/list_changed` doing nothing for it (#2731). The cap
+// keeps the #1698 / #2201 property that a slow plugin load cannot starve
+// `handlePermission` at session start: past it we answer with what we have and
+// the notification remains the backstop.
 function handleToolsList(requestId: JsonRpcId | undefined): void {
-  respond({
-    jsonrpc: "2.0",
-    id: requestId,
-    result: {
-      tools: tools.map((toolDef) => ({
-        name: toolDef.name,
-        description: toolDef.description,
-        inputSchema: toolDef.inputSchema,
-      })),
-    },
+  void settleWithin(runtimeReady, TOOLS_LIST_RUNTIME_WAIT_MS).then(() => {
+    respond({
+      jsonrpc: "2.0",
+      id: requestId,
+      result: {
+        tools: tools.map((toolDef) => ({
+          name: toolDef.name,
+          description: toolDef.description,
+          inputSchema: toolDef.inputSchema,
+        })),
+      },
+    });
   });
 }
 

@@ -35,14 +35,14 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { collectionUi } from "../uiContext";
+import { useCollectionUi } from "../scopedUi";
 
 const emit = defineEmits<{ close: [] }>();
 
 // Teleport target — `body` by default; a Shadow-DOM host overrides it with an
 // in-shadow node so the modal keeps the injected styles. Stable for the modal's
 // lifetime, so resolve it once.
-const teleportTarget = collectionUi().modalTeleportTarget?.() ?? "body";
+const teleportTarget = useCollectionUi().modalTeleportTarget?.() ?? "body";
 
 const dialogEl = ref<HTMLDivElement | null>(null);
 
@@ -70,13 +70,14 @@ function focusableItems(): HTMLElement[] {
  *  itself (tabindex -1) counts as "before the first item". */
 function onTab(event: KeyboardEvent): void {
   const items = focusableItems();
-  if (items.length === 0) {
+  const [first] = items;
+  const last = items.at(-1);
+  // Nothing focusable inside → keep focus on the dialog itself.
+  if (!first || !last) {
     event.preventDefault();
     dialogEl.value?.focus();
     return;
   }
-  const [first] = items;
-  const last = items[items.length - 1];
   const active = document.activeElement;
   if (event.shiftKey) {
     if (active === first || active === dialogEl.value) {
