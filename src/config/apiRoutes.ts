@@ -565,6 +565,15 @@ const HOST_API_ROUTES = {
      *  削除しない（安全側）。サンドボックスの Claude は /mnt/d を触れないため、
      *  /mnt/d が見えるホストのサーバー経由でこの push を実行する口。 */
     releaseToWindows: "/api/work/release-to-windows",
+    /** POST — 付属教材（テキストブック以外の受講者配布物・edit-slide §14）を
+     *  WSL `<wd>/StudyMaterials/` から Windows(D:) `<windows_path>\StudyMaterials\` へ push。
+     *  JSON。body `{ wdId, windowsWdPath? }`（省略時は `resolveWdWindowsPath` で解決）。
+     *  対象は `付属教材/`（WSL を正とする再帰フルミラー＝このサブツリー内の削除は D: にも反映）と
+     *  直下の `付属教材.zip`（単体コピー）の 2 つだけ。`StudyMaterials/` 直下の他ファイル
+     *  （過去の配布物 zip 等）は削除しない。WSL 側 `付属教材/` が空/不在なら no-op（安全弁）。
+     *  zip の生成は Claude が WSL 側で行い、この口は push だけを担う
+     *  （combine と releaseToWindows の責務分離と同じ形）。 */
+    studyMaterialsPush: "/api/work/study-materials-push",
     /** DELETE — 編集中バージョンの「サブフォルダ限定削除」（N1）。対象
      *  `data/work/<wd>/<version>/` のバージョンサブフォルダだけを WSL 上で削除する。
      *  Windows(D:) には一切触れない（編集中版は WSL のみに存在する運用）。

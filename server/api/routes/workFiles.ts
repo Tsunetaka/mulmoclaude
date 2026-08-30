@@ -49,6 +49,15 @@ const PPTX_VERSION_DATE_PATTERN = /_(\d{8})_v(\d+)\.pptx$/i;
 // pptx と同じく D:↔WSL の両方向で同期する（削除はしない＝維持されるべき成果物）。
 const HISTORY_FILENAME = "HISTORY.md";
 const PPTX_VERSION_PATTERN = /_v(\d+)\.pptx$/i;
+// 付属教材（テキストブック以外の受講者配布物・edit-slide §14）。
+// WD 直下 `StudyMaterials/` の中で、この 2 つだけを WSL→Windows へ push する。
+// `StudyMaterials/` 自体は素材同期（D:→WSL）の allowlist に入っていないので
+// D: 側から消されることはなく、WSL を正として扱ってよい唯一の成果物フォルダ。
+// build_index.py の `Study_Materials` 列は「StudyMaterials 直下のファイルの mtime 最新」を
+// 拾うため、直下に置くファイルは zip 1 本に保つ（配布物の実体はサブフォルダ側に置く）。
+const STUDY_MATERIALS_DIR = "StudyMaterials";
+const ATTACHMENT_DIR_NAME = "付属教材";
+const ATTACHMENT_ZIP_NAME = "付属教材.zip";
 const WD_NAME_PATTERN = /^([A-Z]+-\d+)\s+(\S.*)$/;
 const WD_ROOT_PATTERN = /^[A-Z]+-\d{5}\s+/;
 
@@ -1166,6 +1175,49 @@ async function syncSourceMaterialsFromWindows(wdId: string, windowsWdPath: strin
   return total;
 }
 
+// ── 付属教材 WSL→Windows push（配布準備・edit-slide §14）──────────────────
+// WSL `data/work/<wd>/StudyMaterials/` の `付属教材/`（ツリー）と `付属教材.zip`（単体）を
+// Windows(D:) の `<windows_path>\StudyMaterials\` へ push する。
+//
+// スコープを 2 つに限る理由：`StudyMaterials/` 直下には過去の配布物（別の zip 等）が
+// 同居しうる。D: 側のそれを消さないため、削除ミラーは `付属教材/` サブツリーの中だけに
+// 閉じ込め、直下は zip 1 本の追加コピーに留める。ReleasedVersion 同様「D: 側の他物は
+// 削除しない」安全側の設計。
+//
+// WSL 側に `付属教材/` が無い／空のときは no-op（D: 側を誤って空にしない安全弁）。
+interface StudyMaterialsPushResult {
+  copied: number;
+  deleted: number;
+  zipCopied: boolean;
+  /** no-op で終えた理由。押し出しが走ったときは null。 */
+  skipped: string | null;
+}
+
+async function pushStudyMaterialsToWindows(wdId: string, windowsWdPath: string | null): Promise<StudyMaterialsPushResult> {
+  const empty: StudyMaterialsPushResult = { copied: 0, deleted: 0, zipCopied: false, skipped: null };
+  if (!isValidWorkWdId(wdId) || !windowsWdPath) return { ...empty, skipped: "wdId / windowsWdPath 不正" };
+
+  const wslStudyDir = path.join(workspacePath, "data/work", wdId, STUDY_MATERIALS_DIR);
+  const wslAttachDir = path.join(wslStudyDir, ATTACHMENT_DIR_NAME);
+  const attachEntries = await readdirTypes(wslAttachDir);
+  if (attachEntries.length === 0) {
+    // 安全弁: WSL が空なら D: に触れない（削除ミラーで D: を空にしないため）
+    return { ...empty, skipped: `WSL 側 ${STUDY_MATERIALS_DIR}/${ATTACHMENT_DIR_NAME}/ が空または不在` };
+  }
+
+  const winStudyDir = path.join(windowsToWsl(windowsWdPath), STUDY_MATERIALS_DIR);
+  await fsp.mkdir(winStudyDir, { recursive: true });
+  // 付属教材/ サブツリーだけ WSL を正にフルミラー（この中の消えたファイルは D: 側も消す）
+  const tree = await mirrorTreeFull(wslAttachDir, path.join(winStudyDir, ATTACHMENT_DIR_NAME));
+  // 直下の zip は単体コピー（D: 側の他ファイルには非干渉）
+  const zipCopied = await mirrorSingleFile(path.join(wslStudyDir, ATTACHMENT_ZIP_NAME), path.join(winStudyDir, ATTACHMENT_ZIP_NAME));
+
+  if (tree.copied || tree.deleted || zipCopied) {
+    log.info("workFiles.pushStudyMaterials", "pushed study materials to Windows (WSL→D:)", { wdId, ...tree, zipCopied });
+  }
+  return { ...tree, zipCopied, skipped: null };
+}
+
 // 登録済み WD の D:→WSL ミラー（ReleasedVersion のみ）＋リリース済サムネ生成。
 // WD 展開時のプレビュー（released-thumbs）が使う本体。
 // 素材（SOURCE_MATERIALS）には触れない ── 素材の取り込みは「登録」(register) と
@@ -1518,6 +1570,36 @@ router.post(API_ROUTES.work.releaseToWindows, async (req, res) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error("workFiles.releaseToWindows", "push to Windows failed", { err });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// POST /api/work/study-materials-push — 付属教材を WSL→Windows(D:) へ push（配布準備・§14）。
+// windowsWdPath 省略時は D: フォルダ名スキャン（resolveWdWindowsPath）で解決する。JSON。
+// 未登録（WSL に data/work/<wd>/ が無い）WD は 409 で拒む（勝手に WD を実体化しない）。
+router.post(API_ROUTES.work.studyMaterialsPush, async (req, res) => {
+  const reqBody = requestBodyRecord(req.body);
+  const wdId = bodyString(reqBody, "wdId");
+  const windowsWdPath = bodyString(reqBody, "windowsWdPath");
+  if (!wdId || !isValidWorkWdId(wdId)) {
+    res.status(400).json({ error: "wdId (valid WD-ID) required" });
+    return;
+  }
+  try {
+    if (!(await isWdRegistered(wdId))) {
+      res.status(409).json({ error: `${wdId} は未登録です（data/work/${wdId}/ が存在しません）` });
+      return;
+    }
+    const winPath = windowsWdPath ?? (await resolveWdWindowsPath(wdId));
+    if (!winPath) {
+      res.status(400).json({ error: "windowsWdPath 未指定かつ D: 上に該当 WD フォルダが見つかりません" });
+      return;
+    }
+    const result = await pushStudyMaterialsToWindows(wdId, winPath);
+    res.json({ ...result, windowsWdPath: winPath });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error("workFiles.studyMaterialsPush", "study materials push to Windows failed", { err });
     res.status(500).json({ error: msg });
   }
 });
