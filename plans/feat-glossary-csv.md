@@ -215,6 +215,45 @@ GLOSSARY_WD_ID = "SWLESSON-90001"
 
 ---
 
+## 5-2. リリース逆 push の CSV 対応【2026-08-30 実装済み・実機検証 OK】
+
+**実機検証（2026-08-30）**：`POST /api/work/release-to-windows`（`wdId: SWLESSON-90001`）が
+`copied: ["SWLESSON-90001 用語集_20260830_v001.csv"]` を返し、D: 側に CSV と `HISTORY.md` の
+両方が入ることを確認した（修正前はここが `copied: []`）。なお `HISTORY.md` は
+`historyCopied` がログにのみ出て **`copied` には含めない**（pptx と共通の既存挙動・仕様）。
+
+**発見した不具合**：`POST /api/work/release-to-windows` が用語集 WD で `copied: []` を返し
+**完全に空振りしていた**（実測）。`pushReleasedToWindows()` が pptx 前提だったため。
+
+```ts
+const wslFiles = await statPptxList(wslReleasedDir);
+if (wslFiles.length === 0) return empty;   // ← 用語集 WD は pptx が永久に 0 本
+...
+const historyCopied = await mirrorHistoryFile(...);  // ← 到達しない
+```
+
+`HISTORY.md` は既に「pptx ではないが ReleasedVersion に同居する成果物」として
+`mirrorHistoryFile()`（名前指定・コピーのみ・削除しない）で運ばれていたが、
+**その呼び出しが安全弁より後ろにあった**のが効かない理由。
+
+### 直し方 — CSV は HISTORY.md と同じ「コピーのみ」枠に置く
+
+- `RELEASED_CSV_PATTERN` / `isSafeReleasedCsvFilename()` / `statCsvList()` / `mirrorCsvCopy()` を新設
+- **`isSafePptxFilename()` は触らない。** あれは `combine` の `outFilename` 検証にも
+  使われており、CSV を通すと pptx 以外を結合先に指定できてしまう
+- **`mirrorDelete()` に CSV を通さない。** pptx 側は「相手に無い版は削除」という完全一致
+  方向を持つので、CSV を載せると取り違えで消える。CSV はコピーのみ
+- 安全弁を `hasReleasedArtifacts(pptxCount, csvCount)` に置き換え（pptx か CSV が
+  1 件でもあれば続行／両方 0 なら相手を温存）
+- `diffReleasedPptx()` で **source 側 pptx が 0 件なら削除方向を立てない**
+  （CSV だけの WD を根拠に相手の pptx を消す余地を作らない）
+- **`syncReleasedFromWindows`（D:→WSL）にも CSV のコピーを足した。** これが無いと
+  GUI 運用（サーバーが D: に直接書く）で **WSL 側に用語集 CSV が残らず、次に
+  サンドボックスから `scan` を回したとき master が空のまま全語を作り直して v00N を
+  余分に切る**という踏みにくい罠が残る
+
+---
+
 ## 6. 初版の収録範囲
 
 **原典 42 語すべて ＋ SWLESSON 固有語（約 55 語）**（第2弾 Q4）。

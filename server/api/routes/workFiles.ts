@@ -48,6 +48,11 @@ const PPTX_VERSION_DATE_PATTERN = /_(\d{8})_v(\d+)\.pptx$/i;
 // 改訂履歴（edit-slide §12-5）。pptx ではないが ReleasedVersion に同居し、
 // pptx と同じく D:↔WSL の両方向で同期する（削除はしない＝維持されるべき成果物）。
 const HISTORY_FILENAME = "HISTORY.md";
+// 用語集など CSV でリリースされる成果物（SWLESSON-90001 用語集）。HISTORY.md と同じく
+// 「pptx ではないが ReleasedVersion に同居する成果物」で、D:↔WSL の両方向で**コピーのみ**
+// 同期する（削除はしない）。pptx の一覧に混ぜないのは、pptx 側のミラーが「相手に無い版は
+// 削除」という完全一致方向を持っており、そこに CSV を載せると取り違えで消えるため。
+const RELEASED_CSV_PATTERN = /\.csv$/i;
 const PPTX_VERSION_PATTERN = /_v(\d+)\.pptx$/i;
 // 付属教材（テキストブック以外の受講者配布物・edit-slide §14）。
 // WD 直下 `StudyMaterials/` の中で、この 2 つだけを WSL→Windows へ push する。
@@ -97,6 +102,16 @@ export function isSafePptxFilename(name: string): boolean {
   if (!name || name.includes("/") || name.includes("\\") || name.includes("..")) return false;
   if (name.startsWith(".")) return false;
   return /\.pptx$/i.test(name);
+}
+
+/** ReleasedVersion 直下の CSV 成果物として安全な名前か（純粋判定）。
+ *  `isSafePptxFilename` と同じ経路ガードで、拡張子だけを `.csv` に替えたもの。
+ *  **`isSafePptxFilename` を拡張して兼用しないこと** ── あちらは `combine` の
+ *  `outFilename` 検証にも使われており、CSV を通すと pptx 以外を結合先に指定できてしまう。 */
+export function isSafeReleasedCsvFilename(name: string): boolean {
+  if (!name || name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  if (name.startsWith(".")) return false;
+  return RELEASED_CSV_PATTERN.test(name);
 }
 
 /** `target` が `parent` の直下の `name` という名前のディレクトリか（純粋判定）。
@@ -937,15 +952,59 @@ export function diffReleasedMirror(windows: MirrorFile[], wsl: MirrorFile[]): { 
   return { toCopy, toDelete };
 }
 
+/** ReleasedVersion の同期を行うべきか（安全弁・純粋・テスト対象）。
+ *  pptx も CSV も 1 件も無ければ相手側を温存して何もしない。
+ *  **pptx の件数だけで判定してはいけない** ── 用語集 WD（`SWLESSON-90001 用語集`）は
+ *  pptx を永久に持たないので、pptx 基準だと CSV も HISTORY.md も一度も同期されない。
+ *  実際にこれが原因で `release-to-windows` が `copied: []` で空振りしていた。 */
+export function hasReleasedArtifacts(pptxCount: number, csvCount: number): boolean {
+  return pptxCount > 0 || csvCount > 0;
+}
+
+/** pptx の同期差分（純粋・テスト対象）。**source 側の pptx が 0 件なら削除方向を立てない。**
+ *  CSV だけの WD で「相手に pptx が無い」を理由に target 側の pptx を消す判定へ
+ *  入る余地を、そもそも作らないためのガード。 */
+export function diffReleasedPptx(source: MirrorFile[], target: MirrorFile[]): { toCopy: string[]; toDelete: string[] } {
+  if (source.length === 0) return { toCopy: [], toDelete: [] };
+  return diffReleasedMirror(source, target);
+}
+
 // ディレクトリ内 pptx の {name, mtimeMs} 一覧（ミラー差分用）。
 async function statPptxList(dir: string): Promise<MirrorFile[]> {
-  const names = await listFiles(dir, PPTX_PATTERN);
+  return await statMirrorList(dir, PPTX_PATTERN);
+}
+
+// ディレクトリ内 CSV の {name, mtimeMs} 一覧（コピーのみのミラー差分用）。
+async function statCsvList(dir: string): Promise<MirrorFile[]> {
+  return await statMirrorList(dir, RELEASED_CSV_PATTERN);
+}
+
+async function statMirrorList(dir: string, pattern: RegExp): Promise<MirrorFile[]> {
+  const names = await listFiles(dir, pattern);
   const out: MirrorFile[] = [];
   for (const name of names) {
     const mtimeMs = await getMtime(path.join(dir, name));
     if (mtimeMs !== null) out.push({ name, mtimeMs });
   }
   return out;
+}
+
+// CSV 成果物を src→dest へコピーする（新/更新分のみ・**削除はしない**）。
+// pptx と別関数にしてあるのは、CSV に削除方向を持たせないことを型と呼び出しで担保するため。
+async function mirrorCsvCopy(srcDir: string, destDir: string): Promise<string[]> {
+  const { toCopy } = diffReleasedMirror(await statCsvList(srcDir), await statCsvList(destDir));
+  const done: string[] = [];
+  for (const name of toCopy) {
+    const dest = path.join(destDir, name);
+    if (!isSafeReleasedCsvFilename(name) || !isContainedChild(dest, destDir, name)) continue;
+    try {
+      await fsp.copyFile(path.join(srcDir, name), dest);
+      done.push(name);
+    } catch {
+      // 個別失敗は無視（次回再試行）
+    }
+  }
+  return done;
 }
 
 // D:→WSL コピー（最終ガード: 直下・安全な pptx 名のみ）。
@@ -1013,20 +1072,25 @@ async function syncReleasedFromWindows(wdId: string, windowsWdPath: string | nul
   const winReleasedDir = path.join(windowsToWsl(windowsWdPath), "ReleasedVersion");
   if (!(await pathExists(winReleasedDir))) return empty;
   const winFiles = await statPptxList(winReleasedDir);
-  if (winFiles.length === 0) return empty; // 安全弁: D: が空なら WSL を温存
+  const winCsvCount = (await statCsvList(winReleasedDir)).length;
+  // 安全弁: D: が空なら WSL を温存。pptx が 0 でも CSV 成果物（用語集）があれば続行する
+  // ── 用語集 WD は pptx を永久に持たないので、pptx だけを見ると一度も同期されない。
+  if (!hasReleasedArtifacts(winFiles.length, winCsvCount)) return empty;
 
   const wslReleasedDir = path.join(workspacePath, "data/work", wdId, "ReleasedVersion");
   const wslFiles = await statPptxList(wslReleasedDir);
-  const { toCopy, toDelete } = diffReleasedMirror(winFiles, wslFiles);
+  const { toCopy, toDelete } = diffReleasedPptx(winFiles, wslFiles);
   await fsp.mkdir(wslReleasedDir, { recursive: true });
 
   const copied = await mirrorCopy(winReleasedDir, wslReleasedDir, toCopy);
   const deleted = await mirrorDelete(wslReleasedDir, toDelete);
+  // CSV 成果物はコピーのみ（D: に無い WSL の CSV は消さない）。
+  const csvCopied = await mirrorCsvCopy(winReleasedDir, wslReleasedDir);
   const historyCopied = await mirrorHistoryFile(winReleasedDir, wslReleasedDir);
-  if (copied.length || deleted.length || historyCopied) {
-    log.info("workFiles.syncReleased", "mirrored ReleasedVersion from Windows (D: master)", { wdId, copied, deleted, historyCopied });
+  if (copied.length || deleted.length || csvCopied.length || historyCopied) {
+    log.info("workFiles.syncReleased", "mirrored ReleasedVersion from Windows (D: master)", { wdId, copied, deleted, csvCopied, historyCopied });
   }
-  return { copied, deleted };
+  return { copied: [...copied, ...csvCopied], deleted };
 }
 
 // WSL data/work/<wd>/ReleasedVersion を Windows(D:) の ReleasedVersion へ push（リリース逆同期）。
@@ -1037,17 +1101,23 @@ async function pushReleasedToWindows(wdId: string, windowsWdPath: string | null)
   if (!isValidWorkWdId(wdId) || !windowsWdPath) return empty;
   const wslReleasedDir = path.join(workspacePath, "data/work", wdId, "ReleasedVersion");
   const wslFiles = await statPptxList(wslReleasedDir);
-  if (wslFiles.length === 0) return empty; // 安全弁: WSL が空なら何もしない
+  const wslCsvCount = (await statCsvList(wslReleasedDir)).length;
+  // 安全弁: WSL が空なら何もしない。pptx が 0 でも CSV 成果物（用語集）があれば続行する。
+  // ここを pptx だけで判定していたため、用語集 WD は CSV も HISTORY.md も push されず
+  // 空振りしていた（HISTORY.md のコピーがこの return より後ろにあるのが効かない理由）。
+  if (!hasReleasedArtifacts(wslFiles.length, wslCsvCount)) return empty;
   const winReleasedDir = path.join(windowsToWsl(windowsWdPath), "ReleasedVersion");
   await fsp.mkdir(winReleasedDir, { recursive: true });
   const winFiles = await statPptxList(winReleasedDir);
-  const { toCopy } = diffReleasedMirror(wslFiles, winFiles); // WSL を正＝新/更新分のみ
+  const { toCopy } = diffReleasedPptx(wslFiles, winFiles); // WSL を正＝新/更新分のみ
   const copied = await mirrorCopy(wslReleasedDir, winReleasedDir, toCopy);
+  // CSV 成果物はコピーのみ（D: 側の他版は消さない＝pptx と同じ安全側の方針）。
+  const csvCopied = await mirrorCsvCopy(wslReleasedDir, winReleasedDir);
   const historyCopied = await mirrorHistoryFile(wslReleasedDir, winReleasedDir);
-  if (copied.length || historyCopied) {
-    log.info("workFiles.pushReleased", "pushed ReleasedVersion to Windows (WSL→D:)", { wdId, copied, historyCopied });
+  if (copied.length || csvCopied.length || historyCopied) {
+    log.info("workFiles.pushReleased", "pushed ReleasedVersion to Windows (WSL→D:)", { wdId, copied, csvCopied, historyCopied });
   }
-  return { copied };
+  return { copied: [...copied, ...csvCopied] };
 }
 
 // ── 素材フォルダ D:→WSL ミラー（スライド生成用の素材・基礎情報）────────────
