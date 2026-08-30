@@ -639,6 +639,13 @@ const HOST_API_ROUTES = {
      *  ③ worker 完了フックで build_index.py apply（D: へ反映）
      *  SSE はあくまで観測者で、切断しても ②③ は完走する。body `{ category }`。 */
     buildIndex: "/api/work/build-index",
+    /** POST — カテゴリの用語集 CSV（`SWLESSON-90001 用語集`）を生成する（SSE）。
+     *  buildIndex と同型の 3 フェーズ（`build_glossary.py scan` → hidden worker が
+     *  Summary/Description/Term_JA/Aliases/References を書く → `apply` で D: へ反映）。
+     *  成果物は WD の `v00N/` と `ReleasedVersion/` の CSV ＋ `HISTORY.md` まで。
+     *  ポータル参照用の固定パス `<カテゴリ> Glossary.csv` と News.csv の行は
+     *  build_index.py の担当なので、続けて「索引作成」を回す運用。body `{ category }`。 */
+    buildGlossary: "/api/work/build-glossary",
   },
 
   wiki: {

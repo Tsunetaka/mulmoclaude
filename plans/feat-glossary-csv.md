@@ -199,19 +199,42 @@ GLOSSARY_WD_ID = "SWLESSON-90001"
 
 ---
 
-## 5. GUI — 「用語集作成」ボタンの新設
+## 5. GUI — 「用語集作成」ボタンの新設【2026-08-30 実装済み・実機動作確認 OK】
 
-索引作成ボタンと並べる（第3弾 Q2）。**実機 build が必要。**
+索引作成ボタンと並べる（第3弾 Q2）。
 
 | ファイル | 改修内容 |
 |---|---|
-| `src/components/WorkFileSelectorView.vue` | カテゴリ見出しに「用語集作成」ボタンを追加 |
-| `src/config/apiRoutes.ts` | 用語集生成のルートを定義（索引の隣） |
-| `server/api/routes/workFiles.ts` | 3フェーズのハンドラ。既存の索引実装（3124行〜）と同型 |
-| `test/routes/test_workFilesBuildGlossary.ts` | 純粋ヘルパのテスト（既存 `test_workFilesBuildIndex.ts` と同型） |
+| `src/components/WorkFileSelectorView.vue` | カテゴリ見出しに「用語集作成」ボタン。モーダルは索引と**共用**（`stagedBuildModal` の `kind` で文言を切替） |
+| `src/config/apiRoutes.ts` | `work.buildGlossary = "/api/work/build-glossary"` |
+| `server/api/routes/workFiles.ts` | 3フェーズを `StagedCsvBuildSpec` で共通化し、索引と用語集で同一の実行器を共有 |
+| `test/routes/test_workFilesBuildGlossary.ts` | 用語集固有の文言・ガード独立・CSV 名ガード・同期の安全弁（17件） |
 
-既存の索引実装から流用できるもの：`isAllowedIndexCategory` / `parsePendingCount` /
-`buildIndexProgressLine` / `spawnBuildIndex` / 実行中ガード（`Set`）の作り。
+### 実装の要点 — コピペせず spec で分けた
+
+索引と用語集は 3 フェーズの形が完全に同じなので、**`StagedCsvBuildSpec`（python の
+パス・ステージングroot・スキル名・実行中ガードの `Set`・SSE 文言）だけを差し替えて
+同じ実行器 `runStagedCsvBuild()` を共有する**。`runBuildIndex` / `runBuildGlossary` は
+その薄いラッパ。ルートも `handleStagedCsvBuildRoute(spec, busyLabel, req, res)` を共有する。
+
+- **実行中ガードは spec ごとに別の `Set`。** 共有すると片方の実行が他方のボタンを
+  409 で塞ぐ。テストで両方向を固定してある（最も壊しやすい箇所）。
+- **既存の `test_workFilesBuildIndex.ts` は 1 行も変えずに通る**（17件）。これが
+  共通化が無回帰であることの根拠。公開 API（`runBuildIndex` / `BuildIndexContext` /
+  `BuildIndexDeps` / `isBuildingIndex` / `resetBuildIndexForTesting`）は維持した。
+
+### ボタンの有効条件
+
+`canBuildGlossary(cat)` = ①受け皿の `SWLESSON-90001` WD が在る **かつ**
+②走査対象になる別の `SWLESSON-\d+` WD に released 版が在る。
+どちらか欠けると `apply` が成果物を書けないので、押させる前に無効化する。
+
+### DONE の範囲（設計どおり分離を維持）
+
+用語集ボタンが作るのは **WD の `v00N/` と `ReleasedVersion/` の CSV ＋ `HISTORY.md`** まで。
+ポータル参照用の固定パス `<カテゴリ> Glossary.csv`（§4-③）と News.csv の行（§4-④）は
+**`build_index.py` の担当**なので、続けて「索引作成」を回す運用。
+モーダルの説明文と DONE 行の両方でそれを案内している。
 
 ---
 

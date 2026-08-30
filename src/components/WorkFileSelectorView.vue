@@ -32,9 +32,24 @@
               ? `${cat.name} Index.csv を生成します（Description と Tags は Claude が記入）`
               : 'ReleasedVersion に pptx が無いため索引を作成できません'
           "
-          @click="openBuildIndexModal(cat)"
+          @click="openStagedBuildModal('index', cat)"
         >
           索引作成
+        </button>
+        <!-- 用語集作成：このカテゴリの `SWLESSON-90001 用語集` WD に用語集 CSV を生成する。
+             用語集 WD 自体と、走査対象になる SWLESSON レッスンの released 版の両方が
+             揃っていないと作れないので無効化する。 -->
+        <button
+          class="px-3 py-1 rounded text-sm font-medium border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          :disabled="!canBuildGlossary(cat)"
+          :title="
+            canBuildGlossary(cat)
+              ? 'SWLESSON-90001 用語集 の CSV を生成します（説明は Claude が記入）'
+              : 'SWLESSON-90001 用語集 の WD、または走査対象の SWLESSON レッスンが無いため用語集を作成できません'
+          "
+          @click="openStagedBuildModal('glossary', cat)"
+        >
+          用語集作成
         </button>
         <span class="text-xs text-gray-400 font-normal">{{ cat.wds.length }} 件</span>
       </div>
@@ -411,24 +426,33 @@
       </div>
     </div>
 
-    <!-- 索引作成モーダル：build_index.py scan（機械列）→ 裏で Claude が Description/Tags →
-         apply（D: へ反映）。SSE はあくまで観測者で、閉じても Phase 2/3 は完走する。 -->
-    <div v-if="buildIndexModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+    <!-- 索引作成／用語集作成モーダル：python scan（機械列）→ 裏で Claude が内容の要る列 →
+         apply（D: へ反映）。どちらも同型の 3 フェーズなので 1 つのモーダルで兼ねる。
+         SSE はあくまで観測者で、閉じても Phase 2/3 は完走する。 -->
+    <div v-if="stagedBuildModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 flex flex-col">
         <div class="flex items-center gap-2 px-4 py-3 border-b">
-          <span class="font-semibold">索引作成 — {{ buildIndexModal.category }}</span>
-          <button class="ml-auto text-gray-400 hover:text-gray-600" @click="closeBuildIndexModal">✕</button>
+          <span class="font-semibold">{{ stagedBuildLabel }} — {{ stagedBuildModal.category }}</span>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" @click="closeStagedBuildModal">✕</button>
         </div>
 
         <!-- ① 確認 -->
         <div v-if="modalPhase === 'choose'" class="px-4 py-3 space-y-2 text-sm text-gray-700">
           <p>
-            出力先: <span class="font-mono">{{ buildIndexModal.category }} Index.csv</span>
+            出力先: <span class="font-mono">{{ stagedBuildOutput }}</span>
           </p>
-          <p>対象 {{ buildIndexModal.wdCount }} WD ／ Claude が Description と Tags を記入します。</p>
+          <p v-if="stagedBuildModal.kind === 'index'">対象 {{ stagedBuildModal.wdCount }} WD ／ Claude が Description と Tags を記入します。</p>
+          <p v-else>Claude が Summary・Description・Term_JA・Aliases・記載箇所を記入します。</p>
           <p class="text-xs text-gray-500 leading-relaxed">
             Claude の記入は裏で実行されます（チャットには遷移しません）。<b>このモーダルを閉じても処理は継続</b>し、完了すると D: に CSV が出来ます。<br />
-            既存 CSV の Description / Tags は、Training_ID とバージョンが変わっていなければそのまま引き継ぎます（変わった行だけ Claude が書き直します）。
+            <template v-if="stagedBuildModal.kind === 'index'">
+              既存 CSV の Description / Tags は、Training_ID とバージョンが変わっていなければそのまま引き継ぎます（変わった行だけ Claude が書き直します）。
+            </template>
+            <template v-else>
+              前回の用語集より新しい SWLESSON の pptx だけを走査します（0
+              件なら何も変更しません）。既存の語はそのまま引き継ぎ、新語の追加と必要な改訂だけを行います。<br />
+              ポータルが読む <span class="font-mono">Glossary.csv</span> と News.csv の行は続けて<b>「索引作成」</b>を回すと更新されます。
+            </template>
           </p>
         </div>
 
@@ -437,15 +461,15 @@
           <div v-for="(line, i) in modalLog" :key="i" class="whitespace-pre-wrap" :class="line.startsWith('ERROR:') ? 'text-red-300' : 'text-green-300'">
             {{ line }}
           </div>
-          <div v-if="modalPhase === 'running' && !buildIndexFailed" class="text-yellow-300 animate-pulse">処理中...</div>
+          <div v-if="modalPhase === 'running' && !stagedBuildFailed" class="text-yellow-300 animate-pulse">処理中...</div>
         </div>
 
         <div class="px-4 py-3 border-t flex justify-end gap-2">
-          <button v-if="modalPhase === 'choose'" class="px-4 py-2 bg-gray-200 rounded text-sm" @click="closeBuildIndexModal">キャンセル</button>
-          <button v-if="modalPhase === 'choose'" class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="executeBuildIndex">
-            索引作成
+          <button v-if="modalPhase === 'choose'" class="px-4 py-2 bg-gray-200 rounded text-sm" @click="closeStagedBuildModal">キャンセル</button>
+          <button v-if="modalPhase === 'choose'" class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="executeStagedBuild">
+            {{ stagedBuildLabel }}
           </button>
-          <button v-else class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="handleBuildIndexDone">閉じる</button>
+          <button v-else class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" @click="handleStagedBuildDone">閉じる</button>
         </div>
       </div>
     </div>
@@ -1231,15 +1255,30 @@ async function executeDeleteVersion(): Promise<void> {
   }
 }
 
-// ── 索引作成モーダル（カテゴリ見出しの [索引作成]）───────────────────────────
-// build_index.py scan（機械列＋資料抜粋の下書き）→ 裏で Claude が Description /
-// Tags を記入 → apply（D: へ反映）の 3 フェーズを SSE で観測する。SSE はあくまで
-// 観測者で、モーダルを閉じても Phase 2/3 はサーバー側で完走する。
-const buildIndexModal = ref<{ category: string; wdCount: number } | null>(null);
+// ── 索引作成／用語集作成モーダル（カテゴリ見出しの [索引作成] [用語集作成]）──────
+// python scan（機械列＋資料抜粋の下書き）→ 裏で Claude が内容の要る列を記入 →
+// apply（D: へ反映）の 3 フェーズを SSE で観測する。SSE はあくまで観測者で、
+// モーダルを閉じても Phase 2/3 はサーバー側で完走する。
+// 2 つのボタンは同型なので 1 つのモーダルと 1 本の実行経路を kind で分けて共有する。
+type StagedBuildKind = "index" | "glossary";
+
+const stagedBuildModal = ref<{ kind: StagedBuildKind; category: string; wdCount: number } | null>(null);
+
+// 用語集を収める WD の ID（サーバー側 build_glossary.py の GLOSSARY_WD_ID と対応）。
+const GLOSSARY_WD_ID = "SWLESSON-90001";
+const SWLESSON_WD_PATTERN = /^SWLESSON-\d+$/;
+
+const stagedBuildLabel = computed(() => (stagedBuildModal.value?.kind === "glossary" ? "用語集作成" : "索引作成"));
+
+const stagedBuildOutput = computed(() => {
+  const modal = stagedBuildModal.value;
+  if (!modal) return "";
+  return modal.kind === "glossary" ? `${GLOSSARY_WD_ID} 用語集_<日付>_v00N.csv` : `${modal.category} Index.csv`;
+});
 
 // SSE の途中で ERROR が出た（DONE が来ないまま終わる）ことの検出。共有の
 // drainModalSse は DONE しか見ないので、そのままだと「処理中...」が出続ける。
-const buildIndexFailed = computed(() => modalLog.value.some((line) => line.startsWith("ERROR:")));
+const stagedBuildFailed = computed(() => modalLog.value.some((line) => line.startsWith("ERROR:")));
 
 // released 版を 1 つも持たないカテゴリは索引を作れない（会議録画系 WD だけの
 // カテゴリなど）。scan の戻り値だけで判定できるので追加リクエストは要らない。
@@ -1247,27 +1286,38 @@ function canBuildIndex(cat: CategoryInfo): boolean {
   return cat.wds.some((wdInfo) => wdInfo.versions.some((ver) => ver.kind === "released"));
 }
 
-function openBuildIndexModal(cat: CategoryInfo): void {
-  if (!canBuildIndex(cat)) return;
-  buildIndexModal.value = { category: cat.name, wdCount: cat.wds.length };
+// 用語集は ①受け皿の SWLESSON-90001 WD と ②走査対象になる SWLESSON レッスンの
+// released 版 の両方が必要。どちらか欠けると apply が成果物を書けないので、
+// ボタンを押させる前に無効化する。
+function canBuildGlossary(cat: CategoryInfo): boolean {
+  if (!cat.wds.some((wdInfo) => wdInfo.id === GLOSSARY_WD_ID)) return false;
+  return cat.wds.some(
+    (wdInfo) => wdInfo.id !== GLOSSARY_WD_ID && SWLESSON_WD_PATTERN.test(wdInfo.id) && wdInfo.versions.some((ver) => ver.kind === "released"),
+  );
+}
+
+function openStagedBuildModal(kind: StagedBuildKind, cat: CategoryInfo): void {
+  if (kind === "index" ? !canBuildIndex(cat) : !canBuildGlossary(cat)) return;
+  stagedBuildModal.value = { kind, category: cat.name, wdCount: cat.wds.length };
   modalPhase.value = "choose";
   modalLog.value = [];
 }
 
 // 実行中でも閉じられる（他のモーダルと違い、閉じても処理が継続するのが仕様）。
-function closeBuildIndexModal(): void {
-  buildIndexModal.value = null;
+function closeStagedBuildModal(): void {
+  stagedBuildModal.value = null;
 }
 
-async function executeBuildIndex(): Promise<void> {
-  const modal = buildIndexModal.value;
+async function executeStagedBuild(): Promise<void> {
+  const modal = stagedBuildModal.value;
   if (!modal) return;
-  await runModalSse(API_ROUTES.work.buildIndex, { category: modal.category });
+  const route = modal.kind === "glossary" ? API_ROUTES.work.buildGlossary : API_ROUTES.work.buildIndex;
+  await runModalSse(route, { category: modal.category });
 }
 
 // 閉じたあとに再スキャン（Version 表示等の整合のため）。
-function handleBuildIndexDone(): void {
-  buildIndexModal.value = null;
+function handleStagedBuildDone(): void {
+  stagedBuildModal.value = null;
   scanFiles().catch(() => {});
 }
 

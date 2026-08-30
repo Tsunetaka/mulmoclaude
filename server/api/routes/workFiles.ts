@@ -3210,12 +3210,67 @@ router.post(API_ROUTES.work.sectionRename, async (req, res) => {
 const INDEX_STAGING_ROOT = "data/work/.index";
 const INDEX_SCRIPT = "data/work/tools/build_index.py";
 const INDEX_SKILL = "build-training-index";
+// 用語集 CSV（SWLESSON-90001 用語集）。索引と同型の 3 フェーズなので、下の
+// StagedCsvBuildSpec で仕様だけ差し替えて同じ実行器を使う。
+const GLOSSARY_STAGING_ROOT = "data/work/.glossary";
+const GLOSSARY_SCRIPT = "data/work/tools/build_glossary.py";
+const GLOSSARY_SKILL = "build-glossary";
 const INDEX_WORKER_ROLE = "general";
 const INDEX_PROGRESS_POLL_MS = 2 * ONE_SECOND_MS;
 const INDEX_OBSERVE_TIMEOUT_MS = 10 * ONE_MINUTE_MS;
-// build_index.py の「書き出す行が 0 件（D: 未変更）」。既存 CSV をヘッダだけの
-// CSV で潰さないための安全弁が働いた印。
+// build_index.py / build_glossary.py の「書き出す行が 0 件（D: 未変更）」。既存 CSV を
+// ヘッダだけの CSV で潰さないための安全弁が働いた印。
 const INDEX_EXIT_EMPTY = 3;
+
+/** 3 フェーズ（python scan → hidden worker → python apply）で CSV を作る仕組みの、
+ *  ツールごとの差分。索引作成と用語集作成はこの spec だけが違い、実行器・進捗表示・
+ *  実行中ガードの作りは完全に共通である。 */
+interface StagedCsvBuildSpec {
+  /** ログの prefix（`workFiles.buildIndex` / `workFiles.buildGlossary`）。 */
+  logPrefix: string;
+  /** python ツールのワークスペース相対パス。 */
+  script: string;
+  /** ステージングのワークスペース相対ルート。 */
+  stagingRoot: string;
+  /** Phase 2 の hidden worker に起動させるスキル名。 */
+  skill: string;
+  /** 実行中ガード（カテゴリ名の集合）。**spec ごとに別インスタンスを持つ**ので、
+   *  索引作成と用語集作成は互いをブロックしない。 */
+  running: Set<string>;
+  /** SSE 文言。ツールによって「索引」「用語集」と呼び名が変わるだけ。 */
+  scanFailLine: string;
+  emptyLine: string;
+  applyFailLine: (code: number) => string;
+  doneLine: (category: string) => string;
+}
+
+const INDEX_SPEC: StagedCsvBuildSpec = {
+  logPrefix: "workFiles.buildIndex",
+  script: INDEX_SCRIPT,
+  stagingRoot: INDEX_STAGING_ROOT,
+  skill: INDEX_SKILL,
+  running: new Set<string>(),
+  scanFailLine: "索引の下書き生成に失敗しました",
+  emptyLine: "ERROR: 書き出す行が 0 件のため D: を変更しませんでした",
+  applyFailLine: (code) => `ERROR: 索引の反映に失敗しました（exit ${String(code)}）`,
+  doneLine: (category) => `DONE: ${category} Index.csv`,
+};
+
+const GLOSSARY_SPEC: StagedCsvBuildSpec = {
+  logPrefix: "workFiles.buildGlossary",
+  script: GLOSSARY_SCRIPT,
+  stagingRoot: GLOSSARY_STAGING_ROOT,
+  skill: GLOSSARY_SKILL,
+  running: new Set<string>(),
+  scanFailLine: "用語集の下書き生成に失敗しました",
+  // 用語集の apply は「マスタも記入結果も空」のときだけ 0 件になる（更新対象の pptx が
+  // 無いだけなら scan が EXIT_EMPTY で止まり、ここまで来ない）。
+  emptyLine: "ERROR: 書き出す語が 0 件のため D: を変更しませんでした",
+  applyFailLine: (code) => `ERROR: 用語集の反映に失敗しました（exit ${String(code)}）`,
+  // ポータル参照用の固定パス `<カテゴリ> Glossary.csv` と News.csv の行は
+  // build_index.py（索引作成）の担当なので、ここでは WD の成果物までを DONE とする。
+  doneLine: (category) => `DONE: ${category} / SWLESSON-90001 用語集（ポータル反映は「索引作成」で）`,
+};
 
 /** `category` がスキャン結果のカテゴリ名の集合に含まれるか（純粋判定）。
  *  **これがパス操作の許可リスト**であり、`..` やパス区切りの混入を構造的に
@@ -3261,19 +3316,29 @@ export interface BuildIndexContext {
   stagingRel: string;
 }
 
-/** 実行中のカテゴリ。Phase 1 の直前に登録し、Phase 3 の完了時（成功・失敗どちらも）
- *  に外す。プロセス内メモリで良い ── worker はプロセスと共に死ぬので、永続化すると
- *  ボタンが固まるだけ（`collectionAgentActions.ts` の `running` Map と同じ流儀）。 */
-const buildingIndex = new Set<string>();
+/** 実行中のカテゴリは `StagedCsvBuildSpec.running` が持つ。Phase 1 の直前に登録し、
+ *  Phase 3 の完了時（成功・失敗どちらも）に外す。プロセス内メモリで良い ── worker は
+ *  プロセスと共に死ぬので、永続化するとボタンが固まるだけ
+ *  （`collectionAgentActions.ts` の `running` Map と同じ流儀）。 */
 
 /** そのカテゴリの索引作成が実行中か（ルートの 409 判定）。 */
 export function isBuildingIndex(category: string): boolean {
-  return buildingIndex.has(category);
+  return INDEX_SPEC.running.has(category);
+}
+
+/** そのカテゴリの用語集作成が実行中か（ルートの 409 判定）。 */
+export function isBuildingGlossary(category: string): boolean {
+  return GLOSSARY_SPEC.running.has(category);
 }
 
 /** テスト専用：実行中ガードを空にする。 */
 export function resetBuildIndexForTesting(): void {
-  buildingIndex.clear();
+  INDEX_SPEC.running.clear();
+}
+
+/** テスト専用：実行中ガードを空にする。 */
+export function resetBuildGlossaryForTesting(): void {
+  GLOSSARY_SPEC.running.clear();
 }
 
 /** 注入可能な seam（既定は実モジュール。テストは実エージェント・実 python を動かさない）。 */
@@ -3291,10 +3356,15 @@ export interface BuildIndexDeps {
   wait: (delayMs: number) => Promise<void>;
 }
 
-// build_index.py を spawn して stdout/stderr を SSE に流し、exit code と全行を返す。
+// python ツールを spawn して stdout/stderr を SSE に流し、exit code と全行を返す。
 // `PENDING: <n>` を読むために生の行も溜める（SSE 側は pipeToSse の整形済み）。
-async function spawnBuildIndex(subcommand: "scan" | "apply", ctx: BuildIndexContext, send: (line: string) => void): Promise<{ code: number; lines: string[] }> {
-  const args = buildIndexScriptArgs(subcommand, path.join(workspacePath, INDEX_SCRIPT), ctx);
+async function spawnStagedScript(
+  spec: StagedCsvBuildSpec,
+  subcommand: "scan" | "apply",
+  ctx: BuildIndexContext,
+  send: (line: string) => void,
+): Promise<{ code: number; lines: string[] }> {
+  const args = buildIndexScriptArgs(subcommand, path.join(workspacePath, spec.script), ctx);
   const lines: string[] = [];
   return new Promise((resolve) => {
     const proc = spawn("python3", args, { env: { ...process.env } });
@@ -3314,14 +3384,19 @@ async function countWrittenIndexRows(ctx: BuildIndexContext): Promise<number> {
   return (await listFiles(path.join(ctx.staging, "rows"), /\.json$/i)).length;
 }
 
-const defaultBuildIndexDeps: BuildIndexDeps = {
-  runScript: spawnBuildIndex,
-  spawnWorker: spawnSystemWorker,
-  countWrittenRows: countWrittenIndexRows,
-  wait: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
-};
+/** 既定の seam。`runScript` だけが spec に依存する（どの python を叩くか）ので、
+ *  spec ごとに作る。テストは第 3 引数で丸ごと差し替える。 */
+function defaultStagedDeps(spec: StagedCsvBuildSpec): BuildIndexDeps {
+  return {
+    runScript: (subcommand, ctx, send) => spawnStagedScript(spec, subcommand, ctx, send),
+    spawnWorker: spawnSystemWorker,
+    countWrittenRows: countWrittenIndexRows,
+    wait: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+  };
+}
 
 interface BuildIndexRun {
+  spec: StagedCsvBuildSpec;
   ctx: BuildIndexContext;
   send: (line: string) => void;
   deps: BuildIndexDeps;
@@ -3337,7 +3412,7 @@ interface BuildIndexRun {
 // 成功・失敗・例外のどれでも必ず通す ── 通し忘れるとボタンが 409 で固まる。
 function finishIndexRun(run: BuildIndexRun): void {
   run.done = true;
-  buildingIndex.delete(run.ctx.category);
+  run.spec.running.delete(run.ctx.category);
 }
 
 // Phase 3。worker の完了フックの中（または pending 0 件のとき直接）から呼ばれる。
@@ -3345,14 +3420,14 @@ async function applyIndex(run: BuildIndexRun): Promise<void> {
   try {
     const applied = await run.deps.runScript("apply", run.ctx, run.send);
     if (applied.code === INDEX_EXIT_EMPTY) {
-      run.send("ERROR: 書き出す行が 0 件のため D: を変更しませんでした");
+      run.send(run.spec.emptyLine);
     } else if (applied.code !== 0) {
-      run.send(`ERROR: 索引の反映に失敗しました（exit ${String(applied.code)}）`);
+      run.send(run.spec.applyFailLine(applied.code));
     } else {
-      run.send(`DONE: ${run.ctx.category} Index.csv`);
+      run.send(run.spec.doneLine(run.ctx.category));
     }
   } catch (err) {
-    log.error("workFiles.buildIndex", "apply failed", { category: run.ctx.category, err });
+    log.error(run.spec.logPrefix, "apply failed", { category: run.ctx.category, err });
     run.send(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     finishIndexRun(run);
@@ -3383,13 +3458,13 @@ async function observeIndexProgress(run: BuildIndexRun): Promise<void> {
 // ガードを外して false（呼び出し側は ERROR を出して終わる）。
 async function launchIndexWorker(run: BuildIndexRun): Promise<boolean> {
   const launch = await run.deps.spawnWorker({
-    message: `/${INDEX_SKILL} "${run.ctx.stagingRel}"`,
+    message: `/${run.spec.skill} "${run.ctx.stagingRel}"`,
     roleId: INDEX_WORKER_ROLE,
     hidden: true,
     onComplete: () => applyIndex(run),
   });
   if (launch.ok) {
-    log.info("workFiles.buildIndex", "worker dispatched", { category: run.ctx.category, chatId: launch.chatId, pending: run.total });
+    log.info(run.spec.logPrefix, "worker dispatched", { category: run.ctx.category, chatId: launch.chatId, pending: run.total });
     return true;
   }
   run.send(`ERROR: ${launch.error}`);
@@ -3400,12 +3475,12 @@ async function launchIndexWorker(run: BuildIndexRun): Promise<boolean> {
 /** 3 フェーズの本体。実行中ガードの登録も解除もこの関数が持つ ── 登録は Phase 1 の
  *  spawn より前（最初の await より前）に同期的に行うので、ルートの 409 判定から
  *  ここまでの間に別の POST が割り込む余地はない。 */
-export async function runBuildIndex(ctx: BuildIndexContext, send: (line: string) => void, deps: BuildIndexDeps = defaultBuildIndexDeps): Promise<void> {
-  const run: BuildIndexRun = { ctx, send, deps, done: false, lastProgress: null, total: 0 };
-  buildingIndex.add(ctx.category);
+async function runStagedCsvBuild(spec: StagedCsvBuildSpec, ctx: BuildIndexContext, send: (line: string) => void, deps: BuildIndexDeps): Promise<void> {
+  const run: BuildIndexRun = { spec, ctx, send, deps, done: false, lastProgress: null, total: 0 };
+  spec.running.add(ctx.category);
   const scan = await deps.runScript("scan", ctx, send);
   if (scan.code !== 0) {
-    send(`ERROR: 索引の下書き生成に失敗しました（exit ${String(scan.code)}）`);
+    send(`ERROR: ${spec.scanFailLine}（exit ${String(scan.code)}）`);
     finishIndexRun(run);
     return;
   }
@@ -3421,8 +3496,21 @@ export async function runBuildIndex(ctx: BuildIndexContext, send: (line: string)
   await observeIndexProgress(run);
 }
 
-// POST /api/work/build-index — カテゴリの教材索引 CSV を生成する（SSE）
-router.post(API_ROUTES.work.buildIndex, async (req, res) => {
+export async function runBuildIndex(ctx: BuildIndexContext, send: (line: string) => void, deps: BuildIndexDeps = defaultStagedDeps(INDEX_SPEC)): Promise<void> {
+  await runStagedCsvBuild(INDEX_SPEC, ctx, send, deps);
+}
+
+export async function runBuildGlossary(
+  ctx: BuildIndexContext,
+  send: (line: string) => void,
+  deps: BuildIndexDeps = defaultStagedDeps(GLOSSARY_SPEC),
+): Promise<void> {
+  await runStagedCsvBuild(GLOSSARY_SPEC, ctx, send, deps);
+}
+
+// 索引作成／用語集作成のルート本体（SSE）。spec だけが違うので共通化してある。
+// `busyLabel` は 409 の文言（「索引作成」/「用語集作成」）。
+async function handleStagedCsvBuildRoute(spec: StagedCsvBuildSpec, busyLabel: string, req: Request, res: Response): Promise<void> {
   const { category } = requestBodyRecord(req.body);
   const workRootWin = await getWorkRootWin();
   const categories = await scanRoot(workRootWin);
@@ -3430,12 +3518,12 @@ router.post(API_ROUTES.work.buildIndex, async (req, res) => {
     res.status(400).json({ error: "category が不正です（スキャン結果のカテゴリ名を指定してください）" });
     return;
   }
-  if (isBuildingIndex(category)) {
-    res.status(409).json({ error: `「${category}」の索引作成は実行中です` });
+  if (spec.running.has(category)) {
+    res.status(409).json({ error: `「${category}」の${busyLabel}は実行中です` });
     return;
   }
-  const stagingRel = `${INDEX_STAGING_ROOT}/${category}`;
-  const ctx: BuildIndexContext = { category, workRootWin, staging: path.join(workspacePath, INDEX_STAGING_ROOT, category), stagingRel };
+  const stagingRel = `${spec.stagingRoot}/${category}`;
+  const ctx: BuildIndexContext = { category, workRootWin, staging: path.join(workspacePath, spec.stagingRoot, category), stagingRel };
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -3448,16 +3536,26 @@ router.post(API_ROUTES.work.buildIndex, async (req, res) => {
     res.write(`data: ${line}\n\n`);
   };
 
-  // 登録は runBuildIndex が Phase 1 の spawn より前に同期的に行う（この 409 判定と
+  // 登録は runStagedCsvBuild が Phase 1 の spawn より前に同期的に行う（この 409 判定と
   // 登録の間に await が無いので、二重 POST は必ずここで弾かれる）。
   try {
-    await runBuildIndex(ctx, send);
+    await runStagedCsvBuild(spec, ctx, send, defaultStagedDeps(spec));
   } catch (err) {
-    log.error("workFiles.buildIndex", "build index failed", { category, err });
+    log.error(spec.logPrefix, "staged csv build failed", { category, err });
     send(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
-    buildingIndex.delete(category);
+    spec.running.delete(category);
   }
   res.end();
+}
+
+// POST /api/work/build-index — カテゴリの教材索引 CSV を生成する（SSE）
+router.post(API_ROUTES.work.buildIndex, async (req, res) => {
+  await handleStagedCsvBuildRoute(INDEX_SPEC, "索引作成", req, res);
+});
+
+// POST /api/work/build-glossary — カテゴリの用語集 CSV（SWLESSON-90001）を生成する（SSE）
+router.post(API_ROUTES.work.buildGlossary, async (req, res) => {
+  await handleStagedCsvBuildRoute(GLOSSARY_SPEC, "用語集作成", req, res);
 });
 
 export default router;
