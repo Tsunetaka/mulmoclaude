@@ -12,7 +12,7 @@
 import { spawn, type ChildProcessByStdio } from "child_process";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import type { Readable, Writable } from "stream";
-import { buildCliArgs, buildDockerSpawnArgs, buildUserMessageLine, resolveSystemPromptPaths, type CliArgsParams } from "../config.js";
+import { BG_TASK_WAIT_CEILING_MS, buildCliArgs, buildDockerSpawnArgs, buildUserMessageLine, resolveSystemPromptPaths, type CliArgsParams } from "../config.js";
 import { writeFileAtomic } from "../../utils/files/atomic.js";
 import { resolveSandboxAuth } from "../sandboxMounts.js";
 import { getCachedReferenceDirs, referenceDirMountArgs } from "../../workspace/reference-dirs.js";
@@ -36,10 +36,17 @@ function spawnClaude(useDocker: boolean, workspacePath: string, cliArgs: string[
     // PostToolUse hook needs to publish a `page-edit` toolResult back to
     // the right session (#963). Claude CLI's own hook payload carries
     // its internal session_id, which doesn't match our session store.
+    // CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS is set on BOTH spawn paths so the
+    // sandbox-off configuration doesn't silently keep the 600s default and lose
+    // long background subagent runs (see BG_TASK_WAIT_CEILING_MS in config.ts).
     return spawn(claudeBinPath(), cliArgs, {
       cwd: workspacePath,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, MULMOCLAUDE_CHAT_SESSION_ID: chatSessionId },
+      env: {
+        ...process.env,
+        MULMOCLAUDE_CHAT_SESSION_ID: chatSessionId,
+        CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: String(BG_TASK_WAIT_CEILING_MS),
+      },
     });
   }
   const sandboxAuth = resolveSandboxAuth({

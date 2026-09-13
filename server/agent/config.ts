@@ -431,6 +431,36 @@ export function _resetBrokerKindWarnings(): void {
  *  to that figure plus margin. */
 const MCP_CONNECT_TIMEOUT_MS = ONE_MINUTE_MS;
 
+/** How long the CLI waits for BACKGROUND tasks (background subagents,
+ *  `run_in_background` Bash) to finish after a turn's final message, before
+ *  terminating them.
+ *
+ *  Why this is set at all: the CLI's own default ceiling is 600s, and it is
+ *  enforced silently from the server's point of view. On 2026-09-12 a
+ *  knowledge-base build that fanned out 6-7 background subagents hit it FOUR
+ *  times in one night (turn lengths 11, 13, 23 and 27 min). Each time the CLI
+ *  wrote one line to stderr —
+ *
+ *    Background tasks still running after 600s; terminating.
+ *    Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.
+ *
+ *  — and then exited 0. Because the exit is clean, `runAgent` records the turn
+ *  as `request completed` and NOTHING reaches the UI: no error event, no marker
+ *  in the transcript. The subagents' work simply disappears, which reads as
+ *  "the long run stopped with no reply". The stderr line only survives in
+ *  `server/system/logs/server-*.log` under prefix `agent-stderr`.
+ *
+ *  30 min covers the longest observed run with margin. Deliberately FINITE:
+ *  the `0` the CLI suggests means "wait indefinitely", which converts a
+ *  background task that never returns into a turn that never ends — a worse
+ *  failure than the one being fixed, and one the UI has no watchdog for.
+ *
+ *  Set HERE, in the argv, for exactly the reason spelled out on
+ *  MCP_CONNECT_TIMEOUT_MS at `buildDockerSpawnArgs`: only the vars listed in
+ *  that argv reach the container, so a host-side export or a shell profile
+ *  never arrives. */
+export const BG_TASK_WAIT_CEILING_MS = 30 * ONE_MINUTE_MS;
+
 export interface McpStdioServerSpec {
   type: "stdio";
   command: string;
@@ -1062,6 +1092,11 @@ export function buildDockerSpawnArgs(params: DockerSpawnArgsParams): string[] {
     // knob was unreachable in the one environment that needs it (#2234).
     "-e",
     `MCP_CONNECT_TIMEOUT_MS=${MCP_CONNECT_TIMEOUT_MS}`,
+    // Raises the CLI's 600s background-task ceiling (see
+    // BG_TASK_WAIT_CEILING_MS). Same reason this lives in the argv rather than
+    // the environment: only what is listed here reaches the container.
+    "-e",
+    `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=${BG_TASK_WAIT_CEILING_MS}`,
     ...dockerBindMountArgs({ projectRoot, packageRoot, workspacePath, homeDir, packagesMount, platform }),
     ...sandboxAuthArgs,
     ...extraHosts,
