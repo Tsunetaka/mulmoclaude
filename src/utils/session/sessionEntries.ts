@@ -16,6 +16,7 @@ import {
   type SessionEntry,
   type SessionOrigin,
   type SessionSummary,
+  type TextEntry,
 } from "../../types/session";
 import { EVENT_TYPES } from "../../types/events";
 import { isRecord } from "../types";
@@ -57,8 +58,7 @@ function extractMetaOrigin(entries: readonly SessionEntry[]): SessionOrigin | un
 // chip even before the summary fetch resolves.
 export function parseSessionEntries(entries: readonly SessionEntry[], sessionOrigin?: SessionOrigin): ToolResultComplete[] {
   const effectiveOrigin = sessionOrigin ?? extractMetaOrigin(entries);
-  const seedingPkg = pluginPkgFromOrigin(effectiveOrigin);
-  let firstUserSeen = false;
+  const folder = createTextRowFolder(pluginPkgFromOrigin(effectiveOrigin));
   const out: ToolResultComplete[] = [];
   for (const entry of entries) {
     if (entry.type === EVENT_TYPES.sessionMeta) continue;
@@ -66,17 +66,77 @@ export function parseSessionEntries(entries: readonly SessionEntry[], sessionOri
       // Skill bodies are routed through the dedicated skill plugin
       // View (collapsed by default) so they don't dump a wall of
       // markdown into the canvas. #1218.
+      folder.closeBlock();
       out.push(makeSkillResult(entry));
     } else if (isTextEntry(entry)) {
-      const tagThis = !firstUserSeen && entry.source === "user" && seedingPkg !== null;
-      const seededBy = tagThis ? seedingPkg : undefined;
-      if (entry.source === "user") firstUserSeen = true;
-      out.push(makeTextResult(entry.message, entry.source, entry.attachments, seededBy ?? undefined));
+      const card = folder.fold(entry);
+      if (card !== null) out.push(card);
     } else if (isToolResultEntry(entry)) {
+      folder.closeBlock();
       out.push(entry.result);
     }
   }
   return out;
+}
+
+/** Folds the jsonl's text rows into cards, rejoining rows that are fragments
+ *  of one block rather than blocks of their own.
+ *
+ *  The server writes one row per flush, and a flush is only a real boundary
+ *  when it was caused by the main agent's own tool call or the end of the run
+ *  — those rows carry `blockEnd`. Everything else is a fragment: with
+ *  background agents running, a single reply was recorded as dozens of rows
+ *  cut mid-word. Rows written before `blockEnd` existed carry no marker, so
+ *  they read as fragments and merge, which is what makes those already-
+ *  recorded sessions legible again.
+ *
+ *  Stateful, hence a factory: `fold` has to remember which card is still
+ *  open across calls, and `closeBlock` is how the caller reports that it
+ *  pushed something else in between. */
+function createTextRowFolder(seedingPkg: string | null): {
+  fold: (entry: TextEntry) => ToolResultComplete | null;
+  closeBlock: () => void;
+} {
+  let firstUserSeen = false;
+  let open: ToolResultComplete | null = null;
+  return {
+    /** The card to push, or null when the row was merged into the open one. */
+    fold(entry: TextEntry): ToolResultComplete | null {
+      if (open !== null && entry.source === "assistant") {
+        appendTextTo(open, entry.message);
+        if (entry.blockEnd === true) open = null;
+        return null;
+      }
+      const tagThis = !firstUserSeen && entry.source === "user" && seedingPkg !== null;
+      const seededBy = tagThis ? seedingPkg : undefined;
+      if (entry.source === "user") firstUserSeen = true;
+      const result = makeTextResult(entry.message, entry.source, entry.attachments, seededBy ?? undefined);
+      // Only ASSISTANT rows are ever fragments — a user row is written whole,
+      // in one call, so two consecutive ones are two separate things the user
+      // said and merging them would put words in their mouth.
+      open = entry.source === "assistant" && entry.blockEnd !== true ? result : null;
+      return result;
+    },
+    /** A non-text card was pushed, so nothing may merge across it. */
+    closeBlock(): void {
+      open = null;
+    },
+  };
+}
+
+/** Stream another row's text onto an already-pushed assistant card.
+ *
+ *  Both fields have to grow together: the View renders `data.text` while
+ *  `shouldAdoptServerTranscript` measures `message`, so updating only one
+ *  makes the client look truncated against its own server copy and triggers
+ *  an endless adopt. Mirrors `appendToLastAssistantText` in
+ *  `sessionHelpers`, which does the same for the live stream. */
+function appendTextTo(result: ToolResultComplete, text: string): void {
+  if (isRecord(result.data)) {
+    const previous = typeof result.data.text === "string" ? result.data.text : "";
+    result.data.text = previous + text;
+  }
+  result.message = (result.message ?? "") + text;
 }
 
 // Pick the `selectedResultUuid` the session should restore to on

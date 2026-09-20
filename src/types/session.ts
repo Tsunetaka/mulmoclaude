@@ -113,6 +113,15 @@ export interface TextEntry extends SessionEntry {
   // Only present on user entries. Sessions recorded before #2308 hold bare
   // path strings here — read via `normalizeAttachments`, never directly.
   attachments?: PersistedAttachment[];
+  /** Set by the server when this row was closed by a REAL boundary in the
+   *  main agent's stream (its own tool call, or the end of the run).
+   *
+   *  Absent means the row may be a FRAGMENT of a longer block: the flush
+   *  that wrote it was incidental, so `parseSessionEntries` rejoins it with
+   *  the following assistant row instead of rendering a separate card.
+   *  Sessions recorded before this field existed carry no marker at all,
+   *  which is what lets their fragmented replies read as whole again. */
+  blockEnd?: boolean;
 }
 
 /** Where a skill resolution landed. Mirrors `SkillSource` from

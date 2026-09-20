@@ -58,7 +58,14 @@ export async function applyAgentEvent(event: SseEvent, ctx: AgentEventContext): 
       // A tool call closes the current assistant text block: the next
       // streamed delta must open a fresh card, not merge onto the
       // pre-tool prose. See `ActiveSession.assistantTextInterrupted`.
-      session.assistantTextInterrupted = true;
+      //
+      // A SUBAGENT's tool call is not such a boundary. It arrives
+      // INTERLEAVED with the main agent's text deltas (the main agent is
+      // still writing while its background agents work), so breaking the
+      // card here cut the reply mid-word — and mid-`**…**`, leaving the
+      // asterisks to render literally in both halves. Still pushed to the
+      // history above: seeing what the subagents ran is useful.
+      if (event.fromSubagent !== true) session.assistantTextInterrupted = true;
       ctx.scrollSidebarToBottom();
       return;
     case EVENT_TYPES.toolCallResult:

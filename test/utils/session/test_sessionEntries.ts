@@ -327,3 +327,58 @@ describe("shouldAdoptServerTranscript", () => {
     assert.equal(shouldAdoptServerTranscript(server, client), false);
   });
 });
+
+// --- parseSessionEntries: fragmented assistant text ----------------
+//
+// The server writes one text row per flush. A flush caused by a real
+// boundary in the main agent's stream is marked `blockEnd`; anything else
+// leaves a FRAGMENT of a block on disk. Rows recorded before the marker
+// existed carry none, so a session fragmented by background agents reads as
+// whole again once these merge.
+describe("parseSessionEntries — fragmented assistant text", () => {
+  const assistant = (message: string, blockEnd?: true): SessionEntry =>
+    ({
+      source: "assistant",
+      type: "text",
+      message,
+      ...(blockEnd === true ? { blockEnd: true } : {}),
+    }) as SessionEntry;
+
+  const user = (message: string): SessionEntry => ({ source: "user", type: "text", message }) as SessionEntry;
+
+  it("rejoins unmarked consecutive assistant rows into one card", () => {
+    const out = parseSessionEntries([assistant("実機の真実は"), assistant(" DD から"), assistant("しか取れません。")]);
+    assert.equal(out.length, 1);
+    assert.equal(resultAt(out, 0).message, "実機の真実は DD からしか取れません。");
+    // `data.text` is what the View renders and `message` is what
+    // `shouldAdoptServerTranscript` measures — both have to grow, or the
+    // client looks truncated against its own server copy forever.
+    assert.equal((resultAt(out, 0).data as { text?: string }).text, "実機の真実は DD からしか取れません。");
+  });
+
+  it("starts a new card after a row marked as a block end", () => {
+    const out = parseSessionEntries([assistant("調べます。", true), assistant("終わりました。")]);
+    assert.equal(out.length, 2);
+    assert.equal(resultAt(out, 0).message, "調べます。");
+    assert.equal(resultAt(out, 1).message, "終わりました。");
+  });
+
+  it("never merges two user rows", () => {
+    // A user row is written whole, in one call. Two in a row are two
+    // separate things the user said; merging would put words in their mouth.
+    const out = parseSessionEntries([user("first"), user("second")]);
+    assert.equal(out.length, 2);
+  });
+
+  it("does not merge an assistant row onto a user row", () => {
+    const out = parseSessionEntries([user("質問"), assistant("回答の前半"), assistant("と後半")]);
+    assert.equal(out.length, 2);
+    assert.equal(resultAt(out, 1).message, "回答の前半と後半");
+  });
+
+  it("does not merge across a tool result card", () => {
+    const toolResult = { uuid: "r1", toolName: "generateImage" } as unknown as ToolResultComplete;
+    const out = parseSessionEntries([assistant("before"), { source: "tool", type: "tool_result", result: toolResult } as SessionEntry, assistant("after")]);
+    assert.equal(out.length, 3);
+  });
+});

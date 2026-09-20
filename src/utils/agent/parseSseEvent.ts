@@ -48,16 +48,22 @@ const parseToolResult = (value: unknown): ToolResultComplete | null => {
   return { ...value, toolName, uuid, message: message ?? "" };
 };
 
+// `fromSubagent` has to be carried through explicitly. Each variant here is
+// REBUILT from checked fields rather than passed along, so a field that is
+// merely declared on the type is silently dropped — and dropping this one
+// makes the dispatcher treat a subagent's tool call as the end of the main
+// agent's text block again, which is the whole bug.
 const parseToolCall = (value: Record<string, unknown>): SseToolCall | null => {
-  const { toolUseId, toolName, args } = value;
-  if (typeof toolUseId !== "string" || typeof toolName !== "string") return null;
-  return { type: EVENT_TYPES.toolCall, toolUseId, toolName, args };
+  const { toolUseId, toolName, args, fromSubagent } = value;
+  if (typeof toolUseId !== "string" || typeof toolName !== "string" || !isOptionalBoolean(fromSubagent)) return null;
+  return { type: EVENT_TYPES.toolCall, toolUseId, toolName, args, fromSubagent };
 };
 
 const parseToolCallResult = (value: Record<string, unknown>): SseToolCallResult | null => {
-  const { toolUseId, content, isError } = value;
+  const { toolUseId, content, isError, fromSubagent } = value;
   if (typeof toolUseId !== "string" || typeof content !== "string" || !isOptionalBoolean(isError)) return null;
-  return { type: EVENT_TYPES.toolCallResult, toolUseId, content, isError };
+  if (!isOptionalBoolean(fromSubagent)) return null;
+  return { type: EVENT_TYPES.toolCallResult, toolUseId, content, isError, fromSubagent };
 };
 
 const parseText = (value: Record<string, unknown>): SseText | null => {

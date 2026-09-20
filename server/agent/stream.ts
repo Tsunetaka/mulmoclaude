@@ -8,6 +8,25 @@ import { EVENT_TYPES } from "../../src/types/events.js";
 // the assistant's reply. `handleAgentEvent` decides what it actually is.
 export const INJECTED_TEXT = "injected_text";
 
+/** `fromSubagent` below marks an event a SUBAGENT produced (a `Task` /
+ *  `Agent` tool's own turn), not the main agent whose reply the user is
+ *  reading.
+ *
+ *  It exists because a subagent's events are NOT a boundary in the main
+ *  agent's text: with background agents running, their `tool_use` /
+ *  `tool_result` blocks arrive INTERLEAVED with the main agent's text
+ *  deltas, so anything that treats "a non-text event arrived" as "the
+ *  current text block ended" cuts the reply mid-word — and, when the cut
+ *  lands inside a `**…**` span, splits the markdown so both halves render
+ *  literal asterisks. Consumers that close a text block must skip events
+ *  carrying the flag (via `isFromSubagent`); consumers that merely display
+ *  tool activity should keep showing them.
+ *
+ *  Written inline on each variant rather than mixed in from a shared named
+ *  type on purpose: `AgentEvent` is passed to `pushSessionEvent`, which
+ *  takes `Record<string, unknown>`, and only object literal types get the
+ *  implicit index signature that assignment needs. An intersection with a
+ *  declared interface loses it and fails the whole union. */
 export type AgentEvent =
   | { type: typeof EVENT_TYPES.status; message: string }
   | { type: typeof EVENT_TYPES.text; message: string }
@@ -19,6 +38,7 @@ export type AgentEvent =
       toolUseId: string;
       toolName: string;
       args: unknown;
+      fromSubagent?: true;
     }
   | {
       type: typeof EVENT_TYPES.toolCallResult;
@@ -29,8 +49,16 @@ export type AgentEvent =
        *  here so the failure monitor (#1353) can attribute repeated
        *  errors to a specific MCP server and warn / notify. */
       isError?: boolean;
+      fromSubagent?: true;
     }
   | { type: typeof EVENT_TYPES.claudeSessionId; id: string };
+
+/** True when an `AgentEvent` came from a subagent. A type-safe `in` check,
+ *  so it can be applied to the whole union rather than only the two
+ *  variants that carry the flag. */
+export function isFromSubagent(event: AgentEvent): boolean {
+  return "fromSubagent" in event && event.fromSubagent === true;
+}
 
 export interface ClaudeContentBlock {
   type: string;
@@ -69,6 +97,22 @@ export interface RawStreamEvent {
   /** Present when type === "stream_event". Carries partial text
    *  deltas for real-time streaming. */
   event?: StreamEventDelta | { type: string };
+  /** The `tool_use` id of the `Task` / `Agent` call that launched the
+   *  SUBAGENT this message belongs to. The CLI sets it on every message a
+   *  subagent produces and leaves it absent (or null) on the main agent's
+   *  own — so its presence is the only way to tell the two apart in a
+   *  single interleaved stream. Read via `isSubagentMessage`. */
+  parent_tool_use_id?: string | null;
+}
+
+/** Whether a raw CLI event belongs to a subagent rather than the main agent.
+ *
+ *  Kept as a predicate rather than an inline truthiness check so the empty
+ *  string is handled explicitly: an empty `parent_tool_use_id` names no tool
+ *  call, and treating it as "from a subagent" would silently discard the main
+ *  agent's own prose. */
+export function isSubagentMessage(event: RawStreamEvent): boolean {
+  return typeof event.parent_tool_use_id === "string" && event.parent_tool_use_id.length > 0;
 }
 
 /** `role` is the role of the MESSAGE the block came from, not the block's own
@@ -125,6 +169,36 @@ function filterAssistantBlocks(blockEvents: AgentEvent[], deltaStreamed: boolean
   return deltaStreamed ? blockEvents.filter((agentEvent) => agentEvent.type !== EVENT_TYPES.text) : blockEvents;
 }
 
+// Everything a SUBAGENT emits, mapped for display only.
+//
+// Two kinds of block are deliberately DROPPED rather than forwarded:
+//
+//   - text, both `text_delta` chunks and whole `text` blocks. The main
+//     agent's card holds the reply the user is reading; appending another
+//     agent's prose to it would interleave two voices in one bubble. The
+//     whole-block case happens to be suppressed today by
+//     `filterAssistantBlocks` once deltas have streamed — but only as a
+//     side effect of duplicate detection, so it would return the moment a
+//     turn produced no deltas. Dropping it here makes that intentional.
+//   - the "Thinking..." status, which reports what the MAIN turn is doing.
+//     Emitting it for a subagent makes the spinner describe a different
+//     agent's progress.
+//
+// Tool calls and results ARE forwarded, tagged: the tool-call history
+// showing what the subagents did is useful. The tag is what stops a
+// consumer from reading them as a boundary in the main agent's text.
+function parseSubagentEvent(event: RawStreamEvent): AgentEvent[] {
+  if (event.type !== "assistant" && event.type !== "user") return [];
+  const content = event.message?.content;
+  if (!Array.isArray(content)) return [];
+  const role = event.type === "user" ? "user" : "assistant";
+  return content
+    .map((block) => blockToEvent(block, role))
+    .filter((agentEvent): agentEvent is AgentEvent => agentEvent !== null)
+    .filter((agentEvent) => agentEvent.type === EVENT_TYPES.toolCall || agentEvent.type === EVENT_TYPES.toolCallResult)
+    .map((agentEvent) => ({ ...agentEvent, fromSubagent: true as const }));
+}
+
 // Stateful parser that deduplicates text across the three stages
 // Claude CLI emits: stream_event deltas → assistant content blocks
 // → result full text. Uses two flags:
@@ -144,7 +218,32 @@ export function createStreamParser(): {
   let textStreamedFromDeltas = false;
   let textEmitted = false;
 
+  // The turn's closing event: emits the full reply text only if nothing
+  // already did, hands over the session id, and resets the dedup state for
+  // the next turn. Split out of `parse` so the subagent guard there fits
+  // inside the cognitive-complexity cap.
+  function handleResult(event: RawStreamEvent): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    if (!textEmitted && event.result) {
+      events.push({ type: EVENT_TYPES.text, message: event.result });
+    }
+    if (event.session_id) {
+      events.push({
+        type: EVENT_TYPES.claudeSessionId,
+        id: event.session_id,
+      });
+    }
+    textStreamedFromDeltas = false;
+    textEmitted = false;
+    return events;
+  }
+
   function parse(event: RawStreamEvent): AgentEvent[] {
+    // Subagent messages ride the SAME stream as the main agent's, so they
+    // must be separated before any of the dedup state below is touched:
+    // letting a subagent set `textEmitted` would suppress the main agent's
+    // own `result` text as a "duplicate" of prose that was never shown.
+    if (isSubagentMessage(event)) return parseSubagentEvent(event);
     // Handle streaming text deltas from --include-partial-messages.
     const delta = extractTextDelta(event);
     if (delta !== null) {
@@ -154,21 +253,7 @@ export function createStreamParser(): {
     }
     if (event.type === "stream_event") return [];
 
-    if (event.type === "result") {
-      const events: AgentEvent[] = [];
-      if (!textEmitted && event.result) {
-        events.push({ type: EVENT_TYPES.text, message: event.result });
-      }
-      if (event.session_id) {
-        events.push({
-          type: EVENT_TYPES.claudeSessionId,
-          id: event.session_id,
-        });
-      }
-      textStreamedFromDeltas = false;
-      textEmitted = false;
-      return events;
-    }
+    if (event.type === "result") return handleResult(event);
 
     if (event.type !== "assistant" && event.type !== "user") {
       return [];

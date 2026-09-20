@@ -7,14 +7,26 @@ import { EVENT_TYPES, type GenerationKind } from "./events";
 import type { SkillScope } from "./session";
 import type { PersistedAttachment } from "./attachment";
 
-export interface SseToolCall {
+/** Set when the event came from a SUBAGENT (a `Task` / `Agent` tool's own
+ *  turn) rather than the main agent. Forwarded from
+ *  `AgentEvent`'s `fromSubagent` — see `SubagentOrigin` in
+ *  `server/agent/stream.ts` for why the distinction exists.
+ *
+ *  The frontend must not treat a tagged event as the end of the main
+ *  agent's current text block: those events interleave with its text
+ *  deltas, so breaking the card there cuts the reply mid-word. */
+interface SseSubagentOrigin {
+  fromSubagent?: boolean | undefined;
+}
+
+export interface SseToolCall extends SseSubagentOrigin {
   type: typeof EVENT_TYPES.toolCall;
   toolUseId: string;
   toolName: string;
   args: unknown;
 }
 
-export interface SseToolCallResult {
+export interface SseToolCallResult extends SseSubagentOrigin {
   type: typeof EVENT_TYPES.toolCallResult;
   toolUseId: string;
   content: string;
@@ -25,6 +37,10 @@ export interface SseToolCallResult {
   isError?: boolean | undefined;
 }
 
+/** No `fromSubagent` here on purpose: a subagent's messages never produce a
+ *  status event at all (`parseSubagentEvent` withholds the "Thinking..."
+ *  status, which reports what the MAIN turn is doing), so declaring the flag
+ *  would describe a value nothing can ever set. */
 export interface SseStatus {
   type: typeof EVENT_TYPES.status;
   message: string;

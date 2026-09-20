@@ -18,7 +18,7 @@ import {
 } from "../../utils/files/session-io.js";
 import { getRole } from "../../workspace/roles.js";
 import { runAgent } from "../../agent/index.js";
-import { INJECTED_TEXT } from "../../agent/stream.js";
+import { INJECTED_TEXT, isFromSubagent } from "../../agent/stream.js";
 import { notifyTaskFinished } from "../../agent/webPush.js";
 import { buildTranscriptPreamble } from "../../agent/resumeFailover.js";
 import {
@@ -714,12 +714,26 @@ async function handleAgentEvent(event: AgentStreamEvent, ctx: EventContext): Pro
     ctx.textAccumulator.push(event.message);
     return;
   }
-  // Any non-text event marks the end of a text burst — flush so
-  // jsonl order matches the live stream and crashes mid-run don't
+  // Any non-text event from the MAIN agent marks the end of a text burst —
+  // flush so jsonl order matches the live stream and crashes mid-run don't
   // lose already-streamed text.
-  await flushTextAccumulator(ctx);
+  //
+  // A SUBAGENT's events do NOT mark one. They interleave with the main
+  // agent's text deltas, so flushing here split one reply into dozens of
+  // fragment rows — 79 of them, median 33 characters, the shortest a single
+  // character, in a turn that ran four background agents. Fragments that cut
+  // a `**…**` span then render literal asterisks on both sides. They are
+  // still broadcast (above) and still recorded in the tool trace (below);
+  // only the text accumulator is left alone.
+  //
+  // Skill-sequence tracking is skipped for the same reason: the
+  // Skill → injected-body sequence is a property of the main agent's
+  // stream, and a subagent's own `Skill` call setting `pendingSkill` would
+  // make the main agent's next flush get written as a skill entry.
+  const fromSubagent = isFromSubagent(event);
+  if (!fromSubagent) await flushTextAccumulator(ctx, { blockEnd: true });
   if (event.type === EVENT_TYPES.toolCall) {
-    updatePendingSkillOnToolCall(ctx, event);
+    if (!fromSubagent) updatePendingSkillOnToolCall(ctx, event);
     log.info("agent-tool", "call", {
       chatSessionId: ctx.chatSessionId,
       toolName: event.toolName,
@@ -727,7 +741,7 @@ async function handleAgentEvent(event: AgentStreamEvent, ctx: EventContext): Pro
       argsPreview: previewJson(event.args),
     });
   } else if (event.type === EVENT_TYPES.toolCallResult) {
-    updatePendingSkillOnToolCallResult(ctx, event.toolUseId);
+    if (!fromSubagent) updatePendingSkillOnToolCallResult(ctx, event.toolUseId);
     // Look up the toolName from the cache *before* recordToolEvent
     // runs (it deletes the cache entry on result).
     const cached = ctx.toolArgsCache.get(event.toolUseId);
@@ -788,7 +802,21 @@ async function handleInjectedText(ctx: EventContext, message: string): Promise<v
 // expects. No CLI version we have measured does that, so this is the degradation
 // path for a future one: tag the flush as `type: "skill"` (#1218) and consume the
 // flag, accepting that the body was already broadcast as text (#2821).
-async function flushTextAccumulator(ctx: EventContext): Promise<void> {
+/** `blockEnd` records WHY the flush happened, which is the difference
+ *  between a complete text block and a fragment of one.
+ *
+ *  Pass it when the flush was caused by a real boundary in the MAIN agent's
+ *  stream — its own tool call, or the end of the run. Leave it off when the
+ *  flush is incidental (a meta event mid-block): the row is then a fragment,
+ *  and `parseSessionEntries` rejoins it with its neighbour on load.
+ *
+ *  Rows written before this existed carry no marker, so they all read as
+ *  fragments and merge — which is exactly what makes the already-recorded
+ *  fragmented sessions readable again. The cost of that choice is that a
+ *  genuine pre-tool-call split in an OLD session also merges; there is no
+ *  marker in those files to tell the two apart, and merging is the harmless
+ *  direction (nothing is dropped or reordered). */
+async function flushTextAccumulator(ctx: EventContext, opts?: { blockEnd?: boolean }): Promise<void> {
   if (ctx.textAccumulator.length === 0) return;
   const fullText = ctx.textAccumulator.join("");
   ctx.textAccumulator.length = 0;
@@ -812,6 +840,7 @@ async function flushTextAccumulator(ctx: EventContext): Promise<void> {
       source: "assistant",
       type: EVENT_TYPES.text,
       message: fullText,
+      ...(opts?.blockEnd === true ? { blockEnd: true } : {}),
     }),
   );
 }
@@ -1161,8 +1190,9 @@ async function runAgentInBackground(params: BackgroundRunParams): Promise<void> 
     didError = await runAgentStreamWithFailover({ decoratedMessage, role, chatSessionId, claudeSessionId, abortSignal, attachments, userTimezone }, eventCtx);
     // Flush any accumulated streaming text as a single consolidated
     // line in the jsonl. This prevents per-chunk lines that would
-    // appear as separate cards on session reload.
-    await flushTextAccumulator(eventCtx);
+    // appear as separate cards on session reload. The end of the run is a
+    // real block end, so the row is marked as one.
+    await flushTextAccumulator(eventCtx, { blockEnd: true });
 
     log.info("agent", "request completed", {
       chatSessionId,
@@ -1170,7 +1200,7 @@ async function runAgentInBackground(params: BackgroundRunParams): Promise<void> 
     });
   } catch (err) {
     didError = true;
-    await flushTextAccumulator(eventCtx);
+    await flushTextAccumulator(eventCtx, { blockEnd: true });
     log.error("agent", "request failed", {
       chatSessionId,
       error: String(err),
